@@ -11,10 +11,16 @@ const d1 = DB => {
   };
 };
 
+// Fotos en R2 (bucket reporte-diario-polar-fotos).
+const r2 = B => ({
+  put: (key, bytes) => B.put(key, bytes, { httpMetadata: { contentType: 'image/jpeg' } }),
+  get: async key => (await B.get(key))?.body ?? null,
+});
+
 export default {
   async fetch(req, env) {
     const path = new URL(req.url).pathname;
-    if (path.startsWith('/api/')) return createApp({ db: d1(env.DB), env })(req);
+    if (path.startsWith('/api/')) return createApp({ db: d1(env.DB), files: r2(env.FILES), env })(req);
     // Archivos de public/: /admin… → panel web; /app.js; lo demás → app de teléfono.
     const file = path === '/app.js' ? '/app.js' : path.startsWith('/admin') ? '/admin.html' : '/index.html';
     const res = await env.ASSETS.fetch(new Request(new URL(file, req.url)));

@@ -5,7 +5,7 @@ import { Buffer } from 'node:buffer';
 
 // Cuestionario = formato PL-FOR-26 rev. 06 (Reporte diario de operación e incidencias).
 // Sección 1: fecha, planta y elaboró se llenan solos; solo se pregunta el turno.
-// Campo: { id, label, type: text|textarea|number|select|date|time|checks, options, required, list (sugerencias), wide }
+// Campo: { id, label, type: text|textarea|number|select|date|time|checks|photos, options, required, list (sugerencias), wide, after (va después de la tabla) }
 // Tabla: renglones repetibles. Columnas con auto: true las calcula el servidor (no se preguntan).
 const SN = ['Sí', 'No'];
 const PLANTS = ['Querétaro', 'Silao']; // únicas plantas (también en public/app.js)
@@ -28,7 +28,8 @@ const FORM = [
     table: { id: 'gas', fixed: ['Gas bodega / hornos', 'Gas montacargas', 'Otro: '], cols: [{ id: 'tanque', label: 'Tanque' }, { id: 'na', label: 'N/A', type: 'check', disables: ['pct_ini', 'pct_fin', 'sin_carga', 'litros', 'importe'] },
       { id: 'pct_ini', label: '% inicial', type: 'number' }, { id: 'pct_fin', label: '% final', type: 'number' },
       { id: 'sin_carga', label: 'Litros cargados: N/A (no hubo carga)', type: 'check', wide: true, disables: ['litros', 'importe'] },
-      { id: 'litros', label: 'Litros cargados', type: 'number' }, { id: 'importe', label: 'Importe carga ($)', type: 'number' }] } },
+      { id: 'litros', label: 'Litros cargados', type: 'number' }, { id: 'importe', label: 'Importe carga ($)', type: 'number' }] },
+    fields: [{ id: 'fotos_gas', label: 'Fotos de tickets', type: 'photos', wide: true, after: true }] },
   { n: 5, title: 'Hornos', hint: 'El total de hornos y de ciclos se calcula solo.', table: { id: 'hornos', item: 'horno', cols: [{ id: 'horno', label: 'Horno (Pirólisis #)' }, { id: 'ciclos', label: 'No. de ciclos', type: 'number' },
     { id: 'cliente', label: 'Cliente / material', list: 'clientes', wide: true }, { id: 'hora_ini', label: 'Hora inicio', type: 'time' }, { id: 'hora_fin', label: 'Hora fin', type: 'time' },
     { id: 'obs', label: 'Observaciones', wide: true }] } },
@@ -54,12 +55,14 @@ const FORM = [
   { n: 9, title: 'Visitas a la planta', hint: 'Tipo: PR = proveedor, CL = cliente, GO = dependencia de gobierno, EM = solicitud de empleo, IN = informes / pregunta, OT = otro. Si es dependencia de gobierno avisar a gerencia de inmediato y tomar foto de cualquier documento que deje.',
     table: { id: 'visitas', item: 'visita', cols: [{ id: 'nombre', label: 'Nombre y teléfono', wide: true }, { id: 'empresa', label: 'Empresa / dependencia' },
       { id: 'tipo', label: 'Tipo', type: 'select', options: ['PR', 'CL', 'GO', 'EM', 'IN', 'OT'] }, { id: 'motivo', label: 'Motivo de la visita', wide: true },
-      { id: 'atendio', label: 'Atendió y hora' }, { id: 'seguimiento', label: '¿Requiere seguimiento?', type: 'select', options: SN }] } },
+      { id: 'atendio', label: 'Atendió y hora' }, { id: 'seguimiento', label: '¿Requiere seguimiento?', type: 'select', options: SN }] },
+    fields: [{ id: 'fotos_visitas', label: 'Fotos de documentos', type: 'photos', wide: true, after: true }] },
   { n: 10, title: 'Incidencias del día', hint: 'Tipo: GA = gas, EL = eléctrica, EQ = equipo / herramienta, SE = seguridad / accidente, CA = calidad / rechazo, CL = cliente, PE = personal. Toda falla de equipo que no se resuelva hoy se pasa a mantenimiento. Fuga de gas, falla eléctrica, incendio o accidente: avisar por teléfono a gerencia de inmediato.',
     table: { id: 'incidencias', item: 'incidencia', empty: 'SIN INCIDENCIAS', cols: [{ id: 'tipo', label: 'Tipo', type: 'select', options: ['GA', 'EL', 'EQ', 'SE', 'CA', 'CL', 'PE'] },
       { id: 'hora', label: 'Hora', type: 'time' }, { id: 'que_paso', label: 'Qué pasó', type: 'textarea', wide: true },
       { id: 'impacto', label: 'Impacto (qué se dejó de hacer / atrasos)', wide: true }, { id: 'que_se_hizo', label: 'Qué se hizo / quién autorizó', wide: true },
-      { id: 'aviso', label: '¿Se avisó?', type: 'select', options: SN }] } },
+      { id: 'aviso', label: '¿Se avisó?', type: 'select', options: SN }] },
+    fields: [{ id: 'fotos_incidencias', label: 'Fotos', type: 'photos', wide: true, after: true }] },
   { n: 11, title: 'Mantenimiento — lista de pendientes', hint: 'Los pendientes ABIERTOS del día anterior se copian solos. Un pendiente solo deja de copiarse cuando se marca CERRADO con su fecha de cierre.',
     table: { id: 'mantenimiento', item: 'pendiente', cols: [{ id: 'detectado', label: 'Fecha en que se detectó', type: 'date' }, { id: 'equipo', label: 'Equipo' },
       { id: 'falla', label: 'Falla / qué se necesita', wide: true }, { id: 'responsable', label: 'Responsable' }, { id: 'compromiso', label: 'Fecha compromiso', type: 'date' },
@@ -68,10 +71,13 @@ const FORM = [
   { n: 12, title: 'Gastos del día', hint: 'Anotar TODO lo que se compre o se pague, incluyendo reparaciones, refacciones y equipo nuevo. Anexar tickets o facturas.',
     table: { id: 'gastos', item: 'gasto', cols: [{ id: 'cant', label: 'Cant.', type: 'number' }, { id: 'importe', label: 'Importe ($)', type: 'number' },
       { id: 'concepto', label: 'Concepto', wide: true }, { id: 'pago', label: 'Forma de pago', type: 'select', options: ['T. Polar', 'Efectivo'] },
-      { id: 'factura', label: '¿Factura?', type: 'select', options: SN }] } },
+      { id: 'factura', label: '¿Factura?', type: 'select', options: SN }] },
+    fields: [{ id: 'fotos_gastos', label: 'Fotos de tickets / facturas', type: 'photos', wide: true, after: true }] },
   { n: 13, title: 'Pendientes para mañana', fields: [{ id: 'manana', label: 'Pendientes para mañana', type: 'textarea', required: true, wide: true }] },
 ];
 const num = v => Number(v) || 0;
+const PHOTO = /^[a-f0-9]{32}\.jpg$/; // clave de una foto subida (R2 en Cloudflare, uploads/ en la compu)
+const DAY = 86_400_000, SESSION_MS = 30 * DAY;
 const matKey = m => `${m.cliente}|${m.pieza}`.trim().toLowerCase();
 
 
@@ -126,6 +132,7 @@ function clean(answers, form) {
   for (const s of form) {
     for (const f of s.fields || []) {
       if (f.type === 'checks') { out[f.id] = [].concat(answers[f.id] ?? []).map(str).filter(v => f.options.includes(v)); continue; }
+      if (f.type === 'photos') { out[f.id] = [].concat(answers[f.id] ?? []).map(str).filter(k => PHOTO.test(k)).slice(0, 10); continue; }
       out[f.id] = str(answers[f.id]);
       if (f.required && !out[f.id]) throw Object.assign(new Error(`Falta responder: ${s.n}. ${s.title} — ${f.label}`), { code: 400 });
     }
@@ -143,10 +150,13 @@ function clean(answers, form) {
   return out;
 }
 
-const formatAnswers = (a, form) => form.map(s => [`${s.n}. ${s.title}`,
-  ...(s.fields || []).map(f => `${f.label}: ${[].concat(a[f.id] ?? '').join(', ') || '—'}`),
-  ...(s.table ? (a[s.table.id] || []).map(r => '- ' + s.table.cols.map(c => `${c.label}: ${r[c.id] || '—'}`).join(' | ')) : []),
-].join('\n')).join('\n\n');
+// Texto del reporte para la IA. Solo lo que tiene respuesta (los tokens cuestan): sección vacía = "(vacío)".
+const formatAnswers = (a, form) => form.map(s => {
+  const val = f => f.type === 'photos' ? (a[f.id]?.length ? `${a[f.id].length} foto(s)` : '') : [].concat(a[f.id] ?? '').join(', ');
+  const lines = [...(s.fields || []).filter(val).map(f => `${f.label}: ${val(f)}`),
+    ...(s.table ? (a[s.table.id] || []).map(r => '- ' + s.table.cols.filter(c => r[c.id]).map(c => `${c.label}: ${r[c.id]}`).join(' | ')) : [])];
+  return `${s.n}. ${s.title}\n${lines.join('\n') || '(vacío)'}`;
+}).join('\n');
 
 const hash = (pw, salt = crypto.randomBytes(16).toString('hex')) => salt + ':' + crypto.scryptSync(pw, salt, 64).toString('hex');
 const verify = (pw, stored) => {
@@ -164,16 +174,18 @@ async function body(req) {
 }
 const parseReport = r => ({ ...r, answers: JSON.parse(r.answers) });
 
-export function createApp({ db, env = {} }) {
+// files: { put(key, bytes), get(key) → cuerpo | null } — fotos JPEG (R2 en Cloudflare, carpeta uploads/ en la compu).
+export function createApp({ db, files, env = {} }) {
   const { ADMIN_EMAIL = '', AI_API_KEY = '', AI_BASE_URL = 'https://api.cheaperinference.com/v1',
-    AI_MODEL = 'gpt-6-luna', // el más barato que pasó las pruebas de calificar y de editar el formulario
+    AI_MODEL = 'deepseek-v4-flash', // rápido y barato (antes gpt-6-luna y gpt-oss-120b, que tardaba ~1 min)
     TZ = 'America/Mexico_City' } = env;
   // Fechas siempre en hora de México (en la nube el servidor está en UTC).
   const ymd = (d = new Date()) => d.toLocaleDateString('en-CA', { timeZone: TZ });
 
   // Arrastre entre días por planta: último km de cada unidad, último saldo por pieza y pendientes abiertos del último reporte.
-  async function carry(plant) {
-    const rows = plant ? (await db.all('SELECT answers FROM reports WHERE plant = ? ORDER BY date, id', plant)).map(r => JSON.parse(r.answers)) : [];
+  // exclude: el reporte que se está corrigiendo (se recalcula contra los anteriores).
+  async function carry(plant, exclude = 0) {
+    const rows = plant ? (await db.all('SELECT answers FROM reports WHERE plant = ? AND id != ? ORDER BY date, id', plant, exclude)).map(r => JSON.parse(r.answers)) : [];
     const km = {}, saldos = {};
     for (const a of rows) {
       for (const v of a.vehiculos || []) if (v.vehiculo && v.km_fin) km[v.vehiculo] = v.km_fin;
@@ -207,9 +219,35 @@ export function createApp({ db, env = {} }) {
     return { summary: String(out.resumen ?? ''), score: Math.max(0, Math.min(100, Math.round(Number(out.calidad) || 0))), feedback: String(out.retroalimentacion ?? '') };
   }
 
+  // Limpia las respuestas y calcula los campos automáticos (para guardar o para corregir; exclude = el reporte que se corrige).
+  async function prepare(plant, answers, exclude = 0) {
+    const form = await currentForm(), a = clean(answers, form), { saldos } = await carry(plant, exclude);
+    if (a.hubo_reportes === 'No') a.reportes_n = 'N/A';
+    // Solo camiones registrados de la planta (secciones ocultas no traen tabla, de ahí el || []).
+    const trucks = new Set((await db.all('SELECT name FROM trucks WHERE plant = ?', plant)).map(t => t.name));
+    for (const v of a.vehiculos || []) {
+      if (!trucks.has(v.vehiculo)) throw httpError(400, `El vehículo "${v.vehiculo || '(vacío)'}" no está registrado en la planta ${plant}`);
+      v.recorrido = v.km_ini && v.km_fin ? String(num(v.km_fin) - num(v.km_ini)) : '';
+    }
+    for (const m of a.material || []) {
+      m.saldo_ant = String(num(saldos[matKey(m)]?.saldo));
+      m.saldo = String(num(m.saldo_ant) + num(m.cantidad) - num(m.entregado)); // las piezas del renglón son lo que entró
+      m.pendientes = String(num(saldos[matKey(m)]?.pendientes) + num(m.cantidad) - num(m.procesado)); // se arrastra como el saldo
+    }
+    return { a, form };
+  }
+  // El reporte se guarda aunque la IA falle; queda sin calificación (o con la anterior, si se corrigió).
+  async function grade(id, a, form) {
+    try {
+      const ev = await evaluate(a, form);
+      await db.run('UPDATE reports SET summary = ?, score = ?, feedback = ? WHERE id = ?', ev.summary, ev.score, ev.feedback, id);
+    } catch (e) { console.error('Evaluación IA falló:', e.message); }
+  }
+
   const userOf = req => {
     const t = /(?:^|;\s*)sid=([a-f0-9]+)/.exec(req.headers.get('cookie') || '')?.[1];
-    return t ? db.get("SELECT u.id, u.name, u.email, u.role, u.plant FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token = ? AND u.status = 'activo'", t) : null;
+    return t ? db.get("SELECT u.id, u.name, u.email, u.role, u.plant FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token = ? AND s.created > ? AND u.status = 'activo'",
+      t, Date.now() - SESSION_MS) : null;
   };
   const adminOnly = fn => (req, user, out) => user.role !== 'admin' ? json(403, { error: 'Solo admin' }) : fn(req, user, out);
 
@@ -226,18 +264,21 @@ export function createApp({ db, env = {} }) {
   // La cookie de sesión la agrega handleApi() a la respuesta; Secure cuando el sitio va por https (Cloudflare).
   async function startSession(req, out, userId) {
     const t = crypto.randomBytes(32).toString('hex');
-    await db.run('INSERT INTO sessions VALUES (?, ?)', t, userId);
-    out.cookie = `sid=${t}; HttpOnly; SameSite=Lax; Path=/; Max-Age=2592000${new URL(req.url).protocol === 'https:' ? '; Secure' : ''}`;
+    await db.run('DELETE FROM sessions WHERE created < ?', Date.now() - SESSION_MS); // limpia las vencidas
+    await db.run('INSERT INTO sessions(token, user_id, created) VALUES (?, ?, ?)', t, userId, Date.now());
+    out.cookie = `sid=${t}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${SESSION_MS / 1000}${new URL(req.url).protocol === 'https:' ? '; Secure' : ''}`;
   }
 
   const routes = {
     'GET /api/questions': async () => json(200, await currentForm()),
 
     // Valores que se llenan solos en el formulario (km inicial, sugerencias, pendientes abiertos).
+    // ?planta= y ?excluir= (admin corrigiendo un reporte): la planta de ese reporte y el arrastre sin él.
     'GET /api/defaults': async (req, user) => {
-      const { km, saldos, pendientes } = await carry(user.plant), mats = Object.values(saldos);
+      const q = new URL(req.url).searchParams, plant = (user.role === 'admin' && q.get('planta')) || user.plant;
+      const { km, saldos, pendientes } = await carry(plant, Number(q.get('excluir')) || 0), mats = Object.values(saldos);
       const pend = Object.fromEntries(Object.entries(saldos).map(([k, m]) => [k, num(m.pendientes)])); // pendientes por procesar de días anteriores
-      const trucks = await db.all('SELECT name, horometro FROM trucks WHERE plant = ? ORDER BY name', user.plant ?? '');
+      const trucks = await db.all('SELECT name, horometro FROM trucks WHERE plant = ? ORDER BY name', plant ?? '');
       return json(200, { km, pendientes, pend, trucks, lists: {
         clientes: [...new Set(mats.map(m => m.cliente).filter(Boolean))], piezas: [...new Set(mats.map(m => m.pieza).filter(Boolean))] } });
     },
@@ -252,10 +293,19 @@ export function createApp({ db, env = {} }) {
       return json(200, { ok: true });
     },
 
+    // 5 intentos fallidos seguidos bloquean ese correo 15 minutos (se revisa antes de scrypt, que gasta CPU).
     'POST /api/login': async (req, user, out) => {
-      const { email = '', password = '' } = await body(req);
-      const u = await db.get('SELECT id, pass, status FROM users WHERE email = ?', String(email).trim().toLowerCase());
-      if (!u || !verify(String(password), u.pass)) return json(401, { error: 'Correo o contraseña incorrectos' });
+      const { email = '', password = '' } = await body(req), e = String(email).trim().toLowerCase(), now = Date.now();
+      const f = await db.get('SELECT n, until FROM login_fails WHERE email = ?', e);
+      if (f?.until > now) return json(429, { error: 'Demasiados intentos fallidos. Espera 15 minutos o pide al administrador una contraseña nueva.' });
+      const u = await db.get('SELECT id, pass, status FROM users WHERE email = ?', e);
+      if (!u || !verify(String(password), u.pass)) {
+        const n = (f?.n || 0) + 1;
+        await db.run('INSERT INTO login_fails(email, n, until) VALUES (?, ?, ?) ON CONFLICT(email) DO UPDATE SET n = excluded.n, until = excluded.until',
+          e, n % 5, n >= 5 ? now + 15 * 60_000 : 0);
+        return json(401, { error: 'Correo o contraseña incorrectos' });
+      }
+      await db.run('DELETE FROM login_fails WHERE email = ?', e);
       if (u.status !== 'activo') return json(403, { error: 'Tu cuenta está pendiente de aprobación del administrador' });
       await startSession(req, out, u.id);
       return json(200, { ok: true });
@@ -269,30 +319,34 @@ export function createApp({ db, env = {} }) {
 
     'GET /api/me': (req, user) => json(200, user),
 
-    'GET /api/reports': async (req, user) => json(200, (user.role === 'admin'
-      ? await db.all('SELECT r.*, u.name FROM reports r JOIN users u ON u.id = r.user_id ORDER BY r.date DESC, r.id DESC')
-      : await db.all('SELECT * FROM reports WHERE user_id = ? ORDER BY date DESC', user.id)
-    ).map(parseReport)),
+    // Cambiar mi contraseña (pide la actual). Cierra las demás sesiones; esta sigue abierta con una sesión nueva.
+    'POST /api/me/password': async (req, user, out) => {
+      const { current = '', password = '' } = await body(req);
+      if (String(password).length < 8) return json(400, { error: 'La contraseña nueva debe tener al menos 8 caracteres' });
+      if (!verify(String(current), (await db.get('SELECT pass FROM users WHERE id = ?', user.id)).pass)) return json(400, { error: 'La contraseña actual no es correcta' });
+      await db.run('UPDATE users SET pass = ? WHERE id = ?', hash(String(password)), user.id);
+      await db.run('DELETE FROM sessions WHERE user_id = ?', user.id);
+      await startSession(req, out, user.id);
+      return json(200, { ok: true });
+    },
+
+    // Filtros opcionales: ?id=, ?desde=, ?hasta= (AAAA-MM-DD), ?planta=. El encargado solo ve los suyos.
+    'GET /api/reports': async (req, user) => {
+      const q = new URL(req.url).searchParams, where = [], p = [];
+      if (user.role !== 'admin') { where.push('r.user_id = ?'); p.push(user.id); }
+      for (const [k, sql] of [['id', 'r.id = ?'], ['desde', 'r.date >= ?'], ['hasta', 'r.date <= ?'], ['planta', 'r.plant = ?']])
+        if (q.get(k)) { where.push(sql); p.push(k === 'id' ? Number(q.get(k)) : q.get(k)); }
+      return json(200, (await db.all(`SELECT r.*, u.name FROM reports r JOIN users u ON u.id = r.user_id
+        ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY r.date DESC, r.id DESC`, ...p)).map(parseReport));
+    },
 
     'POST /api/reports': async (req, user) => {
       const { answers = {} } = await body(req);
       // La planta se guarda en el usuario la primera vez; después se llena sola.
       const plant = user.plant || String(answers.planta ?? '').trim();
       if (!PLANTS.includes(plant)) throw badPlant();
-      const form = await currentForm(), a = clean(answers, form), { saldos } = await carry(plant);
+      const { a, form } = await prepare(plant, answers);
       if (!user.plant) await db.run('UPDATE users SET plant = ? WHERE id = ?', plant, user.id);
-      if (a.hubo_reportes === 'No') a.reportes_n = 'N/A';
-      // Solo camiones registrados de la planta (secciones ocultas no traen tabla, de ahí el || []).
-      const trucks = new Set((await db.all('SELECT name FROM trucks WHERE plant = ?', plant)).map(t => t.name));
-      for (const v of a.vehiculos || []) {
-        if (!trucks.has(v.vehiculo)) throw httpError(400, `El vehículo "${v.vehiculo || '(vacío)'}" no está registrado en la planta ${plant}`);
-        v.recorrido = v.km_ini && v.km_fin ? String(num(v.km_fin) - num(v.km_ini)) : '';
-      }
-      for (const m of a.material || []) {
-        m.saldo_ant = String(num(saldos[matKey(m)]?.saldo));
-        m.saldo = String(num(m.saldo_ant) + num(m.cantidad) - num(m.entregado)); // las piezas del renglón son lo que entró
-        m.pendientes = String(num(saldos[matKey(m)]?.pendientes) + num(m.cantidad) - num(m.procesado)); // se arrastra como el saldo
-      }
       let id;
       try {
         id = (await db.run('INSERT INTO reports(user_id, date, answers, plant) VALUES (?, ?, ?, ?)', user.id, ymd(), JSON.stringify(a), plant)).lastInsertRowid;
@@ -300,12 +354,39 @@ export function createApp({ db, env = {} }) {
         if (String(e.message).includes('UNIQUE')) return json(409, { error: 'Ya enviaste tu reporte de hoy' });
         throw e;
       }
-      // El reporte se guarda aunque la IA falle; queda sin calificación.
-      try {
-        const ev = await evaluate(a, form);
-        await db.run('UPDATE reports SET summary = ?, score = ?, feedback = ? WHERE id = ?', ev.summary, ev.score, ev.feedback, id);
-      } catch (e) { console.error('Evaluación IA falló:', e.message); }
+      await grade(id, a, form);
       return json(200, parseReport(await db.get('SELECT * FROM reports WHERE id = ?', id)));
+    },
+
+    // Corregir: el encargado, su reporte de hoy; el admin, cualquiera. Solo el último de la planta,
+    // porque los siguientes ya arrastraron sus km y saldos.
+    'POST /api/reports/edit': async (req, user) => {
+      const { id, answers = {} } = await body(req);
+      const r = await db.get('SELECT id, user_id, date, plant FROM reports WHERE id = ?', Number(id));
+      if (!r || (user.role !== 'admin' && (r.user_id !== user.id || r.date !== ymd()))) throw httpError(403, 'Solo puedes corregir tu reporte de hoy');
+      const last = await db.get('SELECT id FROM reports WHERE plant = ? ORDER BY date DESC, id DESC LIMIT 1', r.plant);
+      if (last?.id !== r.id) return json(409, { error: 'Solo se puede corregir el último reporte de la planta' });
+      const { a, form } = await prepare(r.plant, answers, r.id);
+      await db.run('UPDATE reports SET answers = ? WHERE id = ?', JSON.stringify(a), r.id);
+      await grade(r.id, a, form);
+      return json(200, parseReport(await db.get('SELECT * FROM reports WHERE id = ?', r.id)));
+    },
+
+    // Fotos: el teléfono las reduce a JPEG antes de subirlas. La clave aleatoria (128 bits) no se puede adivinar.
+    // ponytail: las fotos que se suben pero no se envían en un reporte quedan huérfanas; limpiarlas si el bucket crece.
+    'POST /api/upload': async req => {
+      if (req.headers.get('content-type') !== 'image/jpeg') return json(400, { error: 'Solo se aceptan fotos' });
+      const bytes = new Uint8Array(await req.arrayBuffer());
+      if (!bytes.length || bytes.length > 2_000_000) throw httpError(413, 'La foto pesa demasiado');
+      const key = crypto.randomBytes(16).toString('hex') + '.jpg';
+      await files.put(key, bytes);
+      return json(200, { key });
+    },
+
+    'GET /api/files/': async req => {
+      const key = new URL(req.url).pathname.slice('/api/files/'.length), f = PHOTO.test(key) && await files.get(key);
+      if (!f) return json(404, { error: 'Foto no encontrada' });
+      return new Response(f, { headers: { 'Content-Type': 'image/jpeg', 'Cache-Control': 'private, max-age=31536000, immutable' } });
     },
 
     // ---- Camiones por planta (el admin los registra; el encargado solo ve los de su planta) ----
@@ -383,6 +464,18 @@ export function createApp({ db, env = {} }) {
       return json(200, { ok: true });
     }),
 
+    // Contraseña nueva (para quien la olvidó): cierra sus sesiones y quita el bloqueo por intentos fallidos.
+    'POST /api/users/password': adminOnly(async req => {
+      const { id, password = '' } = await body(req);
+      if (String(password).length < 8) return json(400, { error: 'La contraseña debe tener al menos 8 caracteres' });
+      const u = await db.get("SELECT email FROM users WHERE id = ? AND status = 'activo'", Number(id));
+      if (!u) return json(400, { error: 'Cuenta no encontrada' });
+      await db.run('UPDATE users SET pass = ? WHERE id = ?', hash(String(password)), Number(id));
+      await db.run('DELETE FROM sessions WHERE user_id = ?', Number(id));
+      await db.run('DELETE FROM login_fails WHERE email = ?', u.email);
+      return json(200, { ok: true });
+    }),
+
     'POST /api/users/approve': adminOnly(async req => {
       const { id, plant = '' } = await body(req);
       if (!PLANTS.includes(plant)) throw badPlant();
@@ -399,7 +492,7 @@ export function createApp({ db, env = {} }) {
     'GET /api/weekly': adminOnly(async () => json(200, await db.all('SELECT * FROM weekly ORDER BY id DESC'))),
 
     'POST /api/weekly': adminOnly(async () => {
-      const start = ymd(new Date(Date.now() - 6 * 86_400_000)), form = await currentForm();
+      const start = ymd(new Date(Date.now() - 6 * DAY)), form = await currentForm();
       const rows = (await db.all('SELECT r.*, u.name FROM reports r JOIN users u ON u.id = r.user_id WHERE r.date >= ? ORDER BY u.name, r.date', start)).map(parseReport);
       if (!rows.length) return json(400, { error: 'No hay reportes en los últimos 7 días' });
       const text = await ai(
@@ -417,7 +510,7 @@ export function createApp({ db, env = {} }) {
   // Atiende /api/*: Request → Response (Fetch API, igual en Node y en Workers).
   return async function handleApi(req) {
     try {
-      const path = new URL(req.url).pathname, route = routes[`${req.method} ${path}`];
+      const path = new URL(req.url).pathname, route = routes[`${req.method} ${path.startsWith('/api/files/') ? '/api/files/' : path}`];
       if (!route) return json(404, { error: 'No encontrado' });
       const open = ['/api/questions', '/api/register', '/api/login'].includes(path);
       const user = await userOf(req);
@@ -427,7 +520,7 @@ export function createApp({ db, env = {} }) {
       return res;
     } catch (e) {
       console.error(e);
-      return json([400, 409, 413].includes(e.code) ? e.code : 500, { error: e.message });
+      return json([400, 403, 409, 413].includes(e.code) ? e.code : 500, { error: e.message });
     }
   };
 }

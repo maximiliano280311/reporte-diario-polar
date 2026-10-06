@@ -46,6 +46,8 @@ document.head.insertAdjacentHTML('beforeend', `<style>
   .pl .checks span { padding: 2px 6px; border-right: 1px solid #000; border-bottom: 1px solid #000; }
   .pl .hint { font-style: italic; font-size: 9px; margin: 2px 0 0; }
   .pl .firmas { margin-top: 12px; } .pl .firmas td { height: 64px; vertical-align: bottom; text-align: center; width: 50%; }
+  .pl .fotos { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 6px; } .pl figure { margin: 0; break-inside: avoid; }
+  .pl .fotos img { width: 100%; max-height: 360px; object-fit: contain; border: 1px solid #000; } .pl figcaption { font-size: 9px; font-style: italic; }
   @media print { [data-chrome], .no-print { display: none !important; } #app { padding: 0 !important; max-width: none !important; } .pl { padding: 0; } }
 </style>`);
 
@@ -64,6 +66,7 @@ async function api(path, data) {
   return j;
 }
 let me = null, questions = [], reports = [];
+let filt = { planta: '', q: '', desde: daysAgo(30), hasta: '' }; // filtros de Reportes (admin); se conservan al ir y volver de un PL-FOR-26
 
 function quality(score) {
   if (score == null) return { cls: 'bg-surface-container text-on-surface-variant', dot: 'bg-outline-variant', label: 'Sin evaluar' };
@@ -88,6 +91,27 @@ const showErr = err => { $('#err').textContent = err.message; $('#err').classLis
 const money = n => n.toLocaleString('es-MX', { style: 'currency', currency: 'MXN' });
 const sum = (rows, k) => (rows || []).reduce((t, x) => t + (Number(x[k]) || 0), 0);
 const nInc = r => r.answers.incidencias?.length || 0;
+// Descarga un CSV que Excel abre con acentos (BOM) — rows: arreglo de renglones.
+function csv(name, rows) {
+  const q = v => `"${String(v ?? '').replace(/"/g, '""')}"`;
+  const a = Object.assign(document.createElement('a'), { download: name,
+    href: URL.createObjectURL(new Blob(['﻿' + rows.map(r => r.map(q).join(',')).join('\r\n')], { type: 'text/csv;charset=utf-8' })) });
+  a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+// Fotos: se reducen a JPEG de máx. 1600 px antes de subirlas (una foto de teléfono pesa varios MB).
+async function upload(file) {
+  const img = await createImageBitmap(file), k = Math.min(1, 1600 / Math.max(img.width, img.height));
+  const c = Object.assign(document.createElement('canvas'), { width: Math.round(img.width * k), height: Math.round(img.height * k) });
+  c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+  const blob = await new Promise(res => c.toBlob(res, 'image/jpeg', 0.7));
+  const r = await fetch('/api/upload', { method: 'POST', headers: { 'Content-Type': 'image/jpeg' }, body: blob }), j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.error || 'No se pudo subir la foto');
+  return j.key;
+}
+const photoThumb = (name, k) => `<div data-photo class="relative w-20 h-20"><a href="/api/files/${esc(k)}" target="_blank"><img src="/api/files/${esc(k)}" alt="Foto" class="w-full h-full object-cover rounded-lg"></a>
+  <input type="hidden" name="${name}" value="${esc(k)}"><button type="button" data-del-photo class="absolute -top-2 -right-2 w-7 h-7 rounded-full bg-error text-white flex items-center justify-center" aria-label="Quitar foto"><span class="material-symbols-outlined text-[16px]">close</span></button></div>`;
+// Claves de todas las fotos de un reporte, con el nombre de su pregunta.
+const photosOf = r => questions.flatMap(s => (s.fields || []).filter(f => f.type === 'photos').flatMap(f => [].concat(r.answers[f.id] || []).map(k => [`${s.n}. ${f.label}`, k])));
 
 // ---------- Cuestionario PL-FOR-26 (el esquema viene de /api/questions) ----------
 function input(f, name, v = '') {
@@ -95,11 +119,16 @@ function input(f, name, v = '') {
   if (f.type === 'textarea') return `<textarea class="input" rows="2" name="${name}" ${req}>${esc(v)}</textarea>`;
   if (f.type === 'select') return `<select class="input" name="${name}" ${req}><option value="">Selecciona…</option>${f.options.map(o => `<option ${o === v ? 'selected' : ''}>${esc(o)}</option>`).join('')}</select>`;
   if (f.type === 'check') return `<input type="checkbox" name="${name}" value="N/A" ${v ? 'checked' : ''} class="w-6 h-6 shrink-0 accent-[#2563eb]">`;
-  if (f.type === 'checks') return `<div class="grid grid-cols-1 lg:grid-cols-2 gap-2 pt-1">${f.options.map(o => `<label class="flex items-center gap-3 text-body-md text-on-surface"><input type="checkbox" name="${name}" value="${esc(o)}" class="w-5 h-5 shrink-0 accent-[#2563eb]">${esc(o)}</label>`).join('')}</div>`;
+  if (f.type === 'checks') return `<div class="grid grid-cols-1 lg:grid-cols-2 gap-2 pt-1">${f.options.map(o => `<label class="flex items-center gap-3 text-body-md text-on-surface"><input type="checkbox" name="${name}" value="${esc(o)}" ${[].concat(v || []).includes(o) ? 'checked' : ''} class="w-5 h-5 shrink-0 accent-[#2563eb]">${esc(o)}</label>`).join('')}</div>`;
+  if (f.type === 'photos') return `<div class="flex flex-wrap gap-3 pt-2">${[].concat(v || []).map(k => photoThumb(name, k)).join('')}
+    <label class="w-20 h-20 rounded-lg border-[1.5px] border-dashed border-[#cbd5e1] flex flex-col items-center justify-center text-primary cursor-pointer">
+      <span class="material-symbols-outlined">add_a_photo</span><span class="text-[11px]">Agregar</span>
+      <input type="file" accept="image/*" multiple class="sr-only" data-upload="${name}"></label></div>`;
   return `<input class="input" name="${name}" value="${esc(v)}" type="${['number', 'date', 'time'].includes(f.type) ? f.type : 'text'}" ${f.type === 'number' ? 'step="any" min="0" inputmode="decimal"' : ''} ${f.list ? `list="dl-${f.list}"` : ''} ${req}>`;
 }
-const labeled = (f, html) => `<label class="flex ${f.type === 'check' ? 'flex-row-reverse justify-end items-center self-end h-12 gap-2' : 'flex-col gap-1'} text-label-md text-on-surface-variant ${f.type === 'checks' ? 'col-span-2 lg:col-span-4' : f.wide ? 'col-span-2' : ''}">
-  <span>${esc(f.label)}${f.required ? ' <span class="text-error">*</span>' : ''}</span>${html}</label>`;
+// Casillas múltiples y fotos llevan sus propios <label> adentro: se envuelven en <div> (un label dentro de otro activa el control equivocado).
+const labeled = (f, html, tag = ['checks', 'photos'].includes(f.type) ? 'div' : 'label') => `<${tag} class="flex ${f.type === 'check' ? 'flex-row-reverse justify-end items-center self-end h-12 gap-2' : 'flex-col gap-1'} text-label-md text-on-surface-variant ${f.type === 'checks' ? 'col-span-2 lg:col-span-4' : f.wide ? 'col-span-2' : ''}">
+  <span>${esc(f.label)}${f.required ? ' <span class="text-error">*</span>' : ''}</span>${html}</${tag}>`;
 let rowN = 0; // los renglones se nombran tabla.N.columna
 const rowHtml = (t, r = {}) => {
   const i = rowN++, cols = t.cols.filter(c => !c.auto), f = id => input(cols.find(c => c.id === id), `${t.id}.${i}.${id}`, r[id]);
@@ -115,9 +144,21 @@ const rowHtml = (t, r = {}) => {
     ${t.fixed ? '' : '<button type="button" data-del class="col-span-2 lg:col-span-4 justify-self-end text-label-sm text-error flex items-center gap-1"><span class="material-symbols-outlined text-[16px]">delete</span>Quitar</button>'}
   </div>`; };
 
+// Respuestas del formulario tal como están en pantalla (para enviar o guardar como borrador).
+function collect(form) {
+  const answers = {};
+  for (const [k, v] of new FormData(form)) {
+    const [id, i, col] = k.split('.');
+    if (col) ((answers[id] ??= {})[i] ??= {})[col] = v;
+    else answers[id] = id in answers ? [].concat(answers[id], v) : v; // casillas y fotos: varios valores
+  }
+  for (const s of questions) if (s.table) answers[s.table.id] = Object.values(answers[s.table.id] || {});
+  return answers;
+}
+
 // Documento PL-FOR-26 armado con las respuestas (solo admin).
 function plDoc(r) {
-  const a = r.answers, gas = sum(a.gas, 'importe'), gastos = sum(a.gastos, 'importe');
+  const a = r.answers, gas = sum(a.gas, 'importe'), gastos = sum(a.gastos, 'importe'), fotos = photosOf(r);
   const pedir = [...(a.quimicos || []).filter(q => ['PT', 'A'].includes(q.existencia)).map(q => `${q.quimico} (${q.existencia})`), a.pedir].filter(Boolean).join(', ');
   const kv = pairs => `<table><tbody>${pairs.map(([k, v]) => `<tr><td class="k">${esc(k)}</td><td>${esc(v) || '&nbsp;'}</td></tr>`).join('')}</tbody></table>`;
   const extra = { 5: [['Total de hornos', (a.hornos || []).length], ['Total de ciclos', sum(a.hornos, 'ciclos')]],
@@ -129,7 +170,7 @@ function plDoc(r) {
       <tr><td class="bar">REPORTE DIARIO DE OPERACIÓN E INCIDENCIAS</td><td class="k">Fecha emisión</td><td>OCT-2026</td></tr></table>
     ${questions.map(s => {
       const t = s.table, rows = t ? a[t.id] || [] : [], fs = s.fields || [];
-      const plain = fs.filter(f => f.type !== 'checks' && f.id !== 'pedir'), after = plain.filter(f => f.after).map(f => [f.label, a[f.id]]);
+      const plain = fs.filter(f => !['checks', 'photos'].includes(f.type) && f.id !== 'pedir'), after = plain.filter(f => f.after).map(f => [f.label, a[f.id]]);
       const pairs = [...(s.n === 1 ? [['Fecha', dmy(r.date)], ['Planta', r.plant], ['Elaboró', r.name]] : []),
         ...plain.filter(f => !f.after).map(f => [f.label, a[f.id]])];
       return `<div class="bar">${s.n}. ${esc(s.title.toUpperCase())}</div>
@@ -142,6 +183,7 @@ function plDoc(r) {
       ${s.hint ? `<p class="hint">${esc(s.hint)}</p>` : ''}`;
     }).join('')}
     <table class="firmas"><tr><td>${esc(r.name)}<br><b>ELABORÓ — ENCARGADO DE PLANTA</b></td><td><b>REVISÓ — GERENCIA</b></td></tr></table>
+    ${fotos.length ? `<div class="bar">ANEXOS — FOTOS</div><div class="fotos">${fotos.map(([l, k]) => `<figure><img src="/api/files/${esc(k)}" alt="${esc(l)}"><figcaption>${esc(l)}</figcaption></figure>`).join('')}</div>` : ''}
   </div>`;
 }
 const logo = size => `<span class="material-symbols-outlined text-primary-container" style="font-size:${size}px;font-variation-settings:'FILL' 1">verified_user</span>`;
@@ -200,7 +242,7 @@ const views = {
 
   // Diseño: pantalla "Dashboard Principal" del proyecto Stitch "Remix of Daily Form Dashboard".
   async inicio() {
-    reports = await api('/api/reports');
+    reports = await api('/api/reports?desde=' + daysAgo(60)); // racha, semana y mes
     const today = ymd(), todayDone = reports.find(r => r.date === today);
     const monday = new Date(); monday.setDate(monday.getDate() - (monday.getDay() + 6) % 7);
     const week = [...Array(7)].map((_, i) => { const d = new Date(monday); d.setDate(d.getDate() + i); return ymd(d); });
@@ -235,7 +277,8 @@ const views = {
             <h2 class="text-headline-sm font-bold tracking-tight">Tu reporte de hoy ya fue enviado</h2>
             <p class="text-body-md text-on-primary-container/90 leading-relaxed">${esc(todayDone.feedback || 'Gracias por reportar tu jornada.')}</p>
           </div>
-          <div>${qChip(todayDone.score)}</div>` : `
+          <div class="flex items-center justify-between gap-2">${qChip(todayDone.score)}
+            <a href="#/editar/${todayDone.id}" class="inline-flex items-center gap-1 text-label-md text-on-primary underline underline-offset-2"><span class="material-symbols-outlined text-[16px]">edit</span>Corregir</a></div>` : `
           <div class="flex items-center justify-between">
             <span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-tertiary-fixed text-on-tertiary-fixed text-label-sm font-semibold shadow-sm">
               <span class="w-2 h-2 rounded-full bg-tertiary animate-ping"></span>Acción requerida</span>
@@ -334,45 +377,71 @@ const views = {
     </div>`;
   },
 
-  async nuevo() {
-    const d = await api('/api/defaults'); rowN = 0;
+  // Nuevo reporte, o corregir uno ya enviado (#/editar/ID). Lo escrito se guarda como borrador en este dispositivo.
+  async nuevo(editId) {
+    const edit = editId ? (await api('/api/reports?id=' + Number(editId)))[0] : null;
+    if (editId && !edit) throw new Error('Reporte no encontrado');
+    const d = await api('/api/defaults' + (edit ? `?planta=${encodeURIComponent(edit.plant || '')}&excluir=${edit.id}` : '')); rowN = 0;
+    // Borrador: uno por día (y por reporte que se corrige); los de otros días se borran.
+    const key = `borrador:${me.id}:${ymd()}${edit ? ':' + edit.id : ''}`;
+    let draft = null;
+    try {
+      for (const k of Object.keys(localStorage)) if (k.startsWith('borrador:') && !k.includes(`:${ymd()}`)) localStorage.removeItem(k);
+      draft = JSON.parse(localStorage.getItem(key));
+    } catch {}
+    const pre = draft || edit?.answers;
+    // Renglones iniciales: los del borrador o del reporte; si no hay, los pendientes abiertos (mantenimiento).
+    const rowsOf = t => {
+      if (t.fixed) { // gas: siempre los tanques fijos, con lo que ya se había escrito ("Otro: …" es el renglón con nombre libre)
+        const c0 = t.cols[0].id, rs = pre?.[t.id] || [];
+        return t.fixed.map((v, i) => rs.find(r => r[c0] === v) || (i === t.fixed.length - 1 && rs.find(r => !t.fixed.includes(r[c0]))) || { [c0]: v });
+      }
+      return pre ? pre[t.id] || [] : t.id === 'mantenimiento' ? d.pendientes : [];
+    };
     // Vehículo: solo los camiones registrados de la planta.
     const veh = questions.find(s => s.table?.id === 'vehiculos')?.table.cols.find(c => c.id === 'vehiculo');
     if (veh) veh.options = d.trucks.map(t => t.name);
     $('#app').innerHTML = `
     <p class="text-label-sm font-semibold text-primary">PL-FOR-26 · REV. 06</p>
-    <h1 class="text-headline-lg-mobile tracking-tight">Reporte diario de operación</h1>
-    <p class="text-body-md text-on-surface-variant mb-4">${fdate(ymd())}${me.plant ? ' · Planta ' + esc(me.plant) : ''}</p>
+    <h1 class="text-headline-lg-mobile tracking-tight">${edit ? 'Corregir reporte' : 'Reporte diario de operación'}</h1>
+    <p class="text-body-md text-on-surface-variant mb-4">${fdate(edit?.date || ymd())}${edit ? ` · Planta ${esc(edit.plant || '—')} · ${esc(edit.name)}` : me.plant ? ' · Planta ' + esc(me.plant) : ''}</p>
+    ${draft ? `<div class="rounded-xl p-3 mb-4 flex flex-wrap items-center justify-between gap-2 bg-tertiary-fixed/50">
+      <span class="text-body-md flex items-center gap-2"><span class="material-symbols-outlined text-tertiary">history</span>Recuperamos lo que llevabas escrito.</span>
+      <button type="button" id="discard" class="text-label-md text-primary font-semibold">Empezar de cero</button></div>` : ''}
     ${Object.entries(d.lists).map(([k, xs]) => `<datalist id="dl-${k}">${xs.map(x => `<option value="${esc(x)}">`).join('')}</datalist>`).join('')}
     <form id="report" class="flex flex-col gap-4">
-      ${questions.map(s => `
+      ${questions.map(s => { const top = (s.fields || []).filter(f => !f.after), askPlant = s.n === 1 && !me.plant && !edit; return `
       <section class="card p-4 flex flex-col gap-3">
         <h2 class="text-label-lg text-primary">${s.n}. ${esc(s.title)}</h2>
         ${s.hint ? `<p class="text-body-sm text-on-surface-variant">${esc(s.hint)}</p>` : ''}
         ${s.table?.id === 'vehiculos' && !d.trucks.length ? '<p class="text-body-sm text-error">Tu planta no tiene camiones registrados. Pide al administrador que los agregue.</p>' : ''}
-        ${s.fields ? `<div class="grid grid-cols-2 lg:grid-cols-4 gap-3">
-          ${s.n === 1 && !me.plant ? labeled({ label: 'Planta', required: true, wide: true }, plantSelect('name="planta" required')) : ''}
-          ${s.fields.filter(f => !f.after).map(f => labeled(f, input(f, f.id))).join('')}</div>` : ''}
-        ${s.table ? `<div data-table="${s.table.id}" class="flex flex-col gap-2">${(s.table.fixed ? s.table.fixed.map(v => ({ [s.table.cols[0].id]: v }))
-            : s.table.id === 'mantenimiento' ? d.pendientes : []).map(r => rowHtml(s.table, r)).join('')}</div>
+        ${top.length || askPlant ? `<div class="grid grid-cols-2 lg:grid-cols-4 gap-3">
+          ${askPlant ? labeled({ label: 'Planta', required: true, wide: true }, plantSelect('name="planta" required', pre?.planta)) : ''}
+          ${top.map(f => labeled(f, input(f, f.id, pre?.[f.id]))).join('')}</div>` : ''}
+        ${s.table ? `<div data-table="${s.table.id}" class="flex flex-col gap-2">${rowsOf(s.table).map(r => rowHtml(s.table, r)).join('')}</div>
           ${s.table.fixed ? '' : `<button type="button" data-add="${s.table.id}" class="btn border-[1.5px] border-[#cbd5e1] text-primary"><span class="material-symbols-outlined">add</span>Agregar ${esc(s.table.item)}</button>`}` : ''}
         ${s.table?.id === 'hornos' ? '<p data-total-hornos class="p-3 rounded-xl bg-surface-container-high/60 text-label-lg text-primary" aria-live="polite"></p>' : ''}
-        ${(s.fields || []).filter(f => f.after).map(f => `<div class="grid grid-cols-2">${labeled(f, input(f, f.id))}</div>`).join('')}
-      </section>`).join('')}
+        ${(s.fields || []).filter(f => f.after).map(f => `<div class="grid grid-cols-2">${labeled(f, input(f, f.id, pre?.[f.id]))}</div>`).join('')}
+      </section>`; }).join('')}
       <p id="err" class="text-sm text-error hidden" role="alert"></p>
-      <button class="btn btn-primary w-full"><span class="material-symbols-outlined">send</span>Enviar reporte</button>
+      <button class="btn btn-primary w-full"><span class="material-symbols-outlined">send</span>${edit ? 'Guardar corrección' : 'Enviar reporte'}</button>
     </form>`;
     const form = $('#report');
+    let ready = false, uploading = 0; // ready: no guardar borrador mientras se arma la pantalla
+    const save = () => { if (ready) try { localStorage.setItem(key, JSON.stringify(collect(form))); } catch {} };
+    if (draft) $('#discard').onclick = () => { try { localStorage.removeItem(key); } catch {} views.nuevo(editId); };
     form.onclick = e => {
-      const add = e.target.closest('[data-add]'), del = e.target.closest('[data-del]');
+      const add = e.target.closest('[data-add]'), del = e.target.closest('[data-del]'), delPhoto = e.target.closest('[data-del-photo]');
       if (add) form.querySelector(`[data-table="${add.dataset.add}"]`).insertAdjacentHTML('beforeend', rowHtml(questions.find(s => s.table?.id === add.dataset.add).table));
       if (del) del.closest('[data-row]').remove();
+      if (delPhoto) delPhoto.closest('[data-photo]').remove();
+      if (add || del || delPhoto) save();
       totalHornos(); pendientes();
     };
     // Sección 5: total de hornos y de ciclos, en vivo.
     const totalHornos = () => {
-      const rows = [...form.querySelectorAll('[data-table="hornos"] [data-row]')];
-      form.querySelector('[data-total-hornos]').textContent = `Total de hornos: ${rows.length} · Total de ciclos: ${sum(rows.map(r => ({ c: r.querySelector('[name$=".ciclos"]').value })), 'c')}`;
+      const rows = [...form.querySelectorAll('[data-table="hornos"] [data-row]')], p = form.querySelector('[data-total-hornos]');
+      if (p) p.textContent = `Total de hornos: ${rows.length} · Total de ciclos: ${sum(rows.map(r => ({ c: r.querySelector('[name$=".ciclos"]').value })), 'c')}`;
     };
     // Sección 7: pendientes por procesar = pendientes anteriores (misma pieza) + piezas − procesado hoy. El servidor lo recalcula al guardar.
     const pendientes = () => form.querySelectorAll('[data-table="material"] [data-row]').forEach(r => {
@@ -380,10 +449,21 @@ const views = {
       r.querySelector('[data-pend]').textContent = `Pendientes por procesar: ${prev + (Number(v('cantidad')) || 0) - (Number(v('procesado')) || 0)}`
         + (prev ? ` (incluye ${prev} de días anteriores)` : '');
     });
-    form.oninput = () => { totalHornos(); pendientes(); };
-    totalHornos();
-    // Km inicial = km final de la última vez que se usó la unidad.
+    form.oninput = () => { totalHornos(); pendientes(); save(); };
     form.onchange = e => {
+      // Fotos: se suben en cuanto se eligen; en el formulario queda su clave.
+      const up = e.target.dataset.upload;
+      if (up) {
+        const box = e.target.closest('label');
+        for (const file of [...e.target.files]) {
+          uploading++; box.classList.add('opacity-50', 'animate-pulse');
+          upload(file).then(k => { box.insertAdjacentHTML('beforebegin', photoThumb(up, k)); save(); }, showErr)
+            .finally(() => { if (!--uploading) box.classList.remove('opacity-50', 'animate-pulse'); });
+        }
+        e.target.value = '';
+        return;
+      }
+      // Km inicial = km final de la última vez que se usó la unidad.
       const n = e.target.name || '', ini = n.endsWith('.vehiculo') && form.elements[n.replace(/vehiculo$/, 'km_ini')];
       if (ini && !ini.value && d.km[e.target.value]) ini.value = d.km[e.target.value];
       // Sección 2: sin reportes de personal → "¿Cuántos?" = N/A; con reportes → obligatorio.
@@ -401,56 +481,64 @@ const views = {
           const x = el(d); x.disabled = true; x.type === 'checkbox' ? (x.checked = false) : (x.value = '');
         });
       }
+      save();
     };
+    // Con respuestas previas (borrador o corrección): dejar desactivado lo que corresponde, como si se hubiera elegido a mano.
+    form.querySelectorAll('[name=hubo_reportes], [data-row] input[type=checkbox]:checked').forEach(x => x.dispatchEvent(new Event('change', { bubbles: true })));
+    totalHornos(); pendientes(); ready = true;
     form.onsubmit = async e => {
       e.preventDefault();
-      const btn = e.target.querySelector('button[class*=btn-primary]');
+      if (uploading) return showErr(new Error('Espera a que terminen de subir las fotos'));
+      const btn = e.target.querySelector('button[class*=btn-primary]'), label = btn.innerHTML;
       btn.disabled = true; btn.innerHTML = '<span class="material-symbols-outlined animate-spin">progress_activity</span>Analizando con IA…';
-      const answers = {};
-      for (const [k, v] of new FormData(form)) {
-        const [id, i, col] = k.split('.');
-        if (col) ((answers[id] ??= {})[i] ??= {})[col] = v;
-        else answers[id] = id in answers ? [].concat(answers[id], v) : v; // casillas: varios valores
-      }
-      for (const s of questions) if (s.table) answers[s.table.id] = Object.values(answers[s.table.id] || {});
+      const answers = collect(form);
       try {
-        const r = await api('/api/reports', { answers });
-        me = await api('/api/me');
+        const r = await api(edit ? '/api/reports/edit' : '/api/reports', edit ? { id: edit.id, answers } : { answers });
+        try { localStorage.removeItem(key); } catch {}
+        if (!edit) me = await api('/api/me'); // la planta se guarda con el primer reporte
         $('#app').innerHTML = `
         <div class="flex flex-col items-center text-center gap-3 pt-6">
           <div class="w-16 h-16 rounded-full bg-secondary-container text-on-secondary-container flex items-center justify-center">
             <span class="material-symbols-outlined text-[36px]">task_alt</span></div>
-          <h1 class="text-2xl font-bold">¡Reporte enviado!</h1>
-          ${r.score != null ? `<p class="text-sm text-on-surface-variant">Calidad de tu reporte</p><p class="text-5xl font-bold text-primary">${r.score}</p>${qChip(r.score)}`
-            : '<p class="text-sm text-on-surface-variant">Tu reporte se guardó; la evaluación de calidad no estuvo disponible.</p>'}
+          <h1 class="text-2xl font-bold">${edit ? '¡Reporte corregido!' : '¡Reporte enviado!'}</h1>
+          ${r.score != null ? `<p class="text-sm text-on-surface-variant">Calidad del reporte</p><p class="text-5xl font-bold text-primary">${r.score}</p>${qChip(r.score)}`
+            : '<p class="text-sm text-on-surface-variant">El reporte se guardó; la evaluación de calidad no estuvo disponible.</p>'}
           ${r.feedback ? `<div class="card p-4 text-left w-full mt-2"><p class="text-xs font-semibold text-primary flex items-center gap-1"><span class="material-symbols-outlined text-[16px]">lightbulb</span>Cómo mejorar</p><p class="text-sm mt-1">${esc(r.feedback)}</p></div>` : ''}
-          <a href="#/inicio" class="btn btn-primary w-full mt-2">Volver al inicio</a>
+          <a href="#/${me.role === 'admin' ? 'admin' : 'inicio'}" class="btn btn-primary w-full mt-2">${me.role === 'admin' ? 'Volver a reportes' : 'Volver al inicio'}</a>
         </div>`;
-      } catch (err) {
-        $('#err').textContent = err.message; $('#err').classList.remove('hidden');
-        btn.disabled = false; btn.innerHTML = '<span class="material-symbols-outlined">send</span>Enviar reporte';
-      }
+      } catch (err) { showErr(err); btn.disabled = false; btn.innerHTML = label; }
     };
   },
+  editar: id => views.nuevo(id),
 
   async historial() {
-    reports = await api('/api/reports');
     $('#app').innerHTML = `
     <p class="text-xs font-semibold text-primary flex items-center gap-1"><span class="material-symbols-outlined text-[16px]">shield</span>MIS REPORTES</p>
     <h1 class="text-2xl font-semibold tracking-tight mb-4">Historial</h1>
-    <div class="grid gap-3 lg:grid-cols-2 lg:items-start">${reports.length ? reports.map(r => reportCard(r)).join('') : '<p class="text-on-surface-variant text-sm">Aún no tienes reportes.</p>'}</div>`;
+    <div class="grid grid-cols-2 gap-3 mb-4 lg:max-w-md">${labeled({ label: 'Desde' }, `<input class="input" type="date" id="h-desde" value="${daysAgo(90)}">`)}
+      ${labeled({ label: 'Hasta' }, '<input class="input" type="date" id="h-hasta">')}</div>
+    <p id="err" class="text-sm text-error hidden mb-2" role="alert"></p>
+    <div id="hist" class="grid gap-3 lg:grid-cols-2 lg:items-start"></div>`;
+    const load = async () => {
+      reports = await api(`/api/reports?desde=${$('#h-desde').value}&hasta=${$('#h-hasta').value}`);
+      $('#hist').innerHTML = reports.length ? reports.map(r => reportCard(r, false, r.date === ymd())).join('') : '<p class="text-on-surface-variant text-sm">No tienes reportes en esas fechas.</p>';
+    };
+    $('#h-desde').onchange = $('#h-hasta').onchange = () => load().catch(showErr);
+    await load();
   },
 
   async admin() {
-    let users;
-    [reports, users] = await Promise.all([api('/api/reports'), api('/api/users')]);
+    let users, week;
+    [week, users] = await Promise.all([api('/api/reports?desde=' + daysAgo(6)), api('/api/users')]);
     users = users.filter(u => u.role === 'colaborador' && u.status === 'activo');
-    const today = reports.filter(r => r.date === ymd());
-    const week = reports.filter(r => r.date >= daysAgo(6));
+    const today = week.filter(r => r.date === ymd());
     const team = users.map(u => {
       const mine = week.filter(r => r.user_id === u.id);
       return { ...u, today: today.some(r => r.user_id === u.id), count: mine.length, score: avg(mine.map(r => r.score)) };
     });
+    // Se puede corregir el último reporte de cada planta (vienen del más reciente al más viejo).
+    const latest = new Set(Object.values(Object.fromEntries([...week].reverse().map(r => [r.plant, r.id]))));
+    const tables = questions.filter(s => s.table);
     $('#app').innerHTML = `
     <h1 class="${WIDE ? 'text-3xl font-bold' : 'text-2xl font-semibold'} tracking-tight">Reportes del equipo</h1>
     <p class="text-sm text-on-surface-variant">${fdate(ymd())}</p>
@@ -462,7 +550,16 @@ const views = {
     </div>
     <div class="${WIDE ? 'grid grid-cols-[minmax(0,1fr)_360px] gap-6 items-start' : 'flex flex-col gap-4'}">
       <div>
-        <input id="filter" class="input mb-3" placeholder="Buscar por colaborador, fecha o contenido…">
+        <div id="filtros" class="card p-4 grid grid-cols-2 lg:grid-cols-4 gap-3 mb-3 items-end">
+          ${labeled({ label: 'Planta' }, `<select class="input" name="planta"><option value="">Todas</option>${PLANTS.map(p => `<option ${p === filt.planta ? 'selected' : ''}>${p}</option>`).join('')}</select>`)}
+          ${labeled({ label: 'Buscar' }, `<input class="input" name="q" value="${esc(filt.q)}" placeholder="Nombre, texto…">`)}
+          ${labeled({ label: 'Desde' }, `<input class="input" type="date" name="desde" value="${filt.desde}">`)}
+          ${labeled({ label: 'Hasta' }, `<input class="input" type="date" name="hasta" value="${filt.hasta}">`)}
+          ${labeled({ label: 'Exportar a Excel (CSV)', wide: true }, `<select class="input" id="x-sec"><option value="resumen">Resumen por reporte</option>
+            ${tables.map(s => `<option value="${s.table.id}">${s.n}. ${esc(s.title)}</option>`).join('')}</select>`)}
+          <button type="button" id="x-go" class="btn border-[1.5px] border-[#cbd5e1] text-primary col-span-2"><span class="material-symbols-outlined">download</span>Descargar CSV</button>
+        </div>
+        <p id="err" class="text-sm text-error hidden mb-2" role="alert"></p>
         <div id="list" class="flex flex-col gap-3"></div>
       </div>
       <div class="card p-4 ${WIDE ? 'sticky top-6' : 'order-first'}">
@@ -477,16 +574,36 @@ const views = {
           : '<p class="text-sm text-on-surface-variant">Aún no hay colaboradores registrados.</p>'}
       </div>
     </div>`;
-    const draw = (f = '') => {
-      const list = reports.filter(r => JSON.stringify(r).toLowerCase().includes(f.toLowerCase()));
-      $('#list').innerHTML = list.length ? list.map(r => reportCard(r, true)).join('') : '<p class="text-on-surface-variant text-sm">Sin reportes.</p>';
+    const shown = () => reports.filter(r => JSON.stringify(r).toLowerCase().includes(filt.q.toLowerCase()));
+    const draw = () => {
+      const list = shown();
+      $('#list').innerHTML = list.length ? list.map(r => reportCard(r, true, latest.has(r.id))).join('') : '<p class="text-on-surface-variant text-sm">Sin reportes con esos filtros.</p>';
     };
-    $('#filter').oninput = e => draw(e.target.value);
-    draw();
+    // Planta y fechas se piden al servidor; la búsqueda de texto filtra lo que ya se bajó.
+    const load = async () => {
+      reports = await api(`/api/reports?${new URLSearchParams({ planta: filt.planta, desde: filt.desde, hasta: filt.hasta })}`);
+      draw();
+    };
+    $('#filtros').oninput = e => {
+      if (!e.target.name) return;
+      filt[e.target.name] = e.target.value;
+      e.target.name === 'q' ? draw() : load().catch(showErr);
+    };
+    $('#x-go').onclick = () => {
+      const sec = $('#x-sec').value, list = shown(), t = tables.find(s => s.table.id === sec)?.table;
+      csv(`PL-FOR-26_${sec}_${filt.desde || 'inicio'}_${filt.hasta || ymd()}.csv`, sec === 'resumen'
+        ? [['Fecha', 'Planta', 'Elaboró', 'Turno', 'Presentes', 'Calidad', 'Gastos ($)', 'Cargas de gas ($)', 'Incidencias', 'Resumen IA'],
+          ...list.map(r => [r.date, r.plant, r.name, r.answers.turno, r.answers.presentes, r.score ?? 'Sin evaluar', sum(r.answers.gastos, 'importe'),
+            sum(r.answers.gas, 'importe'), nInc(r), r.summary])]
+        : [['Fecha', 'Planta', 'Elaboró', ...t.cols.map(c => c.label)],
+          ...list.flatMap(r => (r.answers[t.id] || []).map(x => [r.date, r.plant, r.name, ...t.cols.map(c => x[c.id])]))]);
+    };
+    await load();
   },
 
   async semanal() {
-    const [list, all] = await Promise.all([api('/api/weekly'), api('/api/reports')]);
+    // 30 días: los totales usan 7; mantenimiento abierto usa el último reporte de cada planta.
+    const [list, all] = await Promise.all([api('/api/weekly'), api('/api/reports?desde=' + daysAgo(30))]);
     const wk = all.filter(r => r.date >= daysAgo(6)), latest = {};
     for (const r of all) latest[r.plant] ??= r; // vienen del más reciente al más viejo
     const open = Object.values(latest).reduce((t, r) => t + (r.answers.mantenimiento || []).filter(m => m.estatus !== 'Cerrado').length, 0);
@@ -550,7 +667,10 @@ const views = {
       <section id="act" class="card p-4">
         <h2 class="font-semibold flex items-center gap-2 mb-2"><span class="material-symbols-outlined text-primary">group</span>Cuentas activas (${act.length})</h2>
         ${act.length ? `<table class="w-full text-sm"><tbody>${act.map(u => `<tr class="border-t border-[#f1f5f9]">
-          <td class="py-2 pr-2"><p class="font-medium">${esc(u.name)}</p><p class="text-[11px] text-on-surface-variant">${esc(u.email)}</p></td>
+          <td class="py-2 pr-2"><p class="font-medium">${esc(u.name)}</p><p class="text-[11px] text-on-surface-variant">${esc(u.email)}</p>
+            <details class="mt-1"><summary class="text-label-sm text-primary font-semibold">Cambiar contraseña</summary>
+              <form data-pass="${u.id}" class="flex flex-wrap gap-2 mt-2"><input class="input !py-2 flex-1 min-w-[140px]" name="password" type="text" required minlength="8" autocomplete="off" placeholder="Nueva (mín. 8)" aria-label="Contraseña nueva de ${esc(u.name)}">
+                <button class="btn btn-primary !min-h-0 !py-2">Guardar</button></form></details></td>
           <td class="pr-2">${esc(u.plant || '—')}</td><td class="pr-2"><select data-role-user="${u.id}" class="input !py-2 !px-3 w-auto" aria-label="Rol de ${esc(u.name)}">
             ${[['colaborador', 'Encargado'], ['admin', 'Admin']].map(([v, l]) => `<option value="${v}" ${u.role === v ? 'selected' : ''}>${l}</option>`).join('')}</select></td>
           <td class="text-right"><button data-del-user="${u.id}" class="text-label-sm text-error font-semibold inline-flex items-center gap-1 px-2 py-2 rounded-lg hover:bg-error-container whitespace-nowrap" aria-label="Eliminar a ${esc(u.name)}"><span class="material-symbols-outlined text-[18px]">delete</span>Eliminar</button></td></tr>`).join('')}</tbody></table>`
@@ -578,6 +698,15 @@ const views = {
       if (!sel) return;
       sel.disabled = true;
       try { await api('/api/users/role', { id: sel.dataset.roleUser, role: sel.value }); views.cuentas(); } catch (err) { fail(err); sel.disabled = false; }
+    };
+    // Contraseña nueva: la persona entra con ella (sus sesiones abiertas se cierran).
+    $('#act').onsubmit = async e => {
+      e.preventDefault();
+      const f = e.target;
+      try {
+        await api('/api/users/password', { id: f.dataset.pass, password: f.elements.password.value });
+        f.outerHTML = '<p class="text-label-sm text-secondary mt-2">Listo. Compártele la contraseña nueva; tendrá que volver a iniciar sesión.</p>';
+      } catch (err) { fail(err); }
     };
     $('#nueva').onsubmit = async e => {
       e.preventDefault();
@@ -729,9 +858,36 @@ const views = {
     };
   },
 
+  // Mi cuenta (todos): datos y cambiar mi contraseña.
+  cuenta() {
+    $('#app').innerHTML = `
+    <div class="${WIDE ? 'max-w-xl' : ''} flex flex-col gap-4">
+      <div><h1 class="${WIDE ? 'text-3xl font-bold' : 'text-2xl font-semibold'} tracking-tight">Mi cuenta</h1>
+        <p class="text-sm text-on-surface-variant">${esc(me.name)} · ${esc(me.email)} · ${me.role === 'admin' ? 'Admin' : 'Encargado'}${me.plant ? ' · Planta ' + esc(me.plant) : ''}</p></div>
+      <form id="mi-pass" class="card p-4 flex flex-col gap-3">
+        <h2 class="font-semibold flex items-center gap-2"><span class="material-symbols-outlined text-primary">key</span>Cambiar mi contraseña</h2>
+        ${labeled({ label: 'Contraseña actual', required: true }, '<input class="input" name="current" type="password" required autocomplete="current-password">')}
+        ${labeled({ label: 'Contraseña nueva (mín. 8)', required: true }, '<input class="input" name="password" type="password" required minlength="8" autocomplete="new-password">')}
+        ${labeled({ label: 'Repite la contraseña nueva', required: true }, '<input class="input" name="again" type="password" required minlength="8" autocomplete="new-password">')}
+        <p id="err" class="text-sm text-error hidden" role="alert"></p>
+        <button class="btn btn-primary"><span class="material-symbols-outlined">save</span>Guardar contraseña</button>
+      </form>
+      <button data-logout class="btn border-[1.5px] border-[#cbd5e1] text-error"><span class="material-symbols-outlined">logout</span>Cerrar sesión</button>
+    </div>`;
+    $('#mi-pass').onsubmit = async e => {
+      e.preventDefault();
+      const f = e.target, { current, password, again } = Object.fromEntries(new FormData(f));
+      if (password !== again) return showErr(new Error('Las contraseñas nuevas no coinciden'));
+      const btn = f.querySelector('.btn-primary'); btn.disabled = true;
+      try {
+        await api('/api/me/password', { current, password });
+        f.outerHTML = '<div class="card p-4 flex items-center gap-2 text-secondary"><span class="material-symbols-outlined">check_circle</span>Listo, tu contraseña cambió. En tus otros dispositivos tendrás que volver a iniciar sesión.</div>';
+      } catch (err) { showErr(err); btn.disabled = false; }
+    };
+  },
+
   async pl(id) {
-    reports = await api('/api/reports');
-    const r = reports.find(x => x.id === Number(id));
+    const [r] = await api('/api/reports?id=' + Number(id));
     if (!r) throw new Error('Reporte no encontrado');
     $('#app').innerHTML = `
     <div class="no-print flex items-center justify-between mb-4">
@@ -743,8 +899,9 @@ const views = {
 };
 
 // El encargado ve calidad + retroalimentación; el admin ve además resumen IA y el PL-FOR-26 completo.
-function reportCard(r, admin = false) {
-  const inc = nInc(r), blocked = inc > 0;
+// canEdit: botón "Corregir" (el servidor vuelve a revisar que se pueda).
+function reportCard(r, admin = false, canEdit = false) {
+  const inc = nInc(r), blocked = inc > 0, fotos = photosOf(r);
   return `
   <details class="card p-4">
     <summary class="flex items-start gap-3">
@@ -759,7 +916,11 @@ function reportCard(r, admin = false) {
     </summary>
     ${admin && r.summary ? `<div class="mt-3 p-3 rounded-lg bg-surface-container-low"><p class="text-xs font-semibold text-primary flex items-center gap-1"><span class="material-symbols-outlined text-[16px]">auto_awesome</span>Resumen IA</p><p class="text-sm mt-1">${esc(r.summary)}</p></div>` : ''}
     ${r.feedback ? `<div class="mt-3 p-3 rounded-lg bg-surface-container-low"><p class="text-xs font-semibold text-primary flex items-center gap-1"><span class="material-symbols-outlined text-[16px]">lightbulb</span>Retroalimentación</p><p class="text-sm mt-1">${esc(r.feedback)}</p></div>` : ''}
-    ${admin ? `<a href="#/pl/${r.id}" class="btn btn-primary w-full mt-3"><span class="material-symbols-outlined">description</span>Ver PL-FOR-26</a>` : ''}
+    ${fotos.length ? `<div class="mt-3 flex flex-wrap gap-2">${fotos.map(([l, k]) => `<a href="/api/files/${esc(k)}" target="_blank" title="${esc(l)}"><img src="/api/files/${esc(k)}" alt="${esc(l)}" loading="lazy" class="w-16 h-16 object-cover rounded-lg"></a>`).join('')}</div>` : ''}
+    <div class="flex gap-2 mt-3">
+      ${admin ? `<a href="#/pl/${r.id}" class="btn btn-primary flex-1"><span class="material-symbols-outlined">description</span>Ver PL-FOR-26</a>` : ''}
+      ${canEdit ? `<a href="#/editar/${r.id}" class="btn border-[1.5px] border-[#cbd5e1] text-primary flex-1"><span class="material-symbols-outlined">edit</span>Corregir</a>` : ''}
+    </div>
   </details>`;
 }
 
@@ -778,7 +939,7 @@ function renderNav(name) {
       <a href="#/${p}" class="flex items-center gap-3 px-3 py-2.5 rounded-xl ${p === name ? 'bg-surface-container-high text-primary font-semibold' : 'text-on-surface-variant hover:bg-surface-container-low'}">
         <span class="material-symbols-outlined">${icon}</span>${{ Semanal: 'Resumen semanal', '': 'Nuevo reporte' }[label] ?? label}</a>`).join('')}</div>
     <div class="mt-auto flex items-center justify-between gap-2 px-2 pt-4 border-t border-[#f1f5f9]">
-      <div class="min-w-0"><p class="text-sm font-semibold truncate">${esc(me.name)}</p><p class="text-xs text-on-surface-variant truncate">${esc(me.email)}</p></div>
+      <a href="#/cuenta" title="Mi cuenta" class="min-w-0 rounded-lg px-1 -mx-1 ${name === 'cuenta' ? 'text-primary' : 'hover:bg-surface-container-low'}"><p class="text-sm font-semibold truncate">${esc(me.name)}</p><p class="text-xs text-on-surface-variant truncate">${esc(me.email)} · Mi cuenta</p></a>
       <button data-logout class="w-10 h-10 shrink-0 flex items-center justify-center rounded-full text-on-surface-variant hover:bg-surface-container-high" aria-label="Cerrar sesión" title="Cerrar sesión"><span class="material-symbols-outlined">logout</span></button>
     </div></div>`
   : `<div class="flex items-center justify-around h-20 px-4">${items.map(([p, icon, label]) => !label
@@ -786,13 +947,16 @@ function renderNav(name) {
     : `<a href="#/${p}" class="flex flex-col items-center gap-1 flex-1 min-w-0 ${p === name ? 'text-primary font-semibold' : 'text-on-surface-variant'}"><span class="material-symbols-outlined">${icon}</span><span class="text-[11px]">${label}</span></a>`).join('')}</div>`;
 }
 
+// Opción del menú que se marca en pantallas que no están en el menú.
+const navOf = name => ({ pl: 'admin', editar: me.role === 'admin' ? 'admin' : 'historial' })[name] ?? name;
 async function route() {
   const [name, arg] = location.hash.slice(2).split('/');
   if (!me) return views.login();
   if (WEB && me.role !== 'admin') return views.soloAdmin();
-  const allowed = [...NAV[me.role].map(n => n[0]), ...(me.role === 'admin' ? ['pl'] : [])]; // pl/ID: PL-FOR-26, solo admin
+  // pl/ID: PL-FOR-26, solo admin; editar/ID: corregir un reporte; cuenta: mi contraseña (ambos roles).
+  const allowed = [...NAV[me.role].map(n => n[0]), 'editar', 'cuenta', ...(me.role === 'admin' ? ['pl'] : [])];
   if (!allowed.includes(name)) return location.hash = '#/' + allowed[0];
-  renderNav(name === 'pl' ? 'admin' : name);
+  renderNav(navOf(name));
   try { await views[name](arg); } catch (e) { $('#app').innerHTML = `<p class="text-error text-sm">${esc(e.message)}</p>`; }
   scrollTo(0, 0);
 }
@@ -813,7 +977,7 @@ addEventListener('DOMContentLoaded', () => {
   DESK.addEventListener('change', e => {
     WIDE = WEB || e.matches;
     const name = location.hash.slice(2).split('/')[0];
-    if (me && !(WEB && me.role !== 'admin')) renderNav(name === 'pl' ? 'admin' : name);
+    if (me && !(WEB && me.role !== 'admin')) renderNav(navOf(name));
   });
   document.addEventListener('click', e => { if (e.target.closest('[data-logout]')) logout(); });
   boot();

@@ -3,6 +3,8 @@
 .dev.vars
 # Base local: contiene contraseñas cifradas y datos reales. Los datos de producción viven en Cloudflare D1.
 data.db
+# Fotos subidas en la compu (en Cloudflare van a R2)
+uploads/
 *.db-journal
 *.db-wal
 *.db-shm

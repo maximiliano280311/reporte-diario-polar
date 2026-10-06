@@ -16,6 +16,7 @@ App web para **Retrabajos Industriales y Limpiezas Especializadas Polar**: los e
 - Corre en **Cloudflare Workers** (`worker.mjs`) con base **Cloudflare D1** `reporte-diario-polar`
   (id `78c10631-073e-452f-9170-d3cef3c9484d`). **Los datos reales viven en D1**, no en `data.db`.
 - Plan: Workers Paid ($5/mes) — el hash de contraseñas (scrypt) necesita más CPU que el plan gratis.
+- Fotos en **R2**, bucket `reporte-diario-polar-fotos` (binding `FILES`); en la compu van a `uploads/`.
 - Secretos: `AI_API_KEY` es un *secret* del Worker (`npx wrangler secret put AI_API_KEY`); el resto de la configuración está en `vars` de `wrangler.jsonc`.
 - Publicar: `npx wrangler deploy`. Cambios de esquema: editar `schema.sql` y aplicarlos a D1 con
   `npx wrangler d1 execute reporte-diario-polar --remote --command "ALTER TABLE ..."` (D1 no reaplica `schema.sql` solo).
@@ -24,10 +25,11 @@ App web para **Retrabajos Industriales y Limpiezas Especializadas Polar**: los e
 ## Arquitectura
 | Archivo | Qué es |
 |---|---|
-| `app.mjs` | Toda la lógica y la API (`/api/*`). Esquema del formulario `FORM`, validación, cálculos, IA. Recibe un adaptador de base async `{ get, all, run }`. |
-| `worker.mjs` | Arranque en Cloudflare: adaptador D1 + archivos de `public/` (vía `ASSETS`). |
+| `app.mjs` | Toda la lógica y la API (`/api/*`). Esquema del formulario `FORM`, validación, cálculos, IA. Recibe un adaptador de base async `{ get, all, run }` y uno de fotos `{ put, get }`. |
+| `worker.mjs` | Arranque en Cloudflare: adaptadores D1 y R2 + archivos de `public/` (vía `ASSETS`). |
 | `server.mjs` | Arranque local: Node + SQLite (`data.db`), puertos 3000 (app) y 3001 (admin). Útil para desarrollo. |
-| `schema.sql` | Tablas: users, sessions, reports, weekly, trucks, settings. |
+| `schema.sql` | Tablas: users, sessions (vencen a los 30 días), reports, weekly, trucks, settings, login_fails. |
+| `test.mjs` | Prueba de la API y los cálculos con SQLite en memoria: `node test.mjs`. |
 | `public/app.js` | Toda la interfaz (SPA con hash routing, Tailwind por CDN). La comparten `index.html` (app/teléfono) y `admin.html` (panel web). |
 
 ## Funcionalidad clave
@@ -38,23 +40,32 @@ App web para **Retrabajos Industriales y Limpiezas Especializadas Polar**: los e
     pendientes por procesar = pendientes anteriores + piezas − procesado. Ambos se arrastran por planta + cliente + pieza.
   - Mantenimiento: los pendientes abiertos del último reporte de la planta se copian solos.
   - Totales de hornos/ciclos, gastos y gas; químicos PT/A pasan a "químicos que hay que pedir".
+  - Fotos (`type: 'photos'`, en gas, visitas, incidencias y gastos): el teléfono las reduce a JPEG ≤1600 px, se suben a `/api/upload`
+    y el reporte guarda solo sus claves; el PL-FOR-26 las imprime como "Anexos".
+- **Borrador**: el formulario se guarda en `localStorage` mientras se llena (uno por día) y se recupera si se cierra la página.
+- **Corregir un reporte**: el encargado, el suyo de hoy; el admin, cualquiera. Solo el **último de la planta** (los siguientes ya
+  arrastraron sus km y saldos); se recalcula con `carry(plant, id)` excluyéndolo y se vuelve a calificar.
+- **Reportes del admin**: filtros por planta y fechas (`GET /api/reports?planta=&desde=&hasta=&id=`) y exportar a CSV para Excel.
 - **Personalización del formulario** (pestaña Formulario, solo admin): renombrar secciones/preguntas, ocultar las no protegidas,
   agregar preguntas propias (`x_...`). Los campos en `PROTECTED` los usan los cálculos: se renombran pero no se ocultan. La config va en
   `settings.form` y se valida con `cleanConfig`. **Con IA**: la IA solo *propone* y el admin aplica o descarta.
 - **IA** (proveedor compatible con OpenAI, `AI_BASE_URL`): califica cada reporte (resumen, calidad 0-100, retroalimentación), resumen semanal,
-  propuestas del formulario. Modelo **gpt-6-luna**: el más barato que pasó las pruebas reales (calificar un reporte malo con nota baja y
-  no ocultar campos protegidos). Si la IA falla, el reporte se guarda igual como "Sin evaluar".
+  propuestas del formulario. Modelo **deepseek-v4-flash** (rápido y barato; gpt-oss-120b tardaba ~1 min). Al reporte solo se le mandan las respuestas con valor (`formatAnswers`) para gastar menos tokens. Si la IA falla, el reporte se guarda
+  igual como "Sin evaluar".
 - **Cuentas**: autoregistro queda *pendiente* hasta que un admin lo aprueba con planta; el admin también crea cuentas, cambia roles
   (encargado ↔ admin; no el propio) y elimina (quita acceso, conserva reportes). `ADMIN_EMAIL` entra directo como admin.
   Roles en la base: `admin` y `colaborador` (se muestra como "Encargado").
+  El admin pone contraseña nueva a otra cuenta; cada quien cambia la suya en "Mi cuenta" (`#/cuenta`, pide la actual).
+  5 intentos fallidos de inicio de sesión bloquean ese correo 15 minutos.
 - **Solo admin** ve el PL-FOR-26 armado (imprimible) — el encargado ve su calificación y retroalimentación.
 - Vista de **computadora** (≥1024px): menú lateral y más columnas, con clases `lg:` + `WIDE` en `public/app.js`; teléfono sin cambios.
 
 ## Cómo probar
-No hay framework de pruebas: se prueba con scripts de Node contra la API (`fetch`) usando cuentas temporales `tmp*@polar.test`
-que se borran al final, y con el navegador. Nunca dejar datos de prueba en producción.
+`node test.mjs` (base en memoria, sin IA) cubre cálculos, permisos, edición, fotos y login. Además: scripts de Node contra la API
+(`fetch`) usando cuentas temporales `tmp*@polar.test` que se borran al final, y el navegador. Nunca dejar datos de prueba en producción.
 
 ## Pendientes conocidos
-- No existe "olvidé mi contraseña" ni que el admin restablezca contraseñas.
-- No se pueden adjuntar fotos/tickets (el formato en papel los pide) ni firma digital.
+- No existe "olvidé mi contraseña" por correo (el admin pone una nueva).
+- No hay firma digital.
+- Las fotos subidas que no se envían en un reporte quedan huérfanas en R2.
 - El dashboard en Stitch aún dice "Proyectos activos"/"Bloqueos"; la app usa "Material por cliente"/"Incidencias del día".

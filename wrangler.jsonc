@@ -7,11 +7,13 @@
   // Archivos de public/; el worker decide qué página servir (html_handling none: sin redirecciones automáticas).
   "assets": { "directory": "./public", "binding": "ASSETS", "run_worker_first": true, "html_handling": "none" },
   "d1_databases": [{ "binding": "DB", "database_name": "reporte-diario-polar", "database_id": "78c10631-073e-452f-9170-d3cef3c9484d" }],
+  // Fotos de tickets y documentos. Crear una vez: npx wrangler r2 bucket create reporte-diario-polar-fotos
+  "r2_buckets": [{ "binding": "FILES", "bucket_name": "reporte-diario-polar-fotos" }],
   // La clave de la IA NO va aquí: se guarda como secreto con  npx wrangler secret put AI_API_KEY
   "vars": {
     "ADMIN_EMAIL": "maxelpiloto3@gmail.com",
     "AI_BASE_URL": "https://api.cheaperinference.com/v1",
-    "AI_MODEL": "gpt-6-luna",
+    "AI_MODEL": "deepseek-v4-flash",
     "TZ": "America/Mexico_City"
   },
   "observability": { "enabled": true }
