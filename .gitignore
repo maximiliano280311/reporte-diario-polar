@@ -1,0 +1,11 @@
+# Secretos (clave de la IA, etc.) — copia .env.example como .env en cada compu
+.env
+.dev.vars
+# Base local: contiene contraseñas cifradas y datos reales. Los datos de producción viven en Cloudflare D1.
+data.db
+*.db-journal
+*.db-wal
+*.db-shm
+# Estado local de wrangler (D1 local de pruebas)
+.wrangler/
+node_modules/

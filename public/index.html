@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="es" data-mode="app"><head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover"/>
+<meta name="theme-color" content="#f8f9ff"/>
+<title>Reporte Diario Polar</title>
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet"/>
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="/app.js"></script>
+</head>
+<!-- App (encargados y admin). Teléfono: barra inferior. Computadora (≥1024px, clases lg:): menú lateral y contenido ancho. -->
+<body class="font-sans text-on-surface antialiased flex justify-center bg-surface-container-low lg:bg-surface">
+<div id="shell" class="w-full max-w-md lg:max-w-none min-h-screen bg-surface flex flex-col relative shadow-[0_20px_40px_-15px_rgba(11,28,48,0.12)] lg:shadow-none">
+  <header data-chrome class="hidden lg:!hidden sticky top-0 z-40 bg-surface/90 backdrop-blur-xl shadow-[0_1px_8px_rgba(0,0,0,0.04)]" style="padding-top: env(safe-area-inset-top)">
+    <div class="h-16 px-4 flex items-center justify-between">
+      <div class="flex items-center gap-2">
+        <span class="material-symbols-outlined text-primary-container text-[30px]" style="font-variation-settings:'FILL' 1">verified_user</span>
+        <span class="text-lg font-semibold tracking-tight">Reporte Diario Polar</span>
+        <span id="role-chip" class="chip bg-surface-container-high text-primary"></span>
+      </div>
+      <button data-logout class="w-11 h-11 flex items-center justify-center rounded-full text-on-surface-variant hover:bg-surface-container-high" aria-label="Cerrar sesión" title="Cerrar sesión">
+        <span class="material-symbols-outlined">logout</span>
+      </button>
+    </div>
+  </header>
+  <main id="app" class="flex-1 px-4 pt-4 pb-28 lg:px-10 lg:pt-8 lg:pb-10 lg:w-full lg:max-w-6xl lg:mx-auto"></main>
+  <nav id="nav" data-chrome class="hidden fixed bottom-0 w-full max-w-md z-40 bg-surface/95 backdrop-blur-xl shadow-[0_-2px_12px_rgba(11,28,48,0.06)]
+    lg:top-0 lg:left-0 lg:bottom-auto lg:h-screen lg:w-64 lg:max-w-none lg:p-4 lg:bg-white lg:backdrop-blur-none lg:shadow-none lg:border-r lg:border-[#e2e8f0]" style="padding-bottom: env(safe-area-inset-bottom)"></nav>
+</div>
+</body></html>

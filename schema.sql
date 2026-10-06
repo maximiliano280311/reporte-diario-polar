@@ -1,0 +1,9 @@
+-- Esquema de la base: lo usa server.mjs (SQLite en la compu) y se aplica a Cloudflare D1 con wrangler.
+CREATE TABLE IF NOT EXISTS users(id INTEGER PRIMARY KEY, name TEXT NOT NULL, email TEXT UNIQUE NOT NULL, pass TEXT NOT NULL,
+  role TEXT NOT NULL DEFAULT 'colaborador', plant TEXT, status TEXT NOT NULL DEFAULT 'activo');
+CREATE TABLE IF NOT EXISTS sessions(token TEXT PRIMARY KEY, user_id INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS reports(id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL, date TEXT NOT NULL, answers TEXT NOT NULL,
+  summary TEXT, score INTEGER, feedback TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP, plant TEXT, UNIQUE(user_id, date));
+CREATE TABLE IF NOT EXISTS weekly(id INTEGER PRIMARY KEY, start TEXT NOT NULL, end TEXT NOT NULL, text TEXT NOT NULL, created_at TEXT DEFAULT CURRENT_TIMESTAMP);
+CREATE TABLE IF NOT EXISTS trucks(id INTEGER PRIMARY KEY, plant TEXT NOT NULL, name TEXT NOT NULL, horometro INTEGER NOT NULL DEFAULT 0, UNIQUE(plant, name));
+CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY, value TEXT NOT NULL);
