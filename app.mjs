@@ -38,12 +38,13 @@ const FORM = [
       { id: 'cantidad', label: 'Cantidad usada', type: 'number' }, { id: 'unidad', label: 'Unidad', type: 'select', options: ['Barril', 'L', 'Kg'] },
       { id: 'existencia', label: 'Existencia', type: 'select', options: ['S', 'PT', 'A'] }, { id: 'queda', label: '¿Cuánto queda?' }] },
     fields: [{ id: 'pedir', label: 'Otros químicos que hay que pedir (los PT y A se agregan solos)', wide: true }] },
-  { n: 7, title: 'Material por cliente (piezas)', hint: 'Un renglón por cada pieza o número de parte. Si es puntie anotar (P) junto a la pieza. Se calculan solos: saldo en planta = saldo anterior + piezas − entregado; pendientes por procesar = pendientes anteriores + piezas − procesado.',
-    table: { id: 'material', item: 'pieza', cols: [{ id: 'cliente', label: 'Cliente', list: 'clientes' }, { id: 'folio', label: 'Folio' },
-      { id: 'cantidad', label: 'Piezas', type: 'number' }, { id: 'pieza', label: 'Modelo/No. Parte', list: 'piezas' },
+  // Recibido y entregado salen de Calidad (PL-FOR-28 recepción / PL-FOR-29 entrega) del día: aquí solo se captura lo procesado.
+  { n: 7, title: 'Material por cliente (piezas)', hint: 'Lo recibido y lo entregado hoy salen solos de las recepciones (PL-FOR-28) y entregas (PL-FOR-29) del día; aquí solo anota lo procesado. Si es puntie anotar (P) junto a la pieza. Se calculan solos: saldo en planta = saldo anterior + recibido − entregado; pendientes por procesar = pendientes anteriores + recibido − procesado.',
+    table: { id: 'material', item: 'pieza', cols: [{ id: 'cliente', label: 'Cliente', list: 'clientes' }, { id: 'pieza', label: 'Modelo/No. Parte', list: 'piezas' },
+      { id: 'folio', label: 'Folios REC / LIB', auto: true }, { id: 'cantidad', label: 'Recibido hoy (PL-FOR-28)', auto: true },
       { id: 'saldo_ant', label: 'Saldo anterior', auto: true },
       { id: 'procesado', label: 'Procesado hoy', type: 'number' },
-      { id: 'entregado', label: 'Entregado hoy', type: 'number' }, { id: 'saldo', label: 'Saldo en planta', auto: true },
+      { id: 'entregado', label: 'Entregado hoy (PL-FOR-29)', auto: true }, { id: 'saldo', label: 'Saldo en planta', auto: true },
       { id: 'pendientes', label: 'Pendientes por procesar', auto: true }] },
     fields: [{ id: 'sin_material', label: 'Clientes que no enviaron material', wide: true, after: true }] },
   { n: 8, title: 'Actividades realizadas', hint: 'Otras actividades — Tipo: R = rutinaria (se hace seguido pero no está en la lista), E = extraordinaria (trabajo especial o fuera de lo normal).',
@@ -80,6 +81,81 @@ const PHOTO = /^[a-f0-9]{32}\.jpg$/; // clave de una foto subida (R2 en Cloudfla
 const DAY = 86_400_000, SESSION_MS = 30 * DAY;
 const matKey = m => `${m.cliente}|${m.pieza}`.trim().toLowerCase();
 
+// ---------- Calidad ISO 9001, etapa 1 (ver "Modificaciones App Polar/MOD_APP_POLAR_SGC_ISO9001.md") ----------
+// Cadena: REC (recepción, crea lotes) → LIB (inspección y liberación, entrega) / NC (no conforme). Folios consecutivos por tipo.
+// Campos con src: sus opciones se llenan por planta (clientes del catálogo, lotes) — ver qform() en createApp.
+const PLANT_CODE = { Querétaro: 'QRO', Silao: 'SIL' };
+const PROCESOS = ['Pirólisis', 'Decapado', 'Lavado', 'Otro'];
+// Catálogo inicial (CONTEXTO_SISTEMA_REPORTES_POLAR.md); el admin lo edita en Calidad. spec = criterio 7 de liberación.
+const CLIENTES_INI = [{ name: 'KH México', plant: 'Querétaro', spec: '' }, { name: 'Mitchell', plant: 'Querétaro', spec: '' },
+  { name: 'Summit Silao', plant: 'Silao', spec: '' }, { name: 'Summit Guanajuato', plant: 'Silao', spec: '' }];
+const LOT_DAYS = 7; // alerta si un lote lleva más días EN PLANTA sin liberar (propuesta del documento; ajustable)
+const CRITERIOS = ['Recubrimiento 100 % removido', 'Sin residuos de proceso', 'Sin residuo químico', 'Sin daño por temperatura',
+  'Sin daño mecánico', 'Roscas y barrenos limpios', 'Especificación particular del cliente', 'Identificación conservada'];
+const DISPOS = ['LIBERADO', 'LIBERADO CON DESVIACIÓN', 'RETENIDO / NO CONFORME', 'RETRABAJO INTERNO'];
+const NC_TIPOS = ['Proceso incompleto', 'Daño por temperatura', 'Daño mecánico', 'Residuo químico', 'Faltante / pérdida', 'Pieza mezclada', 'Otro'];
+const ESTADO_REC = [['empaque', 'Empaque OK'], ['sin_danos', 'Piezas sin golpes / óxido'], ['identificacion', 'Identificación legible'],
+  ['cantidad_ok', 'Cantidad coincide'], ['fotos_ok', 'Fotos tomadas'], ['separado', 'Material separado']];
+const ENTREGA = [{ id: 'entrega_fecha', label: 'Fecha de entrega', type: 'date' }, { id: 'remision_polar', label: 'Remisión POLAR' },
+  { id: 'recibio', label: 'Recibió (cliente)' }, { id: 'foto_remision', label: 'Foto de la remisión firmada', type: 'photos', wide: true }];
+const QFORMS = {
+  REC: { code: 'PL-FOR-28', title: 'Recepción de material del cliente y trazabilidad', sections: [
+    { n: 1, title: 'Encabezado', fields: [{ id: 'fecha', label: 'Fecha', type: 'date', required: true }, { id: 'hora', label: 'Hora', type: 'time', required: true },
+      { id: 'cliente', label: 'Cliente', type: 'select', options: [], src: 'clientes', required: true, wide: true },
+      { id: 'remision', label: 'Remisión / folio del cliente', required: true, wide: true },
+      { id: 'transporte', label: 'Transporte', type: 'select', options: ['POLAR', 'Cliente', 'Fletera'] }, { id: 'placas', label: 'Placas' }] },
+    { n: 2, title: 'Partidas', hint: 'Una por cada no. de parte. Diferencia = contada − remisión. El lote POLAR se asigna solo al guardar.',
+      table: { id: 'partidas', item: 'partida', cols: [{ id: 'parte', label: 'No. de parte / pieza', required: true, list: 'piezas', wide: true },
+        { id: 'descripcion', label: 'Descripción', wide: true }, { id: 'remision', label: 'Cantidad según remisión', type: 'number', required: true },
+        { id: 'contada', label: 'Cantidad contada', type: 'number', required: true }, { id: 'diferencia', label: 'Diferencia', auto: true },
+        { id: 'proceso', label: 'Proceso requerido', type: 'select', options: PROCESOS, required: true }, { id: 'lote', label: 'Lote POLAR', auto: true }] } },
+    { n: 3, title: 'Estado al recibir', hint: 'Si algo es "No" o hay diferencia: anotarlo en la remisión antes de firmar y levantar el no conforme.',
+      fields: ESTADO_REC.map(([id, label]) => ({ id, label, type: 'select', options: SN, required: true })) },
+    { n: 4, title: 'Fotos y observaciones', fields: [{ id: 'fotos', label: 'Fotos (mínimo 1)', type: 'photos', required: true, wide: true },
+      { id: 'danos', label: 'Daños / observaciones', type: 'textarea', wide: true }, { id: 'ubicacion', label: 'Ubicación en planta' },
+      { id: 'compromiso', label: 'Fecha compromiso de entrega', type: 'date' }, { id: 'aviso', label: '¿Se avisó al cliente?', type: 'select', options: SN }] }] },
+  LIB: { code: 'PL-FOR-29', title: 'Inspección y liberación de producto', sections: [
+    { n: 1, title: 'Lote', hint: 'Solo aparecen los lotes EN PLANTA. Cliente, no. de parte y folio REC se llenan solos.',
+      fields: [{ id: 'lote', label: 'Lote POLAR', type: 'select', options: [], src: 'lotes', required: true, wide: true },
+        { id: 'fecha', label: 'Fecha', type: 'date', required: true }, { id: 'proceso', label: 'Proceso', type: 'select', options: PROCESOS, required: true },
+        { id: 'horno', label: 'Horno #' }] },
+    { n: 2, title: 'Criterios de inspección', hint: 'Con un criterio NOK no se puede liberar: el lote queda RETENIDO y hay que levantar el no conforme (PL-FOR-30).',
+      table: { id: 'criterios', fixed: CRITERIOS, cols: [{ id: 'criterio', label: 'Criterio', readonly: true, wide: true },
+        { id: 'resultado', label: 'Resultado', type: 'select', options: ['OK', 'NOK'], required: true }, { id: 'piezas_nok', label: 'Piezas NOK', type: 'number' }] } },
+    { n: 3, title: 'Cantidades', hint: '% de aceptación = aceptadas ÷ inspeccionadas (se calcula solo).',
+      fields: [{ id: 'inspeccionadas', label: 'Inspeccionadas', type: 'number', required: true }, { id: 'aceptadas', label: 'Aceptadas', type: 'number', required: true },
+        { id: 'rechazadas', label: 'Rechazadas', type: 'number' }, { id: 'retrabajo', label: 'A retrabajo', type: 'number' }] },
+    { n: 4, title: 'Disposición', fields: [{ id: 'disposicion', label: 'Disposición', type: 'select', options: DISPOS, required: true, wide: true },
+      { id: 'autorizo_cliente', label: 'Quién autorizó la desviación (cliente)', wide: true }] },
+    { n: 5, title: 'Entrega', hint: 'Llénala cuando las piezas salgan de planta (también se puede registrar después). Al guardarla el lote pasa a ENTREGADO.', fields: ENTREGA }] },
+  NC: { code: 'PL-FOR-30', title: 'Producto no conforme y daño a propiedad del cliente', sections: [
+    { n: 1, title: 'Identificación', fields: [{ id: 'fecha', label: 'Fecha', type: 'date', required: true },
+      { id: 'cliente', label: 'Cliente', type: 'select', options: [], src: 'clientes', required: true, wide: true }, { id: 'parte', label: 'No. de parte' },
+      { id: 'cantidad', label: 'Cantidad afectada', type: 'number', required: true },
+      { id: 'lotes', label: 'Lote(s) afectado(s)', type: 'checks', options: [], src: 'lotes' }] },
+    { n: 2, title: 'Detección y descripción', fields: [{ id: 'detectado', label: 'Dónde se detectó', type: 'select', required: true, wide: true,
+      options: ['Recepción', 'En proceso', 'Inspección final', 'Lo detectó el cliente'] }, { id: 'folio_qj', label: 'Folio de queja (si lo detectó el cliente)', wide: true },
+      { id: 'tipo', label: 'Tipo', type: 'checks', options: NC_TIPOS, required: true }, { id: 'descripcion', label: 'Descripción', type: 'textarea', required: true, wide: true },
+      { id: 'fotos', label: 'Fotos (mínimo 1)', type: 'photos', required: true, wide: true }] },
+    { n: 3, title: 'Contención', fields: [{ id: 'separado', label: '¿Se separó e identificó?', type: 'select', options: SN, required: true },
+      { id: 'aviso', label: '¿Se avisó al cliente?', type: 'select', options: SN }, { id: 'contencion', label: 'Contención realizada', type: 'textarea', wide: true },
+      { id: 'aviso_fecha', label: 'Fecha del aviso', type: 'date' }, { id: 'aviso_contacto', label: 'Contacto del cliente' }] },
+    { n: 4, title: 'Disposición', fields: [{ id: 'disposicion', label: 'Disposición', type: 'select', required: true, wide: true,
+      options: ['Retrabajo', 'Usar como está (autoriza cliente)', 'Desecho (autoriza cliente)', 'Reposición o pago'] },
+      { id: 'costo', label: 'Costo estimado ($)', type: 'number' }, { id: 'autorizo', label: 'Autorizó' }] },
+    { n: 5, title: 'Cierre', hint: 'El lote queda RETENIDO mientras el no conforme esté ABIERTO. Para cerrarlo anota la fecha de cierre.',
+      fields: [{ id: 'folio_ac', label: 'Folio de acción correctiva (AC / 8D)' }, { id: 'lib_retrabajo', label: 'LIB de las piezas retrabajadas' },
+        { id: 'cierre', label: 'Fecha de cierre', type: 'date' }, { id: 'estatus', label: 'Estatus', type: 'select', options: ['ABIERTO', 'CERRADO'] }] }] },
+};
+
+
+// Entrega de un lote: va completa (fecha, remisión POLAR, quién recibió) o vacía, y solo si el lote se libera.
+function entregaDe(a, libera) {
+  if (!(a.entrega_fecha || a.remision_polar || a.recibio || a.foto_remision?.length)) return false;
+  if (!libera) throw Object.assign(new Error('Solo se puede registrar la entrega de un lote LIBERADO'), { code: 400 });
+  if (!a.entrega_fecha || !a.remision_polar || !a.recibio) throw Object.assign(new Error('Para la entrega anota fecha, remisión POLAR y quién recibió'), { code: 400 });
+  return true;
+}
 
 // ---------- Personalización del formulario (admin) ----------
 // Sobre el PL-FOR-26 base el admin puede: renombrar secciones y preguntas, ocultar secciones (menos la 1) y preguntas
@@ -129,18 +205,22 @@ function formFor(c) {
 // Normaliza las respuestas al formulario efectivo; las columnas auto se ignoran (las calcula el servidor).
 function clean(answers, form) {
   const str = v => String(v ?? '').trim().slice(0, 3000), out = {};
+  const missing = (s, label) => Object.assign(new Error(`Falta responder: ${s.n}. ${s.title} — ${label}`), { code: 400 });
+  // Una lista cerrada solo acepta sus opciones (las vacías, como los camiones, se validan aparte).
+  const pick = (s, f, v) => { if (v && f.type === 'select' && f.options.length && !f.options.includes(v)) throw missing(s, `${f.label} (opción no válida)`); return v; };
   for (const s of form) {
     for (const f of s.fields || []) {
-      if (f.type === 'checks') { out[f.id] = [].concat(answers[f.id] ?? []).map(str).filter(v => f.options.includes(v)); continue; }
-      if (f.type === 'photos') { out[f.id] = [].concat(answers[f.id] ?? []).map(str).filter(k => PHOTO.test(k)).slice(0, 10); continue; }
-      out[f.id] = str(answers[f.id]);
-      if (f.required && !out[f.id]) throw Object.assign(new Error(`Falta responder: ${s.n}. ${s.title} — ${f.label}`), { code: 400 });
+      if (f.type === 'checks') out[f.id] = [].concat(answers[f.id] ?? []).map(str).filter(v => f.options.includes(v));
+      else if (f.type === 'photos') out[f.id] = [].concat(answers[f.id] ?? []).map(str).filter(k => PHOTO.test(k)).slice(0, 10);
+      else out[f.id] = pick(s, f, str(answers[f.id]));
+      if (f.required && !out[f.id].length) throw missing(s, f.label);
     }
     if (!s.table) continue;
     const cols = s.table.cols.filter(c => !c.auto), keys = s.table.fixed ? cols.slice(1) : cols;
     out[s.table.id] = [].concat(answers[s.table.id] ?? []).slice(0, 50)
-      .map(r => Object.fromEntries(cols.map(c => [c.id, str(r?.[c.id])])))
+      .map(r => Object.fromEntries(cols.map(c => [c.id, pick(s, c, str(r?.[c.id]))])))
       .filter(r => keys.some(c => r[c.id]));
+    out[s.table.id].forEach((r, i) => { const c = cols.find(c => c.required && !r[c.id]); if (c) throw missing(s, `${c.label} (renglón ${i + 1})`); });
     // Casillas N/A: marcan como N/A los campos que desactivan (p. ej. tanque que no aplica, sin carga de gas).
     for (const r of out[s.table.id]) for (const c of cols) if (c.disables && r[c.id]) {
       r[c.id] = 'N/A';
@@ -219,9 +299,35 @@ export function createApp({ db, files, env = {} }) {
     return { summary: String(out.resumen ?? ''), score: Math.max(0, Math.min(100, Math.round(Number(out.calidad) || 0))), feedback: String(out.retroalimentacion ?? '') };
   }
 
+  // Material que entró (PL-FOR-28) y salió (entregas PL-FOR-29) en la planta ese día, por cliente + pieza.
+  async function movimientos(plant, date) {
+    const m = {}, add = (cliente, pieza, k, n, folio) => {
+      const x = m[matKey({ cliente, pieza })] ??= { cliente, pieza, recibido: 0, entregado: 0, folios: [] };
+      x[k] += n; if (!x.folios.includes(folio)) x.folios.push(folio);
+    };
+    for (const r of await db.all("SELECT folio, data FROM qrecords WHERE kind = 'REC' AND plant = ? AND date = ?", plant, date)) {
+      const d = JSON.parse(r.data);
+      for (const p of d.partidas) add(d.cliente, p.parte, 'recibido', num(p.contada), r.folio);
+    }
+    for (const l of await db.all('SELECT client, part, lib, delivered_qty FROM lots WHERE plant = ? AND delivered = ?', plant, date))
+      add(l.client, l.part, 'entregado', num(l.delivered_qty), l.lib);
+    return m;
+  }
+
   // Limpia las respuestas y calcula los campos automáticos (para guardar o para corregir; exclude = el reporte que se corrige).
-  async function prepare(plant, answers, exclude = 0) {
+  async function prepare(plant, answers, exclude = 0, date = ymd()) {
     const form = await currentForm(), a = clean(answers, form), { saldos } = await carry(plant, exclude);
+    // Sección 7: recibido / entregado salen de Calidad (no se capturan). Cada pieza con movimiento ese día lleva su renglón.
+    if (a.material) {
+      // ponytail: los movimientos del día cuentan solo en el primer reporte de la planta ese día (si no, el saldo los sumaría dos veces).
+      const otro = await db.get('SELECT 1 FROM reports WHERE plant = ? AND date = ? AND id != ?', plant, date, exclude);
+      const mov = otro ? {} : await movimientos(plant, date);
+      for (const [k, x] of Object.entries(mov)) if (!a.material.some(m => matKey(m) === k)) a.material.push({ cliente: x.cliente, pieza: x.pieza, procesado: '' });
+      for (const m of a.material) {
+        const x = mov[matKey(m)];
+        Object.assign(m, { cantidad: String(x?.recibido || 0), entregado: String(x?.entregado || 0), folio: x ? x.folios.join(', ') : '' });
+      }
+    }
     if (a.hubo_reportes === 'No') a.reportes_n = 'N/A';
     // Solo camiones registrados de la planta (secciones ocultas no traen tabla, de ahí el || []).
     const trucks = new Set((await db.all('SELECT name FROM trucks WHERE plant = ?', plant)).map(t => t.name));
@@ -242,6 +348,68 @@ export function createApp({ db, files, env = {} }) {
       const ev = await evaluate(a, form);
       await db.run('UPDATE reports SET summary = ?, score = ?, feedback = ? WHERE id = ?', ev.summary, ev.score, ev.feedback, id);
     } catch (e) { console.error('Evaluación IA falló:', e.message); }
+  }
+
+  // ---------- Calidad ISO 9001 ----------
+  // Catálogo de clientes (con especificación particular) y teléfono de gerencia para la franja de emergencia.
+  const getCalidad = async () => {
+    const c = JSON.parse((await db.get("SELECT value FROM settings WHERE key = 'calidad'"))?.value || '{}');
+    return { clientes: c.clientes || CLIENTES_INI, tel: c.tel || '' };
+  };
+  // Folio consecutivo: el UPDATE ... RETURNING es atómico, así que dos capturas al mismo tiempo nunca repiten número.
+  const nextNum = async key => (await db.get('INSERT INTO counters(key, n) VALUES (?, 1) ON CONFLICT(key) DO UPDATE SET n = n + 1 RETURNING n', key)).n;
+  const nextFolio = async kind => `${kind}-${String(await nextNum(kind)).padStart(4, '0')}`;
+  const lotCode = async (plant, fecha) => `${PLANT_CODE[plant]}-${fecha.replaceAll('-', '')}-${String(await nextNum(`LOTE:${plant}:${fecha}`)).padStart(2, '0')}`;
+  // El admin elige planta; el encargado siempre trabaja con la suya.
+  const plantFor = (user, asked) => { const p = user.role === 'admin' ? asked : user.plant; if (!PLANTS.includes(p)) throw badPlant(); return p; };
+  // Formato con sus listas de la planta: clientes del catálogo; lotes EN PLANTA (liberación) o recientes (no conforme).
+  async function qform(kind, plant) {
+    const clientes = (await getCalidad()).clientes.filter(c => c.plant === plant).map(c => c.name);
+    const lotes = (kind === 'LIB' ? await db.all("SELECT code FROM lots WHERE plant = ? AND status = 'EN PLANTA' ORDER BY code", plant)
+      : await db.all('SELECT code FROM lots WHERE plant = ? AND received >= ? ORDER BY code DESC', plant, ymd(new Date(Date.now() - 180 * DAY)))).map(l => l.code);
+    const src = { clientes, lotes };
+    return { ...QFORMS[kind], sections: QFORMS[kind].sections.map(s => ({ ...s, fields: s.fields?.map(f => f.src ? { ...f, options: src[f.src] } : f) })) };
+  }
+  const getRecord = async (folio, user) => {
+    const r = await db.get('SELECT q.*, u.name FROM qrecords q JOIN users u ON u.id = q.user_id WHERE folio = ?', String(folio));
+    if (!r || (user.role !== 'admin' && r.plant !== user.plant)) throw httpError(404, 'Registro no encontrado');
+    return { ...r, data: JSON.parse(r.data) };
+  };
+  const saveRecord = (folio, kind, plant, date, user, status, data) =>
+    db.run('INSERT INTO qrecords(folio, kind, plant, date, user_id, status, data) VALUES (?, ?, ?, ?, ?, ?, ?)', folio, kind, plant, date, user.id, status, JSON.stringify(data));
+  // Un lote con no conforme ABIERTO queda RETENIDO; al cerrarse todos vuelve a EN PLANTA (hay que volver a inspeccionarlo).
+  // Los ya entregados no cambian (un NC que detectó el cliente queda solo como registro).
+  async function syncLots(plant, codes) {
+    const open = (await db.all("SELECT data FROM qrecords WHERE kind = 'NC' AND plant = ? AND status = 'ABIERTO'", plant)).flatMap(r => JSON.parse(r.data).lotes || []);
+    for (const code of codes) {
+      const l = await db.get('SELECT status FROM lots WHERE code = ?', code);
+      if (!l || l.status === 'ENTREGADO' || (l.status === 'LIBERADO' && !open.includes(code))) continue;
+      await db.run('UPDATE lots SET status = ? WHERE code = ?', open.includes(code) ? 'RETENIDO' : 'EN PLANTA', code);
+    }
+  }
+  // 8D sugerido (sección 4.3): lo detectó el cliente, más de un lote, daño con costo, o se repite cliente + tipo en 90 días.
+  async function sugiere8D(plant, a, folio) {
+    if (a.detectado === 'Lo detectó el cliente' || a.lotes.length > 1 || (a.tipo.some(t => t.startsWith('Daño')) && num(a.costo) > 0)) return true;
+    const prev = await db.all("SELECT data FROM qrecords WHERE kind = 'NC' AND plant = ? AND folio != ? AND date >= ?", plant, folio, ymd(new Date(Date.now() - 90 * DAY)));
+    return prev.map(r => JSON.parse(r.data)).some(d => d.cliente === a.cliente && d.tipo.some(t => a.tipo.includes(t)));
+  }
+  // Valida y guarda un no conforme nuevo o actualizado (folio = el existente al actualizar).
+  async function saveNC(user, plant, answers, origen, existing) {
+    const a = clean(answers, (await qform('NC', plant)).sections);
+    a.estatus ||= 'ABIERTO';
+    if (a.estatus === 'CERRADO' && !a.cierre) throw httpError(400, 'Para cerrar el no conforme anota la fecha de cierre');
+    if (a.detectado === 'Lo detectó el cliente' && !a.folio_qj) throw httpError(400, 'Anota el folio de la queja del cliente (QJ)');
+    const folio = existing?.folio || await nextFolio('NC');
+    a.origen = existing ? existing.data.origen : /^(REC|LIB)-\d+$/.test(origen || '') && (await db.get('SELECT 1 FROM qrecords WHERE folio = ? AND plant = ?', origen, plant)) ? origen : '';
+    a.sugiere_8d = await sugiere8D(plant, a, folio) ? 'Sí' : 'No';
+    if (existing) await db.run('UPDATE qrecords SET status = ?, data = ? WHERE folio = ?', a.estatus, JSON.stringify(a), folio);
+    else {
+      await saveRecord(folio, 'NC', plant, a.fecha, user, a.estatus, a);
+      await db.run('INSERT INTO alerts(plant, folio, text) VALUES (?, ?, ?)', plant, folio,
+        `Nuevo no conforme ${folio} · ${a.cliente} · ${plant}: ${a.tipo.join(', ')} — ${a.cantidad} pza. (${a.detectado})`);
+    }
+    await syncLots(plant, [...new Set([...(existing?.data.lotes || []), ...a.lotes])]);
+    return { folio, ...a };
   }
 
   const userOf = req => {
@@ -279,8 +447,12 @@ export function createApp({ db, files, env = {} }) {
       const { km, saldos, pendientes } = await carry(plant, Number(q.get('excluir')) || 0), mats = Object.values(saldos);
       const pend = Object.fromEntries(Object.entries(saldos).map(([k, m]) => [k, num(m.pendientes)])); // pendientes por procesar de días anteriores
       const trucks = await db.all('SELECT name, horometro FROM trucks WHERE plant = ? ORDER BY name', plant ?? '');
-      return json(200, { km, pendientes, pend, trucks, lists: {
-        clientes: [...new Set(mats.map(m => m.cliente).filter(Boolean))], piezas: [...new Set(mats.map(m => m.pieza).filter(Boolean))] } });
+      // mov: recibido / entregado por pieza ese día (?fecha= al corregir un reporte de otro día) — la sección 7 los muestra sin capturarlos.
+      const mov = plant ? await movimientos(plant, q.get('fecha') || ymd()) : {};
+      const catalogo = (await getCalidad()).clientes.filter(c => c.plant === plant).map(c => c.name);
+      const porProcesar = mats.filter(m => num(m.pendientes) > 0).map(({ cliente, pieza }) => ({ cliente, pieza })); // renglones iniciales de la sección 7
+      return json(200, { km, pendientes, pend, trucks, mov, porProcesar, lists: {
+        clientes: [...new Set([...catalogo, ...mats.map(m => m.cliente).filter(Boolean)])], piezas: [...new Set(mats.map(m => m.pieza).filter(Boolean))] } });
     },
 
     // Autoregistro: queda pendiente hasta que el admin lo aprueba (salvo ADMIN_EMAIL, que entra directo como admin).
@@ -366,7 +538,7 @@ export function createApp({ db, files, env = {} }) {
       if (!r || (user.role !== 'admin' && (r.user_id !== user.id || r.date !== ymd()))) throw httpError(403, 'Solo puedes corregir tu reporte de hoy');
       const last = await db.get('SELECT id FROM reports WHERE plant = ? ORDER BY date DESC, id DESC LIMIT 1', r.plant);
       if (last?.id !== r.id) return json(409, { error: 'Solo se puede corregir el último reporte de la planta' });
-      const { a, form } = await prepare(r.plant, answers, r.id);
+      const { a, form } = await prepare(r.plant, answers, r.id, r.date);
       await db.run('UPDATE reports SET answers = ? WHERE id = ?', JSON.stringify(a), r.id);
       await grade(r.id, a, form);
       return json(200, parseReport(await db.get('SELECT * FROM reports WHERE id = ?', r.id)));
@@ -388,6 +560,121 @@ export function createApp({ db, files, env = {} }) {
       if (!f) return json(404, { error: 'Foto no encontrada' });
       return new Response(f, { headers: { 'Content-Type': 'image/jpeg', 'Cache-Control': 'private, max-age=31536000, immutable' } });
     },
+
+    // ---- Calidad ISO 9001 (etapa 1): PL-FOR-28 / 29 / 30 ----
+    // Tablero: lotes, registros recientes y alertas (encargado: solo su planta; admin: todas o ?planta=).
+    'GET /api/calidad': async (req, user) => {
+      const asked = new URL(req.url).searchParams.get('planta'), plants = user.role === 'admin' ? (PLANTS.includes(asked) ? [asked] : PLANTS) : [user.plant];
+      const inP = col => `${col} IN (${plants.map(() => '?').join(', ')})`, cal = await getCalidad();
+      const lotes = await db.all(`SELECT * FROM lots WHERE ${inP('plant')} AND (status != 'ENTREGADO' OR delivered >= ?) ORDER BY received DESC, code DESC`,
+        ...plants, ymd(new Date(Date.now() - 30 * DAY)));
+      const registros = (await db.all(`SELECT q.folio, q.kind, q.plant, q.date, q.status, q.data, u.name FROM qrecords q JOIN users u ON u.id = q.user_id
+        WHERE ${inP('q.plant')} ORDER BY q.created_at DESC, q.folio DESC LIMIT 100`, ...plants)).map(r => ({ ...r, data: JSON.parse(r.data) }));
+      // Alertas: las guardadas (solo gerencia las ve y las marca) + las que se calculan de los lotes.
+      const alertas = user.role === 'admin' ? await db.all(`SELECT id, folio, text, created_at FROM alerts WHERE seen = 0 AND ${inP('plant')} ORDER BY id DESC`, ...plants) : [];
+      const openNC = registros.filter(r => r.kind === 'NC' && r.status === 'ABIERTO').flatMap(r => r.data.lotes || []), old = ymd(new Date(Date.now() - LOT_DAYS * DAY));
+      for (const l of lotes) {
+        if (l.status === 'EN PLANTA' && l.received < old) alertas.push({ folio: l.rec, text: `Lote ${l.code} (${l.client}) lleva más de ${LOT_DAYS} días en planta sin liberar` });
+        if (l.status === 'RETENIDO' && !openNC.includes(l.code)) alertas.push({ lote: l.code, text: `Lote ${l.code} está RETENIDO sin no conforme abierto: levanta el PL-FOR-30` });
+      }
+      return json(200, { clientes: cal.clientes.filter(c => plants.includes(c.plant)), tel: cal.tel, lotes, registros, alertas });
+    },
+
+    // Formato con las listas de la planta, más los datos de los lotes (para llenar cliente / parte solos) y las especificaciones por cliente.
+    'GET /api/calidad/form': async (req, user) => {
+      const q = new URL(req.url).searchParams, kind = q.get('tipo');
+      if (!QFORMS[kind]) return json(404, { error: 'Formato no encontrado' });
+      const plant = plantFor(user, q.get('planta')), cal = await getCalidad();
+      const lotes = await db.all('SELECT code, client, part, qty, rec, status, proceso FROM lots WHERE plant = ? AND received >= ?', plant, ymd(new Date(Date.now() - 180 * DAY)));
+      return json(200, { ...await qform(kind, plant), plant, lotes, specs: Object.fromEntries(cal.clientes.filter(c => c.plant === plant).map(c => [c.name, c.spec])) });
+    },
+
+    // Un registro con sus lotes (para verlo / imprimirlo).
+    'GET /api/calidad/registro': async (req, user) => {
+      const r = await getRecord(new URL(req.url).searchParams.get('folio'), user);
+      const codes = r.kind === 'REC' ? r.data.partidas.map(p => p.lote) : r.kind === 'LIB' ? [r.data.lote] : r.data.lotes || [];
+      const lotes = codes.length ? await db.all(`SELECT * FROM lots WHERE code IN (${codes.map(() => '?').join(', ')})`, ...codes) : [];
+      const ligados = (await db.all("SELECT folio, kind, status, data FROM qrecords WHERE kind = 'NC' AND plant = ?", r.plant))
+        .filter(n => JSON.parse(n.data).origen === r.folio).map(({ folio, status }) => ({ folio, status }));
+      return json(200, { ...r, lotes, ligados, ...QFORMS[r.kind] }); // + code, title y sections (para imprimirlo)
+    },
+
+    // PL-FOR-28: cada partida crea su lote EN PLANTA (suma al saldo de la sección 7 de ese día).
+    // ponytail: varias escrituras sin transacción; si una falla a la mitad queda un folio o lote suelto. Usar db.batch de D1 si llega a pasar.
+    'POST /api/calidad/rec': async (req, user) => {
+      const b = await body(req), plant = plantFor(user, b.planta), a = clean(b.answers || {}, (await qform('REC', plant)).sections);
+      if (!a.partidas.length) throw httpError(400, 'Agrega al menos una partida');
+      const folio = await nextFolio('REC');
+      for (const p of a.partidas) {
+        p.diferencia = String(num(p.contada) - num(p.remision));
+        p.lote = await lotCode(plant, a.fecha);
+        await db.run('INSERT INTO lots(code, plant, client, part, qty, proceso, rec, status, received, due) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+          p.lote, plant, a.cliente, p.parte, num(p.contada), p.proceso, folio, 'EN PLANTA', a.fecha, a.compromiso || null);
+      }
+      // Diferencia o algún "No" en el estado al recibir: la app avisa y ofrece levantar el no conforme precargado.
+      const anomalia = a.partidas.some(p => num(p.diferencia)) || ESTADO_REC.some(([id]) => a[id] === 'No');
+      await saveRecord(folio, 'REC', plant, a.fecha, user, anomalia ? 'CON OBSERVACIONES' : 'CONFORME', a);
+      return json(200, { folio, anomalia, ...a });
+    },
+
+    // PL-FOR-29: NOK o RETENIDO → lote RETENIDO (hay que levantar NC); LIBERADO (+ entrega) → LIBERADO / ENTREGADO.
+    'POST /api/calidad/lib': async (req, user) => {
+      const b = await body(req), plant = plantFor(user, b.planta), a = clean(b.answers || {}, (await qform('LIB', plant)).sections);
+      const lot = await db.get('SELECT * FROM lots WHERE code = ? AND plant = ?', a.lote, plant);
+      if (lot?.status !== 'EN PLANTA') throw httpError(400, 'Ese lote no está EN PLANTA');
+      if (a.criterios.length !== CRITERIOS.length || a.criterios.some((c, i) => c.criterio !== CRITERIOS[i] || !c.resultado))
+        throw httpError(400, 'Marca OK o NOK en los 8 criterios de inspección');
+      const nok = a.criterios.some(c => c.resultado === 'NOK'), insp = num(a.inspeccionadas), acc = num(a.aceptadas), libera = a.disposicion.startsWith('LIBERADO');
+      if (acc > insp) throw httpError(400, 'Las piezas aceptadas no pueden ser más que las inspeccionadas');
+      if (nok && libera) throw httpError(400, 'Con un criterio NOK no se puede liberar: elige RETENIDO / NO CONFORME y levanta el no conforme (PL-FOR-30)');
+      if (a.disposicion === 'LIBERADO CON DESVIACIÓN' && !a.autorizo_cliente) throw httpError(400, 'Anota quién autorizó la desviación por parte del cliente');
+      const entrega = entregaDe(a, libera);
+      Object.assign(a, { cliente: lot.client, parte: lot.part, rec: lot.rec, pct: insp ? String(Math.round(acc / insp * 1000) / 10) : '0' });
+      const status = nok || a.disposicion.startsWith('RETENIDO') ? 'RETENIDO' : a.disposicion === 'RETRABAJO INTERNO' ? 'RETRABAJO' : entrega ? 'ENTREGADO' : 'LIBERADO';
+      const folio = await nextFolio('LIB');
+      await saveRecord(folio, 'LIB', plant, a.fecha, user, status, a);
+      await db.run('UPDATE lots SET status = ?, lib = ?, delivered = ?, delivered_qty = ? WHERE code = ?',
+        status === 'RETRABAJO' ? 'EN PLANTA' : status, folio, entrega ? a.entrega_fecha : null, entrega ? acc : null, lot.code);
+      return json(200, { folio, status, requiereNC: status === 'RETENIDO', ...a });
+    },
+
+    // Registrar la entrega de un lote ya LIBERADO (no se puede entregar sin liberación LIBERADO).
+    'POST /api/calidad/entrega': async (req, user) => {
+      const b = await body(req), r = await getRecord(b.folio, user), lot = r.kind === 'LIB' && await db.get('SELECT * FROM lots WHERE code = ?', r.data.lote);
+      if (r.status !== 'LIBERADO' || lot?.status !== 'LIBERADO') throw httpError(400, 'Solo se puede entregar un lote LIBERADO');
+      const e = clean(b.answers || {}, [{ n: 5, title: 'Entrega', fields: ENTREGA }]);
+      if (!entregaDe(e, true)) throw httpError(400, 'Para la entrega anota fecha, remisión POLAR y quién recibió');
+      await db.run("UPDATE qrecords SET status = 'ENTREGADO', data = ? WHERE folio = ?", JSON.stringify({ ...r.data, ...e }), r.folio);
+      await db.run("UPDATE lots SET status = 'ENTREGADO', delivered = ?, delivered_qty = ? WHERE code = ?", e.entrega_fecha, num(r.data.aceptadas), lot.code);
+      return json(200, { ok: true });
+    },
+
+    // PL-FOR-30: retiene sus lotes y avisa a gerencia. origen = folio REC / LIB de donde se levantó.
+    'POST /api/calidad/nc': async (req, user) => {
+      const b = await body(req), plant = plantFor(user, b.planta);
+      return json(200, await saveNC(user, plant, b.answers || {}, b.origen));
+    },
+    'POST /api/calidad/nc/actualizar': async (req, user) => {
+      const b = await body(req), r = await getRecord(b.folio, user);
+      if (r.kind !== 'NC') return json(400, { error: 'Ese folio no es un no conforme' });
+      return json(200, await saveNC(user, r.plant, b.answers || {}, null, r));
+    },
+
+    // Catálogo de clientes (con su especificación para el criterio 7) y teléfono de gerencia (solo admin).
+    'POST /api/calidad/config': adminOnly(async req => {
+      const b = await body(req), str = (v, n) => String(v ?? '').trim().slice(0, n), seen = new Set();
+      const clientes = [].concat(b.clientes ?? []).slice(0, 100).map(c => ({ name: str(c?.name, 60), plant: c?.plant, spec: str(c?.spec, 300) }))
+        .filter(c => c.name && PLANTS.includes(c.plant) && !seen.has(c.plant + c.name) && seen.add(c.plant + c.name));
+      const tel = str(b.tel, 20);
+      if (tel && !/^[+\d\s()-]+$/.test(tel)) return json(400, { error: 'El teléfono solo puede llevar números, espacios, +, ( ) y -' });
+      await db.run("INSERT INTO settings(key, value) VALUES ('calidad', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value", JSON.stringify({ clientes, tel }));
+      return json(200, { clientes, tel });
+    }),
+
+    'POST /api/calidad/alertas/vista': adminOnly(async req => {
+      await db.run('UPDATE alerts SET seen = 1 WHERE id = ?', Number((await body(req)).id));
+      return json(200, { ok: true });
+    }),
 
     // ---- Camiones por planta (el admin los registra; el encargado solo ve los de su planta) ----
     'GET /api/trucks': async (req, user) => json(200, user.role === 'admin'
@@ -520,7 +807,7 @@ export function createApp({ db, files, env = {} }) {
       return res;
     } catch (e) {
       console.error(e);
-      return json([400, 403, 409, 413].includes(e.code) ? e.code : 500, { error: e.message });
+      return json([400, 403, 404, 409, 413].includes(e.code) ? e.code : 500, { error: e.message });
     }
   };
 }

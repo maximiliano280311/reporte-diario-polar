@@ -67,6 +67,7 @@ async function api(path, data) {
 }
 let me = null, questions = [], reports = [];
 let filt = { planta: '', q: '', desde: daysAgo(30), hasta: '' }; // filtros de Reportes (admin); se conservan al ir y volver de un PL-FOR-26
+let calPlant = '', calFilter = 'activos', alertN = 0; // Calidad: planta elegida (admin), filtro de lotes y alertas pendientes (insignia del menú)
 
 function quality(score) {
   if (score == null) return { cls: 'bg-surface-container text-on-surface-variant', dot: 'bg-outline-variant', label: 'Sin evaluar' };
@@ -124,37 +125,96 @@ function input(f, name, v = '') {
     <label class="w-20 h-20 rounded-lg border-[1.5px] border-dashed border-[#cbd5e1] flex flex-col items-center justify-center text-primary cursor-pointer">
       <span class="material-symbols-outlined">add_a_photo</span><span class="text-[11px]">Agregar</span>
       <input type="file" accept="image/*" multiple class="sr-only" data-upload="${name}"></label></div>`;
-  return `<input class="input" name="${name}" value="${esc(v)}" type="${['number', 'date', 'time'].includes(f.type) ? f.type : 'text'}" ${f.type === 'number' ? 'step="any" min="0" inputmode="decimal"' : ''} ${f.list ? `list="dl-${f.list}"` : ''} ${req}>`;
+  return `<input class="input ${f.readonly ? '!bg-transparent !border-0 !px-0 font-semibold text-on-surface' : ''}" name="${name}" value="${esc(v)}" type="${['number', 'date', 'time'].includes(f.type) ? f.type : 'text'}" ${f.type === 'number' ? 'step="any" min="0" inputmode="decimal"' : ''} ${f.list ? `list="dl-${f.list}"` : ''} ${f.readonly ? 'readonly tabindex="-1"' : ''} ${req}>`;
 }
 // Casillas múltiples y fotos llevan sus propios <label> adentro: se envuelven en <div> (un label dentro de otro activa el control equivocado).
 const labeled = (f, html, tag = ['checks', 'photos'].includes(f.type) ? 'div' : 'label') => `<${tag} class="flex ${f.type === 'check' ? 'flex-row-reverse justify-end items-center self-end h-12 gap-2' : 'flex-col gap-1'} text-label-md text-on-surface-variant ${f.type === 'checks' ? 'col-span-2 lg:col-span-4' : f.wide ? 'col-span-2' : ''}">
   <span>${esc(f.label)}${f.required ? ' <span class="text-error">*</span>' : ''}</span>${html}</${tag}>`;
 let rowN = 0; // los renglones se nombran tabla.N.columna
+// Sección 7: recibido / entregado del día salen de Calidad (data-pend los muestra); REC: diferencia por partida (data-dif).
 const rowHtml = (t, r = {}) => {
   const i = rowN++, cols = t.cols.filter(c => !c.auto), f = id => input(cols.find(c => c.id === id), `${t.id}.${i}.${id}`, r[id]);
-  // Sección 7 (boceto): "[33] piezas modelo/No. Parte [r6gk]"; en pantallas angostas el modelo baja a la siguiente línea.
-  const piezas = () => `<div class="col-span-2 flex flex-col gap-1 text-label-md text-on-surface-variant"><span>Pieza / No. de parte</span>
-    <div class="flex flex-wrap items-center gap-2"><label class="w-20 shrink-0"><span class="sr-only">Piezas</span>${f('cantidad')}</label>
-    <span class="text-body-md text-on-surface shrink-0">piezas modelo/No. Parte</span>
-    <label class="flex-1 min-w-[120px]"><span class="sr-only">Modelo/No. Parte</span>${f('pieza')}</label></div></div>`;
+  const info = { material: 'data-pend class="col-span-2 self-end p-2 rounded-lg bg-tertiary-fixed/50 text-label-md text-on-tertiary-fixed"',
+    partidas: 'data-dif class="col-span-2 self-end p-2 rounded-lg bg-surface-container text-label-md"' }[t.id];
   return `
   <div data-row class="grid grid-cols-2 lg:grid-cols-4 gap-2 p-3 rounded-xl bg-surface-container-low">
-    ${cols.map(c => t.id !== 'material' ? labeled(c, f(c.id)) : c.id === 'cantidad' ? piezas() : c.id === 'pieza' ? '' : labeled(c, f(c.id))).join('')}
-    ${t.id === 'material' ? '<p data-pend class="col-span-2 self-end p-2 rounded-lg bg-tertiary-fixed/50 text-label-md text-on-tertiary-fixed" aria-live="polite"></p>' : ''}
+    ${cols.map(c => labeled(c, f(c.id))).join('')}
+    ${info ? `<p ${info} aria-live="polite"></p>` : ''}
     ${t.fixed ? '' : '<button type="button" data-del class="col-span-2 lg:col-span-4 justify-self-end text-label-sm text-error flex items-center gap-1"><span class="material-symbols-outlined text-[16px]">delete</span>Quitar</button>'}
   </div>`; };
 
-// Respuestas del formulario tal como están en pantalla (para enviar o guardar como borrador).
-function collect(form) {
+// Respuestas del formulario tal como están en pantalla (para enviar o guardar como borrador). secs: sus secciones.
+function collect(form, secs = questions) {
   const answers = {};
   for (const [k, v] of new FormData(form)) {
     const [id, i, col] = k.split('.');
     if (col) ((answers[id] ??= {})[i] ??= {})[col] = v;
     else answers[id] = id in answers ? [].concat(answers[id], v) : v; // casillas y fotos: varios valores
   }
-  for (const s of questions) if (s.table) answers[s.table.id] = Object.values(answers[s.table.id] || {});
+  for (const s of secs) if (s.table) answers[s.table.id] = Object.values(answers[s.table.id] || {});
   return answers;
 }
+// Fotos: se suben en cuanto se eligen; en el formulario queda su clave. Devuelve true si el cambio era de fotos.
+let uploading = 0;
+function handleUpload(e, after) {
+  const up = e.target.dataset.upload;
+  if (!up) return false;
+  const box = e.target.closest('label');
+  for (const file of [...e.target.files]) {
+    uploading++; box.classList.add('opacity-50', 'animate-pulse');
+    upload(file).then(k => { box.insertAdjacentHTML('beforebegin', photoThumb(up, k)); after(); }, showErr)
+      .finally(() => { if (!--uploading) box.classList.remove('opacity-50', 'animate-pulse'); });
+  }
+  e.target.value = '';
+  return true;
+}
+// Secciones de un formulario (PL-FOR-26 o de Calidad) con sus respuestas previas; rows(t) = renglones iniciales de cada tabla.
+const sectionsHtml = (secs, pre, rows, extra = () => '') => secs.map(s => { const top = (s.fields || []).filter(f => !f.after); return `
+  <section class="card p-4 flex flex-col gap-3">
+    <h2 class="text-label-lg text-primary">${s.n}. ${esc(s.title)}</h2>
+    ${s.hint ? `<p class="text-body-sm text-on-surface-variant">${esc(s.hint)}</p>` : ''}
+    ${extra(s, 'top')}
+    ${top.length ? `<div class="grid grid-cols-2 lg:grid-cols-4 gap-3">${top.map(f => labeled(f, input(f, f.id, pre?.[f.id]))).join('')}</div>` : ''}
+    ${s.table ? `<div data-table="${s.table.id}" class="flex flex-col gap-2">${rows(s.table).map(r => rowHtml(s.table, r)).join('')}</div>
+      ${s.table.fixed ? '' : `<button type="button" data-add="${s.table.id}" class="btn border-[1.5px] border-[#cbd5e1] text-primary"><span class="material-symbols-outlined">add</span>Agregar ${esc(s.table.item)}</button>`}` : ''}
+    ${extra(s, 'bottom')}
+    ${(s.fields || []).filter(f => f.after).map(f => `<div class="grid grid-cols-2">${labeled(f, input(f, f.id, pre?.[f.id]))}</div>`).join('')}
+  </section>`; }).join('');
+// Renglones de una tabla con valores previos; las fijas (gas, criterios) siempre llevan sus renglones.
+const tableRows = (t, pre) => {
+  if (!t.fixed) return pre?.[t.id] || [];
+  const c0 = t.cols[0].id, rs = pre?.[t.id] || []; // gas: "Otro: …" es el renglón con nombre libre
+  return t.fixed.map((v, i) => rs.find(r => r[c0] === v) || (i === t.fixed.length - 1 && rs.find(r => !t.fixed.includes(r[c0]))) || { [c0]: v });
+};
+// Chip de estatus de lotes y registros de Calidad.
+const STATUS_CLS = { 'EN PLANTA': 'bg-surface-container-high text-primary', LIBERADO: 'bg-secondary-container text-on-secondary-container',
+  ENTREGADO: 'bg-surface-container text-on-surface-variant', RETENIDO: 'bg-error-container text-on-error-container', RETRABAJO: 'bg-tertiary-fixed text-on-tertiary-fixed',
+  ABIERTO: 'bg-error-container text-on-error-container', CERRADO: 'bg-surface-container text-on-surface-variant',
+  CONFORME: 'bg-secondary-container text-on-secondary-container', 'CON OBSERVACIONES': 'bg-tertiary-fixed text-on-tertiary-fixed' };
+const statusChip = s => `<span class="chip ${STATUS_CLS[s] || 'bg-surface-container'}">${esc(s)}</span>`;
+const KIND = { REC: ['PL-FOR-28', 'Recepción', 'inventory'], LIB: ['PL-FOR-29', 'Liberación', 'fact_check'], NC: ['PL-FOR-30', 'No conforme', 'report'] };
+// Franja roja de emergencia (sección 2 del documento): llamada directa a gerencia.
+const emergencia = tel => tel ? `<a href="tel:${esc(tel.replace(/[^\d+]/g, ''))}" class="no-print flex items-center gap-3 p-3 rounded-xl bg-error text-white lg:col-span-2">
+  <span class="material-symbols-outlined">emergency</span><span class="text-label-md">Fuga de gas, falla eléctrica, incendio o accidente: llama a gerencia</span>
+  <span class="ml-auto font-bold whitespace-nowrap flex items-center gap-1"><span class="material-symbols-outlined text-[18px]">call</span>${esc(tel)}</span></a>` : '';
+// Botones de captura de Calidad (panel del encargado y tablero).
+const qButtons = () => `<div class="grid grid-cols-3 gap-2">${['REC', 'LIB', 'NC'].map(k => `<a href="#/${k.toLowerCase()}" class="card p-3 flex flex-col items-center text-center gap-1 hover:bg-surface-container-low">
+  <span class="material-symbols-outlined text-primary text-[28px]">${KIND[k][2]}</span><span class="text-label-lg leading-tight">${KIND[k][1]}</span><span class="text-[11px] text-on-surface-variant">${KIND[k][0]}</span></a>`).join('')}</div>`;
+// Datos con los que se abre un no conforme desde una recepción, una liberación o un lote (#/nc/REC-0001, #/nc/LIB-0001, #/nc/QRO-…).
+function ncPrefill(prev, arg, f) {
+  const d = prev?.data;
+  if (prev?.kind === 'REC') return { cliente: d.cliente, parte: d.partidas.map(p => p.parte).join(', '), lotes: d.partidas.map(p => p.lote),
+    cantidad: String(d.partidas.reduce((t, p) => t + Math.abs(Number(p.diferencia) || 0), 0) || ''), detectado: 'Recepción', descripcion: d.danos || '' };
+  if (prev?.kind === 'LIB') return { cliente: d.cliente, parte: d.parte, lotes: [d.lote], cantidad: d.rechazadas || String(sum(d.criterios, 'piezas_nok') || ''), detectado: 'Inspección final' };
+  const l = f.lotes.find(x => x.code === arg);
+  return l ? { cliente: l.client, parte: l.part, lotes: [l.code] } : {};
+}
+const cliRow = (x = {}) => `<div data-cli class="grid grid-cols-2 lg:grid-cols-4 gap-2 p-3 rounded-xl bg-surface-container-low">
+  ${labeled({ label: 'Cliente' }, `<input class="input" name="name" value="${esc(x.name || '')}" maxlength="60">`)}
+  ${labeled({ label: 'Planta' }, plantSelect('name="plant"', x.plant))}
+  ${labeled({ label: 'Especificación particular (criterio 7 de liberación)', wide: true }, `<input class="input" name="spec" value="${esc(x.spec || '')}" maxlength="300">`)}
+  <button type="button" data-del-cli class="col-span-2 lg:col-span-4 justify-self-end text-label-sm text-error flex items-center gap-1"><span class="material-symbols-outlined text-[16px]">delete</span>Quitar</button></div>`;
+const controlado = (code, rev = '00') => `<p class="hint" style="text-align:center;margin-top:10px">${code} · Rev. ${rev} · Documento controlado — impreso = copia no controlada</p>`;
 
 // Documento PL-FOR-26 armado con las respuestas (solo admin).
 function plDoc(r) {
@@ -184,6 +244,33 @@ function plDoc(r) {
     }).join('')}
     <table class="firmas"><tr><td>${esc(r.name)}<br><b>ELABORÓ — ENCARGADO DE PLANTA</b></td><td><b>REVISÓ — GERENCIA</b></td></tr></table>
     ${fotos.length ? `<div class="bar">ANEXOS — FOTOS</div><div class="fotos">${fotos.map(([l, k]) => `<figure><img src="/api/files/${esc(k)}" alt="${esc(l)}"><figcaption>${esc(l)}</figcaption></figure>`).join('')}</div>` : ''}
+    ${controlado('PL-FOR-26', '06')}
+  </div>`;
+}
+
+// Registro de Calidad (PL-FOR-28 / 29 / 30) armado como el formato en papel, para ver e imprimir.
+function qDoc(r) {
+  const a = r.data, kv = pairs => `<table><tbody>${pairs.map(([k, v]) => `<tr><td class="k">${esc(k)}</td><td>${esc(v) || '&nbsp;'}</td></tr>`).join('')}</tbody></table>`;
+  const head = { REC: [['Folio', r.folio], ['Planta', r.plant], ['Recibió', r.name], ['Estatus', r.status]],
+    LIB: [['Folio', r.folio], ['Planta', r.plant], ['Cliente', a.cliente], ['No. de parte', a.parte], ['Folio REC', a.rec], ['Estatus', r.status]],
+    NC: [['Folio', r.folio], ['Planta', r.plant], ['Elaboró', r.name], ['Origen', a.origen || '—'], ['¿Requiere 8D? (sugerido)', a.sugiere_8d], ['Estatus', r.status]] }[r.kind];
+  const fotos = r.sections.flatMap(s => (s.fields || []).filter(f => f.type === 'photos').flatMap(f => (a[f.id] || []).map(k => [f.label, k])));
+  return `<div class="pl">
+    <table class="head"><tr><td rowspan="3" class="logo">POLAR</td><td rowspan="2" class="t">RETRABAJOS INDUSTRIALES Y LIMPIEZAS ESPECIALIZADAS POLAR</td><td class="k">Número de control</td><td>${r.code}</td></tr>
+      <tr><td class="k">Revisión</td><td>00</td></tr>
+      <tr><td class="bar">${esc(r.title.toUpperCase())}</td><td class="k">Folio</td><td>${esc(r.folio)}</td></tr></table>
+    <div class="bar">DATOS DEL REGISTRO</div>${kv(head)}
+    ${r.sections.map(s => {
+      const fs = (s.fields || []).filter(f => f.type !== 'photos'), t = s.table, rows = t ? a[t.id] || [] : [];
+      return `<div class="bar">${s.n}. ${esc(s.title.toUpperCase())}</div>
+        ${fs.length ? kv(fs.map(f => [f.label, f.type === 'date' ? dmy(a[f.id]) : [].concat(a[f.id] ?? '').join(', ')])) : ''}
+        ${t ? `<table><thead><tr>${t.cols.map(c => `<th>${esc(c.label)}</th>`).join('')}</tr></thead><tbody>${rows.length
+          ? rows.map(x => `<tr>${t.cols.map(c => `<td>${esc(x[c.id])}</td>`).join('')}</tr>`).join('') : `<tr><td colspan="${t.cols.length}" class="c">—</td></tr>`}</tbody></table>` : ''}
+        ${r.kind === 'LIB' && s.n === 3 ? kv([['% de aceptación', `${a.pct} %`]]) : ''}`;
+    }).join('')}
+    <table class="firmas"><tr><td>${esc(r.name)}<br><b>ELABORÓ</b></td><td><b>REVISÓ — GERENCIA</b></td></tr></table>
+    ${fotos.length ? `<div class="bar">ANEXOS — FOTOS</div><div class="fotos">${fotos.map(([l, k]) => `<figure><img src="/api/files/${esc(k)}" alt="${esc(l)}"><figcaption>${esc(l)}</figcaption></figure>`).join('')}</div>` : ''}
+    ${controlado(r.code)}
   </div>`;
 }
 const logo = size => `<span class="material-symbols-outlined text-primary-container" style="font-size:${size}px;font-variation-settings:'FILL' 1">verified_user</span>`;
@@ -242,7 +329,9 @@ const views = {
 
   // Diseño: pantalla "Dashboard Principal" del proyecto Stitch "Remix of Daily Form Dashboard".
   async inicio() {
-    reports = await api('/api/reports?desde=' + daysAgo(60)); // racha, semana y mes
+    let cal; // panel de Calidad (si falla, el resto del inicio se muestra igual)
+    [reports, cal] = await Promise.all([api('/api/reports?desde=' + daysAgo(60)), api('/api/calidad').catch(() => null)]); // racha, semana y mes
+    const nLot = st => cal ? cal.lotes.filter(l => l.status === st).length : 0;
     const today = ymd(), todayDone = reports.find(r => r.date === today);
     const monday = new Date(); monday.setDate(monday.getDate() - (monday.getDay() + 6) % 7);
     const week = [...Array(7)].map((_, i) => { const d = new Date(monday); d.setDate(d.getDate() + i); return ymd(d); });
@@ -255,6 +344,7 @@ const views = {
     const inc = last ? nInc(last) : 0;
     $('#app').innerHTML = `
     <div class="grid w-full gap-space-lg lg:grid-cols-2 lg:items-start">
+      ${emergencia(cal?.tel)}
       <div class="flex flex-col pt-space-xs lg:col-span-2">
         <div class="flex items-center gap-1.5">
           <h1 class="text-headline-lg-mobile text-on-surface tracking-tight">¡Hola, ${esc(me.name.split(' ')[0])}!</h1>
@@ -293,6 +383,15 @@ const views = {
             Llenar formulario de hoy<span class="material-symbols-outlined text-[20px]">arrow_forward</span></a>`}
         </div>
       </div>
+      ${cal ? `<div class="flex flex-col gap-space-sm p-space-md rounded-xl bg-surface-container-lowest shadow-sm">
+        <div class="flex items-center justify-between">
+          <h3 class="text-label-lg flex items-center gap-2"><span class="material-symbols-outlined text-primary text-[20px]">verified</span>Calidad ISO 9001</h3>
+          <a href="#/calidad" class="text-label-sm text-primary font-bold flex items-center gap-0.5">Ver todo<span class="material-symbols-outlined text-[16px]">chevron_right</span></a>
+        </div>
+        ${qButtons()}
+        <p class="text-label-sm text-on-surface-variant">${nLot('EN PLANTA')} lotes en planta · ${nLot('RETENIDO')} retenidos · ${nLot('LIBERADO')} por entregar
+          ${cal.alertas.length ? `· <a href="#/calidad" class="text-error font-semibold">⚠ ${cal.alertas.length} ${cal.alertas.length === 1 ? 'alerta' : 'alertas'}</a>` : ''}</p>
+      </div>` : ''}
       <div class="grid grid-cols-2 gap-space-md">
         <div class="flex flex-col justify-between p-space-md rounded-xl bg-surface-container-lowest shadow-sm">
           <div class="flex items-center justify-between">
@@ -381,7 +480,7 @@ const views = {
   async nuevo(editId) {
     const edit = editId ? (await api('/api/reports?id=' + Number(editId)))[0] : null;
     if (editId && !edit) throw new Error('Reporte no encontrado');
-    const d = await api('/api/defaults' + (edit ? `?planta=${encodeURIComponent(edit.plant || '')}&excluir=${edit.id}` : '')); rowN = 0;
+    const d = await api('/api/defaults' + (edit ? `?planta=${encodeURIComponent(edit.plant || '')}&excluir=${edit.id}&fecha=${edit.date}` : '')); rowN = 0;
     // Borrador: uno por día (y por reporte que se corrige); los de otros días se borran.
     const key = `borrador:${me.id}:${ymd()}${edit ? ':' + edit.id : ''}`;
     let draft = null;
@@ -390,14 +489,11 @@ const views = {
       draft = JSON.parse(localStorage.getItem(key));
     } catch {}
     const pre = draft || edit?.answers;
-    // Renglones iniciales: los del borrador o del reporte; si no hay, los pendientes abiertos (mantenimiento).
-    const rowsOf = t => {
-      if (t.fixed) { // gas: siempre los tanques fijos, con lo que ya se había escrito ("Otro: …" es el renglón con nombre libre)
-        const c0 = t.cols[0].id, rs = pre?.[t.id] || [];
-        return t.fixed.map((v, i) => rs.find(r => r[c0] === v) || (i === t.fixed.length - 1 && rs.find(r => !t.fixed.includes(r[c0]))) || { [c0]: v });
-      }
-      return pre ? pre[t.id] || [] : t.id === 'mantenimiento' ? d.pendientes : [];
-    };
+    // Renglones iniciales: los del borrador o del reporte; si no hay, los pendientes abiertos (mantenimiento) y, en la
+    // sección 7, cada pieza con movimiento hoy en Calidad o con pendientes por procesar.
+    const k = m => `${m.cliente}|${m.pieza}`.trim().toLowerCase();
+    const rowsOf = t => t.fixed ? tableRows(t, pre) : pre ? pre[t.id] || [] : t.id === 'mantenimiento' ? d.pendientes
+      : t.id === 'material' ? [...new Map([...d.porProcesar, ...Object.values(d.mov)].map(m => [k(m), { cliente: m.cliente, pieza: m.pieza }])).values()] : [];
     // Vehículo: solo los camiones registrados de la planta.
     const veh = questions.find(s => s.table?.id === 'vehiculos')?.table.cols.find(c => c.id === 'vehiculo');
     if (veh) veh.options = d.trucks.map(t => t.name);
@@ -410,24 +506,15 @@ const views = {
       <button type="button" id="discard" class="text-label-md text-primary font-semibold">Empezar de cero</button></div>` : ''}
     ${Object.entries(d.lists).map(([k, xs]) => `<datalist id="dl-${k}">${xs.map(x => `<option value="${esc(x)}">`).join('')}</datalist>`).join('')}
     <form id="report" class="flex flex-col gap-4">
-      ${questions.map(s => { const top = (s.fields || []).filter(f => !f.after), askPlant = s.n === 1 && !me.plant && !edit; return `
-      <section class="card p-4 flex flex-col gap-3">
-        <h2 class="text-label-lg text-primary">${s.n}. ${esc(s.title)}</h2>
-        ${s.hint ? `<p class="text-body-sm text-on-surface-variant">${esc(s.hint)}</p>` : ''}
-        ${s.table?.id === 'vehiculos' && !d.trucks.length ? '<p class="text-body-sm text-error">Tu planta no tiene camiones registrados. Pide al administrador que los agregue.</p>' : ''}
-        ${top.length || askPlant ? `<div class="grid grid-cols-2 lg:grid-cols-4 gap-3">
-          ${askPlant ? labeled({ label: 'Planta', required: true, wide: true }, plantSelect('name="planta" required', pre?.planta)) : ''}
-          ${top.map(f => labeled(f, input(f, f.id, pre?.[f.id]))).join('')}</div>` : ''}
-        ${s.table ? `<div data-table="${s.table.id}" class="flex flex-col gap-2">${rowsOf(s.table).map(r => rowHtml(s.table, r)).join('')}</div>
-          ${s.table.fixed ? '' : `<button type="button" data-add="${s.table.id}" class="btn border-[1.5px] border-[#cbd5e1] text-primary"><span class="material-symbols-outlined">add</span>Agregar ${esc(s.table.item)}</button>`}` : ''}
-        ${s.table?.id === 'hornos' ? '<p data-total-hornos class="p-3 rounded-xl bg-surface-container-high/60 text-label-lg text-primary" aria-live="polite"></p>' : ''}
-        ${(s.fields || []).filter(f => f.after).map(f => `<div class="grid grid-cols-2">${labeled(f, input(f, f.id, pre?.[f.id]))}</div>`).join('')}
-      </section>`; }).join('')}
+      ${sectionsHtml(questions, pre, rowsOf, (s, at) => at === 'top'
+        ? (s.table?.id === 'vehiculos' && !d.trucks.length ? '<p class="text-body-sm text-error">Tu planta no tiene camiones registrados. Pide al administrador que los agregue.</p>' : '')
+          + (s.n === 1 && !me.plant && !edit ? `<div class="grid grid-cols-2 lg:grid-cols-4 gap-3">${labeled({ label: 'Planta', required: true, wide: true }, plantSelect('name="planta" required', pre?.planta))}</div>` : '')
+        : s.table?.id === 'hornos' ? '<p data-total-hornos class="p-3 rounded-xl bg-surface-container-high/60 text-label-lg text-primary" aria-live="polite"></p>' : '')}
       <p id="err" class="text-sm text-error hidden" role="alert"></p>
       <button class="btn btn-primary w-full"><span class="material-symbols-outlined">send</span>${edit ? 'Guardar corrección' : 'Enviar reporte'}</button>
     </form>`;
     const form = $('#report');
-    let ready = false, uploading = 0; // ready: no guardar borrador mientras se arma la pantalla
+    let ready = false; // no guardar borrador mientras se arma la pantalla
     const save = () => { if (ready) try { localStorage.setItem(key, JSON.stringify(collect(form))); } catch {} };
     if (draft) $('#discard').onclick = () => { try { localStorage.removeItem(key); } catch {} views.nuevo(editId); };
     form.onclick = e => {
@@ -443,26 +530,16 @@ const views = {
       const rows = [...form.querySelectorAll('[data-table="hornos"] [data-row]')], p = form.querySelector('[data-total-hornos]');
       if (p) p.textContent = `Total de hornos: ${rows.length} · Total de ciclos: ${sum(rows.map(r => ({ c: r.querySelector('[name$=".ciclos"]').value })), 'c')}`;
     };
-    // Sección 7: pendientes por procesar = pendientes anteriores (misma pieza) + piezas − procesado hoy. El servidor lo recalcula al guardar.
+    // Sección 7: recibido / entregado de hoy vienen de Calidad (PL-FOR-28 / 29); pendientes = anteriores + recibido − procesado. El servidor lo recalcula al guardar.
     const pendientes = () => form.querySelectorAll('[data-table="material"] [data-row]').forEach(r => {
-      const v = id => r.querySelector(`[name$=".${id}"]`).value, prev = d.pend[`${v('cliente')}|${v('pieza')}`.trim().toLowerCase()] || 0;
-      r.querySelector('[data-pend]').textContent = `Pendientes por procesar: ${prev + (Number(v('cantidad')) || 0) - (Number(v('procesado')) || 0)}`
-        + (prev ? ` (incluye ${prev} de días anteriores)` : '');
+      const v = id => r.querySelector(`[name$=".${id}"]`).value, key = `${v('cliente')}|${v('pieza')}`.trim().toLowerCase();
+      const prev = d.pend[key] || 0, m = d.mov[key] || { recibido: 0, entregado: 0, folios: [] };
+      r.querySelector('[data-pend]').textContent = `Recibido hoy: ${m.recibido} · Entregado hoy: ${m.entregado}${m.folios.length ? ` (${m.folios.join(', ')})` : ''} · `
+        + `Pendientes por procesar: ${prev + m.recibido - (Number(v('procesado')) || 0)}` + (prev ? ` (incluye ${prev} de días anteriores)` : '');
     });
     form.oninput = () => { totalHornos(); pendientes(); save(); };
     form.onchange = e => {
-      // Fotos: se suben en cuanto se eligen; en el formulario queda su clave.
-      const up = e.target.dataset.upload;
-      if (up) {
-        const box = e.target.closest('label');
-        for (const file of [...e.target.files]) {
-          uploading++; box.classList.add('opacity-50', 'animate-pulse');
-          upload(file).then(k => { box.insertAdjacentHTML('beforebegin', photoThumb(up, k)); save(); }, showErr)
-            .finally(() => { if (!--uploading) box.classList.remove('opacity-50', 'animate-pulse'); });
-        }
-        e.target.value = '';
-        return;
-      }
+      if (handleUpload(e, save)) return;
       // Km inicial = km final de la última vez que se usó la unidad.
       const n = e.target.name || '', ini = n.endsWith('.vehiculo') && form.elements[n.replace(/vehiculo$/, 'km_ini')];
       if (ini && !ini.value && d.km[e.target.value]) ini.value = d.km[e.target.value];
@@ -886,6 +963,206 @@ const views = {
     };
   },
 
+  // ---------- Calidad ISO 9001 (etapa 1) ----------
+  // Tablero: emergencia, botones de captura, alertas, lotes y registros. Admin: filtro de planta y catálogo de clientes.
+  async calidad() {
+    const c = await api('/api/calidad' + (me.role === 'admin' && calPlant ? '?planta=' + encodeURIComponent(calPlant) : ''));
+    if (me.role === 'admin') { alertN = c.alertas.length; renderNav('calidad'); }
+    const F = { activos: ['EN PLANTA', 'RETENIDO', 'LIBERADO'], 'EN PLANTA': ['EN PLANTA'], RETENIDO: ['RETENIDO'], LIBERADO: ['LIBERADO'], ENTREGADO: ['ENTREGADO'] };
+    const lotes = c.lotes.filter(l => F[calFilter].includes(l.status)), days = l => Math.round((Date.parse(ymd()) - Date.parse(l.received)) / 86_400_000);
+    const go = (href, icon, text) => `<a href="${href}" class="btn border-[1.5px] border-[#cbd5e1] text-primary !min-h-0 !py-2 !px-3 text-label-md"><span class="material-symbols-outlined text-[18px]">${icon}</span>${text}</a>`;
+    const accion = l => ({ 'EN PLANTA': go(`#/lib/${encodeURIComponent(l.code)}`, 'fact_check', 'Liberar'), RETENIDO: go(`#/nc/${encodeURIComponent(l.code)}`, 'report', 'No conforme'),
+      LIBERADO: go(`#/q/${encodeURIComponent(l.lib)}`, 'local_shipping', 'Entregar') })[l.status] || '';
+    $('#app').innerHTML = `
+    <div class="flex flex-col gap-4 ${WIDE ? 'max-w-5xl' : ''}">
+      ${emergencia(c.tel)}
+      <div><p class="text-label-sm font-semibold text-primary">SISTEMA DE GESTIÓN DE CALIDAD</p>
+        <h1 class="${WIDE ? 'text-3xl font-bold' : 'text-2xl font-semibold'} tracking-tight">Calidad ISO 9001</h1>
+        <p class="text-sm text-on-surface-variant">Recepción, liberación y no conformes con folio, lote POLAR y trazabilidad.</p></div>
+      ${me.role === 'admin' ? `<label class="flex items-center gap-2 text-label-md text-on-surface-variant">Planta
+        <select id="cal-planta" class="input w-auto"><option value="">Todas</option>${PLANTS.map(p => `<option ${p === calPlant ? 'selected' : ''}>${p}</option>`).join('')}</select></label>` : ''}
+      ${qButtons()}
+      <p id="err" class="text-sm text-error hidden" role="alert"></p>
+      ${c.alertas.length ? `<section id="alertas" class="card p-4 flex flex-col gap-2 border-l-4 border-error">
+        <h2 class="font-semibold flex items-center gap-2"><span class="material-symbols-outlined text-error">notifications_active</span>Alertas (${c.alertas.length})</h2>
+        ${c.alertas.map(a => `<div class="flex items-start justify-between gap-2 p-2 rounded-lg bg-error-container/40"><p class="text-sm">${esc(a.text)}
+          ${a.folio ? ` <a href="#/q/${esc(a.folio)}" class="text-primary font-semibold">Ver ${esc(a.folio)}</a>` : a.lote ? ` <a href="#/nc/${esc(a.lote)}" class="text-primary font-semibold">Levantar no conforme</a>` : ''}</p>
+          ${a.id ? `<button data-visto="${a.id}" class="text-label-sm text-primary font-semibold whitespace-nowrap">Marcar vista</button>` : ''}</div>`).join('')}</section>` : ''}
+      <div class="grid gap-4 lg:grid-cols-2 lg:items-start">
+        <section class="card p-4 flex flex-col gap-3">
+          <h2 class="font-semibold flex items-center gap-2"><span class="material-symbols-outlined text-primary">inventory_2</span>Lotes</h2>
+          <div id="cal-filtro" class="flex flex-wrap gap-1">${Object.keys(F).map(k => `<button data-f="${k}" class="chip !py-1 ${k === calFilter ? 'bg-primary-container text-white' : 'bg-surface-container text-on-surface-variant'}">${k === 'activos' ? 'Activos' : k}</button>`).join('')}</div>
+          ${lotes.length ? `<div class="flex flex-col">${lotes.map(l => `<div class="flex flex-wrap items-center justify-between gap-2 py-2 border-t border-[#f1f5f9]">
+            <div class="min-w-0"><p class="font-semibold flex flex-wrap items-center gap-2">${esc(l.code)} ${statusChip(l.status)}</p>
+              <p class="text-[12px] text-on-surface-variant">${esc(l.client)} · ${esc(l.part)} · ${l.qty} pza · recibido ${dmy(l.received)}${l.status === 'EN PLANTA' ? ` (${days(l)} d)` : ''}${me.role === 'admin' ? ' · ' + esc(l.plant) : ''}
+                · <a href="#/q/${esc(l.rec)}" class="text-primary">${esc(l.rec)}</a></p></div>
+            ${accion(l)}</div>`).join('')}</div>` : '<p class="text-sm text-on-surface-variant">Sin lotes con ese filtro.</p>'}
+        </section>
+        <section class="card p-4 flex flex-col">
+          <h2 class="font-semibold flex items-center gap-2 mb-2"><span class="material-symbols-outlined text-primary">history</span>Registros recientes</h2>
+          ${c.registros.length ? c.registros.map(r => `<a href="#/q/${esc(r.folio)}" class="flex items-center justify-between gap-2 py-2 border-t border-[#f1f5f9] hover:bg-surface-container-low">
+            <div class="min-w-0"><p class="font-semibold">${esc(r.folio)} <span class="text-label-sm text-on-surface-variant font-normal">${KIND[r.kind][1]} · ${KIND[r.kind][0]}</span></p>
+              <p class="text-[12px] text-on-surface-variant truncate">${dmy(r.date)} · ${esc(r.data.cliente || '')} · ${esc(r.name)}${me.role === 'admin' ? ' · ' + esc(r.plant) : ''}</p></div>
+            ${statusChip(r.status)}</a>`).join('') : '<p class="text-sm text-on-surface-variant">Aún no hay registros.</p>'}
+        </section>
+      </div>
+      ${me.role === 'admin' ? `<section id="catalogo" class="card p-4 flex flex-col gap-3">
+        <h2 class="font-semibold flex items-center gap-2"><span class="material-symbols-outlined text-primary">contacts</span>Catálogo de clientes y teléfono de gerencia</h2>
+        ${calPlant ? '<p class="text-sm text-on-surface-variant">Elige "Todas" las plantas para editar el catálogo.</p>' : `
+        <p class="text-body-sm text-on-surface-variant">Los clientes de cada planta aparecen en recepción y no conforme; su especificación particular, en el criterio 7 de la liberación.</p>
+        <div data-clis class="flex flex-col gap-2">${c.clientes.map(cliRow).join('')}</div>
+        <button type="button" data-add-cli class="btn border-[1.5px] border-[#cbd5e1] text-primary ${WIDE ? 'self-start' : ''}"><span class="material-symbols-outlined">add</span>Agregar cliente</button>
+        ${labeled({ label: 'Teléfono de gerencia (franja roja de emergencia)' }, `<input class="input lg:max-w-xs" name="tel" value="${esc(c.tel)}" inputmode="tel" maxlength="20">`)}
+        <button type="button" data-save-cli class="btn btn-primary ${WIDE ? 'self-start' : ''}"><span class="material-symbols-outlined">save</span>Guardar catálogo</button>`}
+      </section>` : ''}
+    </div>`;
+    const cat = $('#catalogo'), al = $('#alertas');
+    if ($('#cal-planta')) $('#cal-planta').onchange = e => { calPlant = e.target.value; views.calidad(); };
+    $('#cal-filtro').onclick = e => { const b = e.target.closest('[data-f]'); if (b) { calFilter = b.dataset.f; views.calidad(); } };
+    if (al) al.onclick = async e => {
+      const b = e.target.closest('[data-visto]');
+      if (b) try { await api('/api/calidad/alertas/vista', { id: b.dataset.visto }); views.calidad(); } catch (err) { showErr(err); }
+    };
+    if (cat) cat.onclick = async e => {
+      if (e.target.closest('[data-add-cli]')) cat.querySelector('[data-clis]').insertAdjacentHTML('beforeend', cliRow());
+      if (e.target.closest('[data-del-cli]')) e.target.closest('[data-cli]').remove();
+      if (!e.target.closest('[data-save-cli]')) return;
+      const clientes = [...cat.querySelectorAll('[data-cli]')].map(r => Object.fromEntries(['name', 'plant', 'spec'].map(k => [k, r.querySelector(`[name=${k}]`).value])));
+      try { await api('/api/calidad/config', { clientes, tel: cat.querySelector('[name=tel]').value }); views.calidad(); } catch (err) { showErr(err); }
+    };
+  },
+
+  rec: () => views.qnuevo('REC'),
+  lib: lote => views.qnuevo('LIB', lote),
+  nc: origen => views.qnuevo('NC', origen),
+  ncedit: folio => views.qnuevo('NC', folio, true),
+
+  // Captura de PL-FOR-28 / 29 / 30. arg: LIB → lote preseleccionado; NC → folio REC / LIB de origen o código de lote; edit: NC a actualizar.
+  async qnuevo(kind, arg = '', edit = false) {
+    arg = decodeURIComponent(arg);
+    const prev = /^(REC|LIB|NC)-\d+$/.test(arg) ? await api('/api/calidad/registro?folio=' + encodeURIComponent(arg)) : null;
+    let plant = prev?.plant || (me.role === 'admin' ? calPlant || PLANTS[0] : me.plant);
+    if (!plant) throw new Error('Tu cuenta no tiene planta asignada: pide al administrador que te asigne una.');
+    const draw = async () => {
+      const f = await api(`/api/calidad/form?tipo=${kind}&planta=${encodeURIComponent(plant)}`), secs = f.sections; rowN = 0;
+      const pre = edit ? prev.data : { fecha: ymd(), hora: new Date().toTimeString().slice(0, 5), ...(kind === 'LIB' && { lote: arg }), ...(kind === 'NC' && ncPrefill(prev, arg, f)) };
+      $('#app').innerHTML = `
+      <div class="flex flex-col gap-4 ${WIDE ? 'max-w-4xl' : ''}">
+        <div><a href="#/calidad" class="text-primary text-label-md flex items-center gap-1"><span class="material-symbols-outlined text-[18px]">arrow_back</span>Calidad</a>
+          <p class="text-label-sm font-semibold text-primary mt-2">${f.code} · REV. 00${edit ? ' · ' + esc(prev.folio) : ''}</p>
+          <h1 class="text-headline-lg-mobile tracking-tight">${esc(f.title)}</h1>
+          <p class="text-body-md text-on-surface-variant">Planta ${esc(plant)} · ${esc(me.name)}${prev && !edit ? ` · desde ${esc(prev.folio)}` : ''}</p></div>
+        ${me.role === 'admin' && !prev ? `<label class="flex flex-col gap-1 text-label-md text-on-surface-variant max-w-xs">Planta${plantSelect('id="q-planta"', plant)}</label>` : ''}
+        ${kind === 'LIB' && !secs[0].fields[0].options.length ? '<p class="card p-4 text-body-md">No hay lotes EN PLANTA para liberar. Registra primero la recepción (PL-FOR-28).</p>' : ''}
+        <datalist id="dl-piezas">${[...new Set(f.lotes.map(l => l.part))].map(p => `<option value="${esc(p)}">`).join('')}</datalist>
+        <form id="qform" class="flex flex-col gap-4">
+          ${sectionsHtml(secs, pre, t => t.fixed ? tableRows(t, pre) : pre[t.id] || (t.id === 'partidas' ? [{}] : []), (s, at) => at !== 'bottom' ? ''
+            : kind === 'LIB' && s.n === 1 ? '<p data-lote-info class="p-3 rounded-xl bg-surface-container text-label-md"></p>'
+            : kind === 'LIB' && s.n === 3 ? '<p data-pct class="p-3 rounded-xl bg-surface-container-high/60 text-label-lg text-primary"></p>'
+            : kind === 'REC' && s.n === 3 ? '<p data-anomalia class="hidden p-3 rounded-xl bg-tertiary-fixed text-on-tertiary-fixed text-label-md">⚠ Hay diferencia de conteo o algo en "No": anótalo en la remisión antes de firmar. Al guardar podrás levantar el no conforme.</p>' : '')}
+          <p id="err" class="text-sm text-error hidden" role="alert"></p>
+          <button class="btn btn-primary w-full"><span class="material-symbols-outlined">save</span>${edit ? 'Guardar cambios' : 'Guardar ' + KIND[kind][1].toLowerCase()}</button>
+        </form>
+      </div>`;
+      const form = $('#qform'), estado = secs.find(s => s.n === 3)?.fields?.map(x => x.id) || [];
+      // En vivo: diferencia por partida y aviso (REC); datos del lote y % de aceptación (LIB). El servidor lo recalcula al guardar.
+      const live = () => {
+        if (kind === 'REC') {
+          let anom = estado.some(id => form.elements[id]?.value === 'No');
+          form.querySelectorAll('[data-table="partidas"] [data-row]').forEach(r => {
+            const v = id => Number(r.querySelector(`[name$=".${id}"]`).value) || 0, dif = v('contada') - v('remision');
+            r.querySelector('[data-dif]').textContent = `Diferencia: ${dif > 0 ? '+' : ''}${dif}`;
+            if (dif) anom = true;
+          });
+          form.querySelector('[data-anomalia]').classList.toggle('hidden', !anom);
+        }
+        if (kind === 'LIB') {
+          const l = f.lotes.find(x => x.code === form.elements.lote?.value), spec = l && f.specs[l.client];
+          form.querySelector('[data-lote-info]').textContent = l ? `${l.client} · ${l.part} · ${l.qty} pza · ${l.rec}${spec ? ` · Especificación del cliente (criterio 7): ${spec}` : ''}`
+            : 'Elige un lote para ver cliente, no. de parte y folio REC.';
+          const ins = Number(form.elements.inspeccionadas.value) || 0, acc = Number(form.elements.aceptadas.value) || 0;
+          form.querySelector('[data-pct]').textContent = `% de aceptación: ${ins ? Math.round(acc / ins * 1000) / 10 : 0} %`;
+        }
+      };
+      form.onclick = e => {
+        const add = e.target.closest('[data-add]'), del = e.target.closest('[data-del]'), delPhoto = e.target.closest('[data-del-photo]');
+        if (add) form.querySelector(`[data-table="${add.dataset.add}"]`).insertAdjacentHTML('beforeend', rowHtml(secs.find(s => s.table?.id === add.dataset.add).table));
+        if (del) del.closest('[data-row]').remove();
+        if (delPhoto) delPhoto.closest('[data-photo]').remove();
+        live();
+      };
+      form.oninput = live;
+      form.onchange = e => { if (!handleUpload(e, () => {})) live(); };
+      if ($('#q-planta')) $('#q-planta').onchange = e => { if (PLANTS.includes(e.target.value)) { plant = e.target.value; draw().catch(showErr); } };
+      form.onsubmit = async e => {
+        e.preventDefault();
+        if (uploading) return showErr(new Error('Espera a que terminen de subir las fotos'));
+        const btn = form.querySelector('.btn-primary'); btn.disabled = true;
+        try {
+          const answers = collect(form, secs);
+          const r = edit ? await api('/api/calidad/nc/actualizar', { folio: prev.folio, answers })
+            : await api('/api/calidad/' + kind.toLowerCase(), { planta: plant, answers, origen: prev?.folio || '' });
+          views.qhecho(kind, r, edit);
+        } catch (err) { showErr(err); btn.disabled = false; }
+      };
+      live();
+    };
+    await draw();
+  },
+
+  // Resultado de guardar un registro de Calidad: folio, lotes y el siguiente paso (p. ej. levantar el no conforme).
+  qhecho(kind, r, edit) {
+    const box = (cls, icon, html) => `<div class="rounded-xl p-4 flex items-start gap-3 ${cls}"><span class="material-symbols-outlined">${icon}</span><p class="text-body-md">${html}</p></div>`;
+    const msg = kind === 'REC' ? (r.anomalia ? box('bg-tertiary-fixed text-on-tertiary-fixed', 'warning', 'Hay diferencia de conteo o algo en "No". Anótalo en la remisión antes de firmar y levanta el no conforme.') : '')
+        + `<p class="text-body-md">Lotes asignados: ${r.partidas.map(p => `<b>${esc(p.lote)}</b> (${esc(p.parte)}, ${esc(p.contada)} pza)`).join(', ')}</p>`
+      : kind === 'LIB' ? (r.requiereNC ? box('bg-error-container text-on-error-container', 'block', `El lote ${esc(r.lote)} quedó <b>RETENIDO</b>. Levanta ahora el no conforme (PL-FOR-30).`)
+        : `<p class="text-body-md">Lote <b>${esc(r.lote)}</b>: ${statusChip(r.status)} · aceptación ${esc(r.pct)} %</p>`)
+      : `<p class="text-body-md">Estatus ${statusChip(r.estatus)} · ¿Requiere 8D? (sugerido): <b>${esc(r.sugiere_8d)}</b></p>${edit ? '' : '<p class="text-body-sm text-on-surface-variant">Se avisó a gerencia.</p>'}`;
+    const nc = (kind === 'REC' && r.anomalia) || (kind === 'LIB' && r.requiereNC);
+    $('#app').innerHTML = `
+    <div class="flex flex-col items-center text-center gap-3 pt-6 ${WIDE ? 'max-w-xl mx-auto' : ''}">
+      <div class="w-16 h-16 rounded-full bg-secondary-container text-on-secondary-container flex items-center justify-center"><span class="material-symbols-outlined text-[36px]">task_alt</span></div>
+      <h1 class="text-2xl font-bold">${esc(r.folio)} ${edit ? 'actualizado' : 'guardado'}</h1>
+      <div class="flex flex-col gap-3 w-full text-left">${msg}</div>
+      ${nc ? `<a href="#/nc/${esc(r.folio)}" class="btn btn-primary w-full"><span class="material-symbols-outlined">report</span>Crear no conforme</a>` : ''}
+      <a href="#/q/${esc(r.folio)}" class="btn border-[1.5px] border-[#cbd5e1] text-primary w-full"><span class="material-symbols-outlined">description</span>Ver / imprimir ${esc(r.folio)}</a>
+      <a href="#/calidad" class="btn border-[1.5px] border-[#cbd5e1] w-full">Volver a Calidad</a>
+    </div>`;
+  },
+
+  // Registro de Calidad: documento imprimible + siguientes pasos (entregar, levantar o cerrar el no conforme).
+  async q(folio) {
+    const r = await api('/api/calidad/registro?folio=' + encodeURIComponent(decodeURIComponent(folio)));
+    const entrega = r.kind === 'LIB' && r.status === 'LIBERADO' ? r.sections.find(s => s.n === 5).fields.map(f => ({ ...f, required: f.type !== 'photos' })) : null;
+    const needNC = !r.ligados.length && ((r.kind === 'REC' && r.status === 'CON OBSERVACIONES') || (r.kind === 'LIB' && r.status === 'RETENIDO'));
+    $('#app').innerHTML = `
+    <div class="no-print flex flex-wrap items-center justify-between gap-2 mb-4">
+      <a href="#/calidad" class="text-primary font-semibold flex items-center gap-1"><span class="material-symbols-outlined">arrow_back</span>Calidad</a>
+      <div class="flex flex-wrap gap-2">
+        ${needNC ? `<a href="#/nc/${esc(r.folio)}" class="btn btn-primary"><span class="material-symbols-outlined">report</span>Crear no conforme</a>` : ''}
+        ${r.kind === 'NC' && r.status === 'ABIERTO' ? `<a href="#/ncedit/${esc(r.folio)}" class="btn btn-primary"><span class="material-symbols-outlined">edit</span>Actualizar / cerrar</a>` : ''}
+        <button onclick="print()" class="btn border-[1.5px] border-[#cbd5e1] text-primary"><span class="material-symbols-outlined">print</span>Imprimir</button>
+      </div></div>
+    <p id="err" class="text-sm text-error hidden no-print" role="alert"></p>
+    ${r.lotes.length || r.ligados.length ? `<div class="no-print card p-3 mb-3 flex flex-col gap-1 text-body-md">
+      ${r.lotes.length ? `<p>Lotes: ${r.lotes.map(l => `${esc(l.code)} ${statusChip(l.status)}`).join(' ')}</p>` : ''}
+      ${r.ligados.length ? `<p>No conformes ligados: ${r.ligados.map(n => `<a href="#/q/${esc(n.folio)}" class="text-primary font-semibold">${esc(n.folio)}</a> ${statusChip(n.status)}`).join(' ')}</p>` : ''}</div>` : ''}
+    ${entrega ? `<form id="entrega" class="no-print card p-4 mb-4 flex flex-col gap-3">
+      <h2 class="font-semibold flex items-center gap-2"><span class="material-symbols-outlined text-primary">local_shipping</span>Registrar entrega del lote ${esc(r.data.lote)}</h2>
+      <div class="grid grid-cols-2 lg:grid-cols-4 gap-3">${entrega.map(f => labeled(f, input(f, f.id, f.type === 'date' ? ymd() : ''))).join('')}</div>
+      <button class="btn btn-primary"><span class="material-symbols-outlined">save</span>Guardar entrega</button></form>` : ''}
+    ${qDoc(r)}`;
+    const form = $('#entrega');
+    if (!form) return;
+    form.onchange = e => handleUpload(e, () => {});
+    form.onclick = e => { const d = e.target.closest('[data-del-photo]'); if (d) d.closest('[data-photo]').remove(); };
+    form.onsubmit = async e => {
+      e.preventDefault();
+      if (uploading) return showErr(new Error('Espera a que terminen de subir las fotos'));
+      try { await api('/api/calidad/entrega', { folio: r.folio, answers: collect(form, []) }); views.q(r.folio); } catch (err) { showErr(err); }
+    };
+  },
+
   async pl(id) {
     const [r] = await api('/api/reports?id=' + Number(id));
     if (!r) throw new Error('Reporte no encontrado');
@@ -926,12 +1203,13 @@ function reportCard(r, admin = false, canEdit = false) {
 
 // ---------- Navegación ----------
 const NAV = {
-  colaborador: [['inicio', 'dashboard', 'Inicio'], ['nuevo', 'add_task', ''], ['historial', 'history', 'Historial']],
-  admin: [['admin', 'groups', 'Reportes'], ['semanal', 'auto_awesome', 'Semanal'], ['cuentas', 'manage_accounts', 'Cuentas'],
+  colaborador: [['inicio', 'dashboard', 'Inicio'], ['nuevo', 'add_task', ''], ['historial', 'history', 'Historial'], ['calidad', 'verified', 'Calidad']],
+  admin: [['admin', 'groups', 'Reportes'], ['semanal', 'auto_awesome', 'Semanal'], ['calidad', 'verified', 'Calidad'], ['cuentas', 'manage_accounts', 'Cuentas'],
     ['camiones', 'local_shipping', 'Camiones'], ['formulario', 'edit_note', 'Formulario']],
 };
 function renderNav(name) {
-  const items = NAV[me.role];
+  // Calidad lleva el número de alertas pendientes (gerencia).
+  const items = NAV[me.role].map(([p, icon, label]) => [p, icon, p === 'calidad' && alertN ? `${label} <span class="chip bg-error text-white !px-1.5">${alertN}</span>` : label]);
   // Computadora: menú lateral (panel admin y app en pantalla grande). Teléfono: barra inferior con botón central.
   $('#nav').innerHTML = WIDE ? `<div class="flex flex-col h-full">
     <div class="flex items-center gap-2 px-2 mb-8">${logo(30)}<div class="flex flex-col items-start gap-1"><span class="text-lg font-semibold tracking-tight leading-tight">Reporte Diario Polar</span><span class="chip bg-surface-container-high text-primary">${me.role === 'admin' ? 'Admin' : 'Encargado'}</span></div></div>
@@ -948,13 +1226,14 @@ function renderNav(name) {
 }
 
 // Opción del menú que se marca en pantallas que no están en el menú.
-const navOf = name => ({ pl: 'admin', editar: me.role === 'admin' ? 'admin' : 'historial' })[name] ?? name;
+const QVIEWS = ['rec', 'lib', 'nc', 'ncedit', 'q']; // pantallas de Calidad que no están en el menú
+const navOf = name => ({ pl: 'admin', editar: me.role === 'admin' ? 'admin' : 'historial' })[name] ?? (QVIEWS.includes(name) ? 'calidad' : name);
 async function route() {
   const [name, arg] = location.hash.slice(2).split('/');
   if (!me) return views.login();
   if (WEB && me.role !== 'admin') return views.soloAdmin();
   // pl/ID: PL-FOR-26, solo admin; editar/ID: corregir un reporte; cuenta: mi contraseña (ambos roles).
-  const allowed = [...NAV[me.role].map(n => n[0]), 'editar', 'cuenta', ...(me.role === 'admin' ? ['pl'] : [])];
+  const allowed = [...NAV[me.role].map(n => n[0]), 'editar', 'cuenta', ...QVIEWS, ...(me.role === 'admin' ? ['pl'] : [])];
   if (!allowed.includes(name)) return location.hash = '#/' + allowed[0];
   renderNav(navOf(name));
   try { await views[name](arg); } catch (e) { $('#app').innerHTML = `<p class="text-error text-sm">${esc(e.message)}</p>`; }
@@ -968,6 +1247,8 @@ async function boot() {
   document.body.classList.toggle('chrome', !!showChrome);
   if (me && $('#role-chip')) $('#role-chip').textContent = me.role === 'admin' ? 'Admin' : 'Encargado';
   route();
+  // Gerencia: número de alertas de Calidad en el menú (nuevo no conforme, lotes detenidos…).
+  if (me?.role === 'admin') api('/api/calidad').then(c => { alertN = c.alertas.length; renderNav(navOf(location.hash.slice(2).split('/')[0])); }).catch(() => {});
 }
 async function logout() { await api('/api/logout', {}).catch(() => {}); me = null; history.replaceState(null, '', location.pathname); boot(); }
 

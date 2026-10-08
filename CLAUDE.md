@@ -28,7 +28,7 @@ App web para **Retrabajos Industriales y Limpiezas Especializadas Polar**: los e
 | `app.mjs` | Toda la lógica y la API (`/api/*`). Esquema del formulario `FORM`, validación, cálculos, IA. Recibe un adaptador de base async `{ get, all, run }` y uno de fotos `{ put, get }`. |
 | `worker.mjs` | Arranque en Cloudflare: adaptadores D1 y R2 + archivos de `public/` (vía `ASSETS`). |
 | `server.mjs` | Arranque local: Node + SQLite (`data.db`), puertos 3000 (app) y 3001 (admin). Útil para desarrollo. |
-| `schema.sql` | Tablas: users, sessions (vencen a los 30 días), reports, weekly, trucks, settings, login_fails. |
+| `schema.sql` | Tablas: users, sessions (vencen a los 30 días), reports, weekly, trucks, settings, login_fails; Calidad: qrecords, lots, counters, alerts. |
 | `test.mjs` | Prueba de la API y los cálculos con SQLite en memoria: `node test.mjs`. |
 | `public/app.js` | Toda la interfaz (SPA con hash routing, Tailwind por CDN). La comparten `index.html` (app/teléfono) y `admin.html` (panel web). |
 
@@ -36,8 +36,10 @@ App web para **Retrabajos Industriales y Limpiezas Especializadas Polar**: los e
 - **Formulario PL-FOR-26** (13 secciones) definido en `FORM` (`app.mjs`). Campos `auto: true` los calcula el servidor:
   - Vehículos: km inicial = km final anterior de la unidad; recorrido = final − inicial. Solo se aceptan **camiones registrados de la planta**.
   - Gas: casillas N/A (tanque que no aplica / "no hubo carga") vía `disables`.
-  - Material (sección 7, diseño del boceto "[33] piezas modelo/No. Parte [r6gk]"): saldo en planta = saldo anterior + piezas − entregado;
-    pendientes por procesar = pendientes anteriores + piezas − procesado. Ambos se arrastran por planta + cliente + pieza.
+  - Material (sección 7): **recibido y entregado del día salen de Calidad** (REC y entregas de LIB, `movimientos()`), no se capturan;
+    el encargado solo anota lo procesado. Saldo en planta = saldo anterior + recibido − entregado; pendientes por procesar =
+    pendientes anteriores + recibido − procesado (se arrastran por planta + cliente + pieza). Los movimientos del día cuentan solo
+    en el primer reporte de la planta ese día.
   - Mantenimiento: los pendientes abiertos del último reporte de la planta se copian solos.
   - Totales de hornos/ciclos, gastos y gas; químicos PT/A pasan a "químicos que hay que pedir".
   - Fotos (`type: 'photos'`, en gas, visitas, incidencias y gastos): el teléfono las reduce a JPEG ≤1600 px, se suben a `/api/upload`
@@ -61,8 +63,26 @@ App web para **Retrabajos Industriales y Limpiezas Especializadas Polar**: los e
 - Vista de **computadora** (≥1024px): menú lateral y más columnas, con clases `lg:` + `WIDE` en `public/app.js`; teléfono sin cambios.
 
 ## Cómo probar
-`node test.mjs` (base en memoria, sin IA) cubre cálculos, permisos, edición, fotos y login. Además: scripts de Node contra la API
+`node test.mjs` (base en memoria, sin IA) cubre cálculos, permisos, edición, fotos, login y el flujo de Calidad (REC → LIB → NC). Además: scripts de Node contra la API
 (`fetch`) usando cuentas temporales `tmp*@polar.test` que se borran al final, y el navegador. Nunca dejar datos de prueba en producción.
+
+## Calidad ISO 9001 (etapa 1)
+Especificación: `Modificaciones App Polar/MOD_APP_POLAR_SGC_ISO9001.md` (pedido de Rodrigo, con etapas 1-3 y criterios de aceptación).
+- Formatos `QFORMS` en `app.mjs` (mismo esquema que `FORM`): **PL-FOR-28 Recepción (REC)**, **PL-FOR-29 Inspección y liberación (LIB)**,
+  **PL-FOR-30 No conforme (NC)**. Folios `REC-0001`… consecutivos por tipo (`counters`, `INSERT … RETURNING`), no editables.
+- Cada partida de REC crea un **lote POLAR** `QRO|SIL-AAAAMMDD-NN` (tabla `lots`): EN PLANTA → LIBERADO / RETENIDO → ENTREGADO.
+- Reglas: REC con diferencia o algún "No" → aviso + botón "Crear no conforme" precargado. LIB con algún NOK no permite LIBERADO;
+  NOK o RETENIDO → lote RETENIDO y pide NC. No se entrega sin LIBERADO (`entregaDe`). NC abierto retiene sus lotes; al cerrarlo
+  (con fecha) vuelven a EN PLANTA (`syncLots`). 8D sugerido: lo detectó el cliente, >1 lote, daño con costo, o mismo cliente + tipo en 90 días.
+- Alertas dentro de la app (`alerts`, solo gerencia/admin, insignia en el menú "Calidad"): nuevo NC; además se calculan: lote > 7 días
+  EN PLANTA (`LOT_DAYS`) y lote RETENIDO sin NC abierto.
+- Catálogo de clientes por planta con especificación particular (criterio 7) y teléfono de gerencia (franja roja de emergencia):
+  `settings.calidad`, se edita en Calidad (admin). Inicial: KH México y Mitchell (Querétaro), Summit Silao y Summit Guanajuato (Silao).
+- Encargado: solo su planta; admin (= gerencia): todas. Documento imprimible de cada registro con pie "Documento controlado".
+- Decisiones de las dudas del documento (sección 12), ajustables: lote `PLANTA-AAAAMMDD-consecutivo`, alerta a los 7 días, firma = usuario que guarda.
+- **Pendiente (etapas 2 y 3):** quejas PL-FOR-31, check lists PL-FOR-21 a 24, pláticas PL-FOR-25, calibración PL-FOR-36, tablero de
+  indicadores, lista maestra de documentos (consulta de PDF), formatos de gerencia (8D, auditorías, proveedores, revisión por la dirección),
+  correo a gerencia, rol "administración".
 
 ## Pendientes conocidos
 - No existe "olvidé mi contraseña" por correo (el admin pone una nueva).
