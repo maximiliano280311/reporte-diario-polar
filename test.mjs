@@ -172,8 +172,10 @@ assert.equal((await call('POST', '/api/form-config/preview', { config: {} }, bet
 
 // ---------- Nómina: solo admin y encargados con acceso; el encargado ve su planta y nunca montos ----------
 const beto2 = await login('beto@polar.test');
-assert.equal((await call('GET', '/api/nomina', null, beto2)).status, 403); // sin acceso asignado
 const betoId = (await ok('GET', '/api/users', null, admin)).data.find(u => u.email === 'beto@polar.test').id;
+await ok('GET', '/api/nomina', null, beto2); // el encargado nuevo ya trae acceso
+await ok('POST', '/api/users/nomina', { id: betoId, nomina: false }, admin);
+assert.equal((await call('GET', '/api/nomina', null, beto2)).status, 403); // el admin se lo quitó
 await ok('POST', '/api/users/nomina', { id: betoId, nomina: true }, admin);
 assert.equal((await call('POST', '/api/users/nomina', { id: betoId, nomina: true }, beto2)).status, 403); // asignar es solo del admin
 await ok('POST', '/api/nomina/emp', { nombre: 'Luis', planta: 'Querétaro', sueldo: 2400, bono: 500, ingreso: '2024-01-15' }, admin);

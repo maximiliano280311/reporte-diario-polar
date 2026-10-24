@@ -599,8 +599,9 @@ export function createApp({ db, files, env = {} }) {
       throw httpError(400, 'Nombre, correo válido y contraseña de al menos 8 caracteres son obligatorios');
     if (await db.get('SELECT 1 FROM users WHERE email = ?', e)) throw httpError(409, 'Ese correo ya está registrado');
     if (plant !== null && !PLANTS.includes(plant)) throw badPlant();
-    return (await db.run('INSERT INTO users(name, email, pass, role, status, plant) VALUES (?, ?, ?, ?, ?, ?)',
-      String(name).trim().slice(0, 80), e, hash(String(password)), role, status, plant)).lastInsertRowid;
+    // Todo encargado nuevo nace con acceso a nómina (sin montos); el admin se lo puede quitar en Cuentas.
+    return (await db.run('INSERT INTO users(name, email, pass, role, status, plant, nomina) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      String(name).trim().slice(0, 80), e, hash(String(password)), role, status, plant, role === 'colaborador' ? 1 : 0)).lastInsertRowid;
   }
   // La cookie de sesión la agrega handleApi() a la respuesta; Secure cuando el sitio va por https (Cloudflare).
   async function startSession(req, out, userId) {

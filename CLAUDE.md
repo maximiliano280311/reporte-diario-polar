@@ -63,7 +63,7 @@ App web para **Retrabajos Industriales y Limpiezas Especializadas Polar**: los e
 - Vista de **computadora** (≥1024px): menú lateral y más columnas, con clases `lg:` + `WIDE` en `public/app.js`; teléfono sin cambios.
 
 - **Nómina** (`#/nomina/<pestaña>`, antes el artefacto "Nómina POLAR"): tablas `nom_emps`, `nom_incs`, `nom_cierres`; config en `settings.nomina`.
-  El admin ve todo (pestaña Nómina con totales, cierres, sueldos y parámetros). El encargado solo entra si el admin le marca "Nómina" en Cuentas
+  El admin ve todo (pestaña Nómina con totales, cierres, sueldos y parámetros). Todo encargado nuevo trae acceso; el admin lo quita o lo da con la casilla "Nómina" en Cuentas
   (`users.nomina`) y ve Capturar, Incidencias, Bonos, Vacaciones y Empleados **de su planta y sin montos**: el servidor quita sueldos y la cantidad
   de bonos/descuentos (`empOut` / `incOut`). Áreas: Querétaro, Silao y Administración. El cálculo de la semana lo hace el panel del admin.
 
