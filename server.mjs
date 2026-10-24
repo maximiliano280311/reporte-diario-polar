@@ -13,7 +13,7 @@ const sqlite = new DatabaseSync('data.db');
 sqlite.exec(readFileSync(new URL('./schema.sql', import.meta.url), 'utf8'));
 // Bases creadas con versiones anteriores: agregar las columnas que falten.
 for (const sql of ['ALTER TABLE users ADD COLUMN plant TEXT', 'ALTER TABLE reports ADD COLUMN plant TEXT', "ALTER TABLE users ADD COLUMN status TEXT NOT NULL DEFAULT 'activo'",
-  'ALTER TABLE sessions ADD COLUMN created INTEGER NOT NULL DEFAULT 0'])
+  'ALTER TABLE sessions ADD COLUMN created INTEGER NOT NULL DEFAULT 0', 'ALTER TABLE users ADD COLUMN nomina INTEGER NOT NULL DEFAULT 0'])
   try { sqlite.exec(sql); } catch {} // ya existe
 const db = {
   get: async (sql, ...p) => sqlite.prepare(sql).get(...p),

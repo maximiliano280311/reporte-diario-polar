@@ -149,6 +149,16 @@ const QFORMS = {
 };
 
 
+// ---------- Nómina (antes el artefacto "Nómina POLAR") ----------
+// El admin ve todo (pestaña Nómina, sueldos, cierres). El encargado con acceso (users.nomina = 1) captura y consulta
+// solo su planta y nunca recibe montos: el servidor quita sueldos y la cantidad de las incidencias en pesos.
+const NOM_AREAS = [...PLANTS, 'Administración'];
+const NOM_TIPOS = ['falta', 'retardo', 'permiso_sg', 'permiso_cg', 'incapacidad', 'vacacion', 'te', 'dia_extra', 'bono', 'bono_puntualidad', 'descuento'];
+const NOM_PESOS = ['bono', 'bono_puntualidad', 'descuento']; // su cantidad es dinero
+const NOM_MONEY = ['sueldo', 'te', 'teModo', 'bono']; // campos del empleado que solo ve el admin
+const NOM_CONFIG = { porcentaje: 4, diasDivisor: 6, horasJornada: 8, factorTE: 2, bonoDefault: 500, inicio: { Querétaro: 6, Silao: 0, Administración: 1 } };
+const isDate = s => /^\d{4}-\d{2}-\d{2}$/.test(String(s ?? ''));
+
 // Entrega de un lote: va completa (fecha, remisión POLAR, quién recibió) o vacía, y solo si el lote se libera.
 function entregaDe(a, libera) {
   if (!(a.entrega_fecha || a.remision_polar || a.recibio || a.foto_remision?.length)) return false;
@@ -414,10 +424,173 @@ export function createApp({ db, files, env = {} }) {
 
   const userOf = req => {
     const t = /(?:^|;\s*)sid=([a-f0-9]+)/.exec(req.headers.get('cookie') || '')?.[1];
-    return t ? db.get("SELECT u.id, u.name, u.email, u.role, u.plant FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token = ? AND s.created > ? AND u.status = 'activo'",
+    return t ? db.get("SELECT u.id, u.name, u.email, u.role, u.plant, u.nomina FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token = ? AND s.created > ? AND u.status = 'activo'",
       t, Date.now() - SESSION_MS) : null;
   };
   const adminOnly = fn => (req, user, out) => user.role !== 'admin' ? json(403, { error: 'Solo admin' }) : fn(req, user, out);
+
+  // ---------- Nómina ----------
+  const nomOnly = fn => (req, user, out) => user.role === 'admin' || user.nomina ? fn(req, user, out) : json(403, { error: 'No tienes acceso a nómina. Pídeselo al administrador.' });
+  const nomConfig = async () => ({ ...NOM_CONFIG, ...JSON.parse((await db.get("SELECT value FROM settings WHERE key = 'nomina'"))?.value || '{}') });
+  // Empleado que el usuario puede ver (encargado: solo los de su planta).
+  async function nomEmp(id, user) {
+    const r = await db.get('SELECT * FROM nom_emps WHERE id = ?', Number(id));
+    if (!r || (user.role !== 'admin' && r.area !== user.plant)) throw httpError(404, 'Empleado no encontrado');
+    return { id: r.id, ...JSON.parse(r.data), planta: r.area };
+  }
+  const empOut = (e, user) => {
+    if (user.role === 'admin') return e;
+    const out = { ...e, conBono: Number(e.bono) > 0 };
+    for (const k of NOM_MONEY) delete out[k];
+    return out;
+  };
+  const incOut = (r, user) => {
+    const i = { id: r.id, empleadoId: r.emp_id, tipo: r.tipo, fecha: r.fecha, aplicado: !!r.aplicado, creadoPor: r.creador, creadoEn: r.created_at, ...JSON.parse(r.data) };
+    if (user.role !== 'admin' && NOM_PESOS.includes(i.tipo)) delete i.cantidad;
+    return i;
+  };
+  const incRow = async id => {
+    const r = await db.get('SELECT i.*, a.area FROM nom_incs i JOIN nom_emps a ON a.id = i.emp_id WHERE i.id = ?', Number(id));
+    if (!r) throw httpError(404, 'Incidencia no encontrada');
+    return r;
+  };
+  // Valida una incidencia nueva o editada. old: la que se edita (el encargado no ve ni cambia montos).
+  function cleanInc(b, user, old) {
+    const admin = user.role === 'admin', tipo = admin || !old ? b.tipo : old.tipo;
+    if (!NOM_TIPOS.includes(tipo) || (!admin && tipo === 'bono_puntualidad')) throw httpError(400, 'Tipo de incidencia no válido');
+    if (!isDate(b.fecha)) throw httpError(400, 'Revisa la fecha');
+    const keep = !admin && old && NOM_PESOS.includes(tipo), cantidad = keep ? old.cantidad : Number(b.cantidad);
+    if (!(cantidad > 0) || cantidad > 1_000_000) throw httpError(400, 'Revisa la cantidad');
+    const nota = String(b.nota ?? '').trim().slice(0, 240);
+    if (tipo === 'bono' && !nota) throw httpError(400, 'Escribe por qué se le da el bono');
+    // "Ya se le pagó en efectivo": solo el admin y solo en lo que suma (queda registrado como pagado).
+    const efectivo = admin ? !!b.efectivo && ['te', 'dia_extra', 'bono'].includes(tipo) : !!old?.efectivo;
+    return { tipo, fecha: b.fecha, data: { ...(old || {}), cantidad, nota, efectivo, ...(efectivo && !old && { aplicadoEn: 'efectivo' }) } };
+  }
+
+  const nomRoutes = {
+    // Todo lo de nómina que el usuario puede ver. Encargado: su planta y sin montos ni cierres.
+    'GET /api/nomina': nomOnly(async (req, user) => {
+      const admin = user.role === 'admin', areas = admin ? NOM_AREAS : [user.plant];
+      const inA = areas.map(() => '?').join(', ');
+      const emps = (await db.all(`SELECT * FROM nom_emps WHERE area IN (${inA})`, ...areas)).map(r => empOut({ id: r.id, ...JSON.parse(r.data), planta: r.area }, user));
+      const incs = (await db.all(`SELECT i.*, u.name AS creador FROM nom_incs i JOIN nom_emps a ON a.id = i.emp_id LEFT JOIN users u ON u.id = i.user_id
+        WHERE a.area IN (${inA}) AND (i.aplicado = 0 OR i.fecha >= ?) ORDER BY i.fecha DESC, i.id DESC`, ...areas, ymd(new Date(Date.now() - 400 * DAY)))).map(r => incOut(r, user));
+      const cierres = admin ? (await db.all('SELECT data FROM nom_cierres ORDER BY payday DESC LIMIT 120')).map(r => JSON.parse(r.data)) : [];
+      return json(200, { emps, incs, cierres, config: admin ? await nomConfig() : null, areas, admin });
+    }),
+
+    // Alta o cambio de empleado. El encargado no pone sueldos (se conservan los que puso el admin) y solo en su planta.
+    'POST /api/nomina/emp': nomOnly(async (req, user) => {
+      const b = await body(req), admin = user.role === 'admin', old = b.id ? await nomEmp(b.id, user) : null;
+      const s = (k, n = 80) => String(b[k] ?? '').trim().slice(0, n), n = k => Math.max(0, Number(b[k]) || 0);
+      const area = admin ? b.planta : user.plant;
+      if (!NOM_AREAS.includes(area)) throw httpError(400, 'Elige planta: Querétaro, Silao o Administración');
+      if (!s('nombre')) throw httpError(400, 'Escribe el nombre');
+      for (const k of ['ingreso', 'baja']) if (b[k] && !isDate(b[k])) throw httpError(400, 'Revisa las fechas');
+      const d = { nombre: s('nombre'), pago: b.pago === 'dia' ? 'dia' : 'semana', diasBase: Math.min(7, Math.max(1, n('diasBase') || 1)), ingreso: s('ingreso', 10),
+        baja: s('baja', 10), vacAjuste: Number(b.vacAjuste) || 0, menor: !!b.menor, notas: s('notas', 240) };
+      Object.assign(d, admin ? { sueldo: n('sueldo'), te: n('te'), teModo: b.teModo === 'manual' ? 'manual' : 'auto', bono: n('bono') }
+        : Object.fromEntries(NOM_MONEY.map(k => [k, old?.[k] ?? (k === 'teModo' ? 'auto' : 0)])));
+      if (old) await db.run('UPDATE nom_emps SET area = ?, data = ? WHERE id = ?', area, JSON.stringify(d), old.id);
+      else await db.run('INSERT INTO nom_emps(area, data) VALUES (?, ?)', area, JSON.stringify(d));
+      return json(200, { ok: true });
+    }),
+
+    // Captura: la misma incidencia para uno o varios empleados.
+    'POST /api/nomina/inc': nomOnly(async (req, user) => {
+      const b = await body(req), ids = [...new Set([].concat(b.emps ?? []).map(Number))].slice(0, 100);
+      if (!ids.length) throw httpError(400, 'Elige al menos un empleado');
+      const x = cleanInc(b, user);
+      for (const id of ids) await nomEmp(id, user); // todos visibles antes de guardar nada
+      for (const id of ids) await db.run('INSERT INTO nom_incs(emp_id, tipo, fecha, aplicado, data, user_id) VALUES (?, ?, ?, ?, ?, ?)',
+        id, x.tipo, x.fecha, x.data.efectivo ? 1 : 0, JSON.stringify(x.data), user.id);
+      return json(200, { ok: true, n: ids.length });
+    }),
+
+    // Editar / borrar: el encargado solo lo que aún no se paga y de su planta.
+    'POST /api/nomina/inc/edit': nomOnly(async (req, user) => {
+      const b = await body(req), r = await incRow(b.id), admin = user.role === 'admin';
+      if (!admin && (r.area !== user.plant || r.aplicado)) throw httpError(403, 'Solo puedes cambiar incidencias de tu planta que aún no se pagan');
+      const emp = await nomEmp(b.empleadoId ?? r.emp_id, user), x = cleanInc(b, user, { tipo: r.tipo, ...JSON.parse(r.data) });
+      delete x.data.tipo;
+      const aplicado = admin ? !!b.aplicado : !!r.aplicado;
+      if (admin) x.data.aplicadoEn = aplicado ? x.data.aplicadoEn || 'manual' : null;
+      await db.run('UPDATE nom_incs SET emp_id = ?, tipo = ?, fecha = ?, aplicado = ?, data = ? WHERE id = ?', emp.id, x.tipo, x.fecha, aplicado ? 1 : 0, JSON.stringify(x.data), r.id);
+      return json(200, { ok: true });
+    }),
+    'POST /api/nomina/inc/delete': nomOnly(async (req, user) => {
+      const r = await incRow((await body(req)).id);
+      if (user.role !== 'admin' && (r.area !== user.plant || r.aplicado)) throw httpError(403, 'Solo puedes borrar incidencias de tu planta que aún no se pagan');
+      await db.run('DELETE FROM nom_incs WHERE id = ?', r.id);
+      return json(200, { ok: true });
+    }),
+
+    // Bono de puntualidad del mes: el monto sale del empleado (el encargado lo agrega sin verlo). Uno por mes.
+    'POST /api/nomina/bono': nomOnly(async (req, user) => {
+      const b = await body(req), mes = String(b.mes ?? '');
+      if (!/^\d{4}-\d{2}$/.test(mes)) throw httpError(400, 'Mes no válido');
+      let n = 0;
+      for (const id of [...new Set([].concat(b.emps ?? []).map(Number))].slice(0, 200)) {
+        const e = await nomEmp(id, user);
+        if (!(Number(e.bono) > 0)) continue;
+        const ya = (await db.all("SELECT data FROM nom_incs WHERE emp_id = ? AND tipo = 'bono_puntualidad'", e.id)).some(r => JSON.parse(r.data).mes === mes);
+        if (ya) continue;
+        await db.run("INSERT INTO nom_incs(emp_id, tipo, fecha, data, user_id) VALUES (?, 'bono_puntualidad', ?, ?, ?)", e.id, ymd(),
+          JSON.stringify({ cantidad: Number(e.bono), mes, nota: `Bono de puntualidad ${mes}` }), user.id);
+        n++;
+      }
+      return json(200, { ok: true, n });
+    }),
+
+    // Pagar después / incluir esta semana (solo admin).
+    'POST /api/nomina/inc/diferir': adminOnly(async req => {
+      const r = await incRow((await body(req)).id), d = JSON.parse(r.data);
+      await db.run('UPDATE nom_incs SET data = ? WHERE id = ?', JSON.stringify({ ...d, diferido: !d.diferido }), r.id);
+      return json(200, { ok: true });
+    }),
+
+    // Cerrar semana: guarda la foto de la nómina (la calcula el panel del admin) y marca como pagadas sus incidencias.
+    'POST /api/nomina/cerrar': adminOnly(async req => {
+      const b = await body(req);
+      if (!isDate(b.payday)) throw httpError(400, 'Semana no válida');
+      const incIds = [].concat(b.incIds ?? []).map(Number).filter(Boolean);
+      try { await db.run('INSERT INTO nom_cierres(payday, data) VALUES (?, ?)', b.payday, JSON.stringify({ ...b, incIds, cerradaEn: new Date().toISOString() })); }
+      catch (e) { if (String(e.message).includes('UNIQUE')) throw httpError(409, 'Esa semana ya está cerrada'); throw e; }
+      for (const id of incIds) {
+        const r = await db.get('SELECT data FROM nom_incs WHERE id = ? AND aplicado = 0', id);
+        if (r) await db.run('UPDATE nom_incs SET aplicado = 1, data = ? WHERE id = ?', JSON.stringify({ ...JSON.parse(r.data), aplicadoEn: b.payday, diferido: false }), id);
+      }
+      return json(200, { ok: true });
+    }),
+    'POST /api/nomina/reabrir': adminOnly(async req => {
+      const { payday } = await body(req), c = await db.get('SELECT data FROM nom_cierres WHERE payday = ?', String(payday ?? ''));
+      if (!c) throw httpError(404, 'Esa semana no está cerrada');
+      for (const id of JSON.parse(c.data).incIds || []) {
+        const r = await db.get('SELECT data FROM nom_incs WHERE id = ?', id), d = r && JSON.parse(r.data);
+        if (d?.aplicadoEn === payday) await db.run('UPDATE nom_incs SET aplicado = 0, data = ? WHERE id = ?', JSON.stringify({ ...d, aplicadoEn: null }), id);
+      }
+      await db.run('DELETE FROM nom_cierres WHERE payday = ?', payday);
+      return json(200, { ok: true });
+    }),
+
+    // Parámetros de cálculo y corte de semana por área (solo admin).
+    'POST /api/nomina/config': adminOnly(async req => {
+      const b = (await body(req)).config || {}, c = await nomConfig(), pos = v => Number(v) > 0 ? Number(v) : null;
+      for (const k of ['diasDivisor', 'horasJornada', 'factorTE']) c[k] = pos(b[k]) ?? c[k];
+      for (const k of ['porcentaje', 'bonoDefault']) if (Number(b[k]) >= 0) c[k] = Number(b[k]);
+      for (const a of NOM_AREAS) { const d = Number(b.inicio?.[a]); if (Number.isInteger(d) && d >= 0 && d <= 6) c.inicio = { ...c.inicio, [a]: d }; }
+      await db.run("INSERT INTO settings(key, value) VALUES ('nomina', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value", JSON.stringify(c));
+      return json(200, c);
+    }),
+
+    // Dar o quitar a un encargado el acceso a nómina (solo admin; los admins ya ven todo).
+    'POST /api/users/nomina': adminOnly(async req => {
+      const { id, nomina } = await body(req);
+      await db.run("UPDATE users SET nomina = ? WHERE id = ? AND status = 'activo'", nomina ? 1 : 0, Number(id));
+      return json(200, { ok: true });
+    }),
+  };
 
   // Valida y crea una cuenta (autoregistro o creada por el admin).
   async function createUser({ name = '', email = '', password = '' }, role, status, plant = null) {
@@ -438,6 +611,7 @@ export function createApp({ db, files, env = {} }) {
   }
 
   const routes = {
+    ...nomRoutes,
     'GET /api/questions': async () => json(200, await currentForm()),
 
     // Valores que se llenan solos en el formulario (km inicial, sugerencias, pendientes abiertos).
@@ -451,7 +625,7 @@ export function createApp({ db, files, env = {} }) {
       const mov = plant ? await movimientos(plant, q.get('fecha') || ymd()) : {};
       const catalogo = (await getCalidad()).clientes.filter(c => c.plant === plant).map(c => c.name);
       const porProcesar = mats.filter(m => num(m.pendientes) > 0).map(({ cliente, pieza }) => ({ cliente, pieza })); // renglones iniciales de la sección 7
-      return json(200, { km, pendientes, pend, trucks, mov, porProcesar, lists: {
+      return json(200, { km, pendientes, pend, trucks, mov, porProcesar, tel: (await getCalidad()).tel, lists: {
         clientes: [...new Set([...catalogo, ...mats.map(m => m.cliente).filter(Boolean)])], piezas: [...new Set(mats.map(m => m.pieza).filter(Boolean))] } });
     },
 
@@ -523,7 +697,8 @@ export function createApp({ db, files, env = {} }) {
       try {
         id = (await db.run('INSERT INTO reports(user_id, date, answers, plant) VALUES (?, ?, ?, ?)', user.id, ymd(), JSON.stringify(a), plant)).lastInsertRowid;
       } catch (e) {
-        if (String(e.message).includes('UNIQUE')) return json(409, { error: 'Ya enviaste tu reporte de hoy' });
+        // id: la app ofrece corregir el que ya está (lo escrito queda en el borrador).
+        if (String(e.message).includes('UNIQUE')) return json(409, { error: 'Ya enviaste tu reporte de hoy.', id: (await db.get('SELECT id FROM reports WHERE user_id = ? AND date = ?', user.id, ymd()))?.id });
         throw e;
       }
       await grade(id, a, form);
@@ -723,7 +898,7 @@ export function createApp({ db, files, env = {} }) {
 
     // ---- Cuentas (solo admin) ----
     'GET /api/users': adminOnly(async (req, user) => json(200,
-      await db.all("SELECT id, name, email, plant, role, status FROM users WHERE id != ? AND status != 'eliminado' ORDER BY status = 'pendiente' DESC, name", user.id))),
+      await db.all("SELECT id, name, email, plant, role, status, nomina FROM users WHERE id != ? AND status != 'eliminado' ORDER BY status = 'pendiente' DESC, name", user.id))),
 
     // Cambiar rol (encargado ↔ admin). Aplica en la siguiente petición: el rol se lee de la base en cada una.
     'POST /api/users/role': adminOnly(async (req, user) => {

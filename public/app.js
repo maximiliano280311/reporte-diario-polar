@@ -62,7 +62,7 @@ async function api(path, data) {
   const r = await fetch(path, data ? { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) } : {});
   const j = await r.json().catch(() => ({}));
   if (r.status === 401 && !path.includes('login') && path !== '/api/me') { me = null; location.hash = '#/login'; }
-  if (!r.ok) throw new Error(j.error || 'Error inesperado');
+  if (!r.ok) throw Object.assign(new Error(j.error || 'Error inesperado'), { data: j }); // data: p. ej. el id del reporte que ya existe
   return j;
 }
 let me = null, questions = [], reports = [];
@@ -392,6 +392,8 @@ const views = {
         <p class="text-label-sm text-on-surface-variant">${nLot('EN PLANTA')} lotes en planta · ${nLot('RETENIDO')} retenidos · ${nLot('LIBERADO')} por entregar
           ${cal.alertas.length ? `· <a href="#/calidad" class="text-error font-semibold">⚠ ${cal.alertas.length} ${cal.alertas.length === 1 ? 'alerta' : 'alertas'}</a>` : ''}</p>
       </div>` : ''}
+      <div class="grid grid-cols-2 gap-2">${['Mantenimiento PL-FOR-35', 'Check list vehículos PL-FOR-21/24', 'Check list horno y gas PL-FOR-22/23',
+        'Plática / capacitación PL-FOR-25', 'Documentos'].map(t => `<button type="button" disabled class="p-3 rounded-lg bg-surface-container text-on-surface-variant/60 text-label-sm text-left cursor-not-allowed">${t}<br><span class="text-[10px]">Próximamente</span></button>`).join('')}</div>
       <div class="grid grid-cols-2 gap-space-md">
         <div class="flex flex-col justify-between p-space-md rounded-xl bg-surface-container-lowest shadow-sm">
           <div class="flex items-center justify-between">
@@ -498,6 +500,7 @@ const views = {
     const veh = questions.find(s => s.table?.id === 'vehiculos')?.table.cols.find(c => c.id === 'vehiculo');
     if (veh) veh.options = d.trucks.map(t => t.name);
     $('#app').innerHTML = `
+    <div class="mb-3">${emergencia(d.tel)}</div>
     <p class="text-label-sm font-semibold text-primary">PL-FOR-26 · REV. 06</p>
     <h1 class="text-headline-lg-mobile tracking-tight">${edit ? 'Corregir reporte' : 'Reporte diario de operación'}</h1>
     <p class="text-body-md text-on-surface-variant mb-4">${fdate(edit?.date || ymd())}${edit ? ` · Planta ${esc(edit.plant || '—')} · ${esc(edit.name)}` : me.plant ? ' · Planta ' + esc(me.plant) : ''}</p>
@@ -583,7 +586,11 @@ const views = {
           ${r.feedback ? `<div class="card p-4 text-left w-full mt-2"><p class="text-xs font-semibold text-primary flex items-center gap-1"><span class="material-symbols-outlined text-[16px]">lightbulb</span>Cómo mejorar</p><p class="text-sm mt-1">${esc(r.feedback)}</p></div>` : ''}
           <a href="#/${me.role === 'admin' ? 'admin' : 'inicio'}" class="btn btn-primary w-full mt-2">${me.role === 'admin' ? 'Volver a reportes' : 'Volver al inicio'}</a>
         </div>`;
-      } catch (err) { showErr(err); btn.disabled = false; btn.innerHTML = label; }
+      } catch (err) {
+        showErr(err); btn.disabled = false; btn.innerHTML = label;
+        // Ya hay reporte de la planta hoy: se ofrece corregirlo (lo escrito queda en el borrador).
+        if (err.data?.id) $('#err').insertAdjacentHTML('beforeend', ` <a href="#/editar/${Number(err.data.id)}" class="font-semibold underline">Corregir el reporte de hoy</a>`);
+      }
     };
   },
   editar: id => views.nuevo(id),
@@ -616,9 +623,26 @@ const views = {
     // Se puede corregir el último reporte de cada planta (vienen del más reciente al más viejo).
     const latest = new Set(Object.values(Object.fromEntries([...week].reverse().map(r => [r.plant, r.id]))));
     const tables = questions.filter(s => s.table);
+    // Semáforo de gerencia (MOD-005): sale del último reporte de cada planta en la semana.
+    const last = PLANTS.map(p => week.find(r => r.plant === p)).filter(Boolean);
+    const rows = (list, id, keep, txt) => list.flatMap(r => (r.answers[id] || []).filter(keep).map(x => `${r.plant} · ${txt(x, r)}`));
+    const abiertos = rows(last, 'mantenimiento', m => m.estatus !== 'Cerrado', m => `${m.equipo || ''} — ${m.falla || ''}`);
+    const luces = [
+      ['Plantas sin reporte hoy', PLANTS.filter(p => !today.some(r => r.plant === p)), 'red'],
+      ['Pendientes de mantenimiento abiertos', abiertos, 'yellow'],
+      ['Pendientes con más de 7 días', rows(last, 'mantenimiento', m => m.estatus !== 'Cerrado' && m.detectado && m.detectado < daysAgo(7), m => `${m.equipo || ''} — ${m.falla || ''} (desde ${m.detectado.split('-').reverse().join('/')})`), 'red'],
+      ['Incidencias críticas de la semana', rows(week, 'incidencias', i => ['GA', 'EL', 'SE'].includes(i.tipo), (i, r) => `${r.date.split('-').reverse().join('/')} ${i.tipo}: ${i.que_paso || ''}`), 'red'],
+      ['Químicos por pedir', rows(last, 'quimicos', q => ['PT', 'A'].includes(q.existencia), q => `${q.quimico} (${q.existencia})`), 'yellow'],
+      ['Vehículos con check list vencido', rows(last, 'vehiculos', v => v.vehiculo && (!v.checklist || v.checklist < daysAgo(7)), v => `${v.vehiculo} (${v.checklist ? v.checklist.split('-').reverse().join('/') : 'sin registro'})`), 'red']];
     $('#app').innerHTML = `
     <h1 class="${WIDE ? 'text-3xl font-bold' : 'text-2xl font-semibold'} tracking-tight">Reportes del equipo</h1>
     <p class="text-sm text-on-surface-variant">${fdate(ymd())}</p>
+    <div class="grid grid-cols-1 sm:grid-cols-2 ${WIDE ? 'lg:grid-cols-3' : ''} gap-2 mt-4">
+      ${luces.map(([l, items, mal]) => `<details class="card p-3"><summary class="flex items-center gap-2 cursor-pointer text-sm font-medium">
+        <span class="w-3 h-3 rounded-full shrink-0 ${items.length ? (mal === 'red' ? 'bg-red-600' : 'bg-amber-400') : 'bg-green-600'}"></span>
+        <span class="flex-1">${l}</span><span class="font-bold">${items.length}</span></summary>
+        <ul class="mt-2 text-[12px] text-on-surface-variant list-disc pl-5">${items.map(t => `<li>${esc(t)}</li>`).join('') || '<li>Todo en orden</li>'}</ul></details>`).join('')}
+    </div>
     <div class="grid ${WIDE ? 'grid-cols-4' : 'grid-cols-3'} gap-3 my-4">
       ${[['Reportaron hoy', `${today.length}/${users.length}`, 'today'], ['Reportes 7 días', week.length, 'date_range'],
          ['Calidad prom. semana', avg(week.map(r => r.score)) ?? '—', 'grade'],
@@ -749,7 +773,8 @@ const views = {
               <form data-pass="${u.id}" class="flex flex-wrap gap-2 mt-2"><input class="input !py-2 flex-1 min-w-[140px]" name="password" type="text" required minlength="8" autocomplete="off" placeholder="Nueva (mín. 8)" aria-label="Contraseña nueva de ${esc(u.name)}">
                 <button class="btn btn-primary !min-h-0 !py-2">Guardar</button></form></details></td>
           <td class="pr-2">${esc(u.plant || '—')}</td><td class="pr-2"><select data-role-user="${u.id}" class="input !py-2 !px-3 w-auto" aria-label="Rol de ${esc(u.name)}">
-            ${[['colaborador', 'Encargado'], ['admin', 'Admin']].map(([v, l]) => `<option value="${v}" ${u.role === v ? 'selected' : ''}>${l}</option>`).join('')}</select></td>
+            ${[['colaborador', 'Encargado'], ['admin', 'Admin']].map(([v, l]) => `<option value="${v}" ${u.role === v ? 'selected' : ''}>${l}</option>`).join('')}</select>
+            ${u.role === 'colaborador' ? `<label class="flex items-center gap-2 mt-1 text-label-sm whitespace-nowrap" title="Puede capturar incidencias, bonos, vacaciones y empleados de su planta (sin ver sueldos)"><input type="checkbox" data-nom-user="${u.id}" ${u.nomina ? 'checked' : ''} class="w-4 h-4 accent-[#2563eb]">Nómina</label>` : ''}</td>
           <td class="text-right"><button data-del-user="${u.id}" class="text-label-sm text-error font-semibold inline-flex items-center gap-1 px-2 py-2 rounded-lg hover:bg-error-container whitespace-nowrap" aria-label="Eliminar a ${esc(u.name)}"><span class="material-symbols-outlined text-[18px]">delete</span>Eliminar</button></td></tr>`).join('')}</tbody></table>`
           : '<p class="text-sm text-on-surface-variant">Aún no hay otras cuentas.</p>'}
       </section>
@@ -771,6 +796,8 @@ const views = {
       try { await api('/api/users/delete', { id: btn.dataset.delUser }); views.cuentas(); } catch (err) { fail(err); btn.disabled = false; }
     };
     $('#act').onchange = async e => {
+      const nom = e.target.closest('[data-nom-user]');
+      if (nom) return api('/api/users/nomina', { id: nom.dataset.nomUser, nomina: nom.checked }).catch(err => { fail(err); nom.checked = !nom.checked; });
       const sel = e.target.closest('[data-role-user]');
       if (!sel) return;
       sel.disabled = true;
@@ -1201,15 +1228,439 @@ function reportCard(r, admin = false, canEdit = false) {
   </details>`;
 }
 
+// ---------- Nómina (antes el artefacto "Nómina POLAR") ----------
+// Admin: todo (pestaña Nómina con totales, sueldos, cierres y parámetros). Encargado con acceso (Cuentas → Nómina):
+// Capturar, Incidencias, Bonos, Vacaciones y Empleados de su planta, sin montos — el servidor ni siquiera los manda.
+const NT = {
+  falta: { l: 'Falta', u: 'días', s: -1, b: 'dia', quita: 1 }, retardo: { l: 'Retardo', u: 'veces', s: 0, quita: 1 },
+  permiso_sg: { l: 'Permiso sin goce', u: 'días', s: -1, b: 'dia', quita: 1 }, permiso_cg: { l: 'Permiso con goce', u: 'días', s: 0 },
+  incapacidad: { l: 'Incapacidad', u: 'días', s: -1, b: 'dia', quita: 1 }, vacacion: { l: 'Vacaciones', u: 'días', s: 0 },
+  te: { l: 'Tiempo extra', u: 'horas', s: 1, b: 'hora' }, dia_extra: { l: 'Día extra / domingo', u: 'días', s: 1, b: 'dia' },
+  bono: { l: 'Bono', u: '$', s: 1, b: 'monto' }, bono_puntualidad: { l: 'Bono de puntualidad', u: '$', s: 1, b: 'monto' },
+  descuento: { l: 'Descuento / préstamo', u: '$', s: -1, b: 'monto' },
+};
+const CAP_TIPOS = ['falta', 'te', 'dia_extra', 'vacacion', 'retardo', 'permiso_cg', 'permiso_sg', 'incapacidad', 'bono', 'descuento'];
+const MOTIVOS = ['Productividad', 'Terminar trabajo urgente', 'Trabajo en fin de semana', 'Apoyo en otra planta', 'Desempeño del mes'];
+const MESL = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'];
+const DOWL = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'];
+const pdate = s => { const [a, b, c] = String(s).split('-').map(Number); return new Date(a, b - 1, c); };
+const addD = (s, n) => { const d = pdate(s); d.setDate(d.getDate() + n); return ymd(d); };
+const nextSat = s => { const d = pdate(s); while (d.getDay() !== 6) d.setDate(d.getDate() + 1); return ymd(d); };
+const weekNo = sat => { const f = new Date(pdate(sat).getFullYear(), 0, 1); while (f.getDay() !== 6) f.setDate(f.getDate() + 1); return Math.round((pdate(sat) - f) / 864e5 / 7) + 1; };
+const dBetween = (a, b) => Math.round((pdate(b) - pdate(a)) / 864e5);
+const fc = s => s ? fdate(s, { weekday: 'short', day: 'numeric', month: 'short' }) : '';
+const fcy = s => s ? fdate(s, { day: 'numeric', month: 'short', year: 'numeric' }) : '—';
+const r2 = n => Math.round((+n || 0) * 100) / 100;
+const mesL = m => `${MESL[+m.slice(5) - 1]} ${m.slice(0, 4)}`;
+const NTABS = [['nomina', 'Nómina'], ['capturar', 'Capturar'], ['incidencias', 'Incidencias'], ['bonos', 'Bonos'], ['vacaciones', 'Vacaciones'], ['empleados', 'Empleados']];
+let N = null; // estado de la pantalla (se conserva al cambiar de pestaña)
+
+const nomAdmin = () => N.d.admin;
+const nomEmps = (all = false) => {
+  const ord = N.d.areas;
+  return N.d.emps.filter(e => all || !e.baja || e.baja >= addD(ymd(), -60))
+    .sort((a, b) => ord.indexOf(a.planta) - ord.indexOf(b.planta) || a.nombre.localeCompare(b.nombre));
+};
+const empById = id => N.d.emps.find(e => e.id === Number(id));
+// Cálculos en pesos: solo el admin tiene los datos (config y sueldos).
+const P = () => ({ div: +N.d.config.diasDivisor || 6, hrs: +N.d.config.horasJornada || 8, fac: +N.d.config.factorTE || 2 });
+const salDiario = e => e.pago === 'dia' ? +e.sueldo || 0 : (+e.sueldo || 0) / P().div;
+const teManual = e => e.teModo === 'manual';
+const teFormula = e => r2(salDiario(e) / P().hrs * P().fac);
+const teRate = e => teManual(e) ? +e.te || 0 : teFormula(e);
+const amountOf = (i, e) => {
+  const t = NT[i.tipo];
+  if (!t?.s) return 0;
+  return r2(t.s * (+i.cantidad || 0) * (t.b === 'dia' ? salDiario(e) : t.b === 'hora' ? teRate(e) : 1));
+};
+// Periodo pagado: la semana del área que termina antes del sábado de pago.
+function periodo(area, payday) {
+  const end = (+(N.d.config.inicio?.[area] ?? 6) + 6) % 7, d = pdate(payday);
+  while (d.getDay() !== end) d.setDate(d.getDate() - 1);
+  return { ini: addD(ymd(d), -6), fin: ymd(d) };
+}
+// Renglones de la semana: sueldo base (proporcional si entró o salió a media semana) + incidencias sin pagar (las atrasadas se arrastran).
+function calcSemana(payday) {
+  return nomEmps(true).flatMap(e => {
+    const p = periodo(e.planta, payday);
+    if ((e.ingreso && e.ingreso > p.fin) || (e.baja && e.baja < p.ini)) return [];
+    let base;
+    if (e.pago === 'dia') base = (+e.sueldo || 0) * (+e.diasBase || 1);
+    else {
+      const dias = dBetween(e.ingreso > p.ini ? e.ingreso : p.ini, e.baja && e.baja < p.fin ? e.baja : p.fin) + 1;
+      base = dias >= 7 ? +e.sueldo || 0 : Math.min(P().div, dias) * salDiario(e);
+    }
+    const items = N.d.incs.filter(i => i.empleadoId === e.id && !i.aplicado && i.fecha <= p.fin).sort((a, b) => a.fecha.localeCompare(b.fecha));
+    const L = { e, p, base: r2(base), faltas: 0, te: 0, teH: 0, extras: 0, desc: 0, arr: 0, items, menor: false };
+    for (const i of items) {
+      i._amt = amountOf(i, e); i._arr = i.fecha < p.ini;
+      if (i.diferido) continue;
+      if (i._arr) L.arr += i._amt;
+      if (['falta', 'permiso_sg', 'incapacidad'].includes(i.tipo)) L.faltas += i._amt;
+      else if (i.tipo === 'te') { L.te += i._amt; L.teH += +i.cantidad || 0; }
+      else if (i.tipo === 'descuento') L.desc += i._amt;
+      else if (i._amt > 0) L.extras += i._amt;
+      if (e.menor && ['te', 'dia_extra'].includes(i.tipo)) L.menor = true;
+    }
+    L.total = r2(L.base + L.faltas + L.te + L.extras + L.desc);
+    return [L];
+  });
+}
+// Bono de puntualidad: se pierde con falta, retardo, permiso sin goce o incapacidad en el mes.
+function bonoStatus(e, mes) {
+  const ini = mes + '-01', fin = ymd(new Date(pdate(ini).getFullYear(), pdate(ini).getMonth() + 1, 0)), mine = N.d.incs.filter(i => i.empleadoId === e.id);
+  const ya = mine.find(i => i.tipo === 'bono_puntualidad' && i.mes === mes);
+  if (ya) return { st: 'ya', inc: ya };
+  if (e.pago === 'dia' || !(+e.bono > 0 || e.conBono)) return { st: 'na' };
+  if (e.ingreso && e.ingreso > ini) return { st: 'no', why: 'Entró el ' + fcy(e.ingreso) };
+  if (e.baja && e.baja < fin) return { st: 'no', why: 'Baja el ' + fcy(e.baja) };
+  const malas = mine.filter(i => NT[i.tipo]?.quita && i.fecha >= ini && i.fecha <= fin);
+  return malas.length ? { st: 'no', why: malas.map(i => `${NT[i.tipo].l} ${fc(i.fecha)}`).join(', ') } : { st: 'si' };
+}
+// Vacaciones LFT (reforma 2023): 12 el primer año, +2 por año hasta 20, luego +2 cada 5 años.
+const vacTabla = y => y < 1 ? 0 : y <= 5 ? 10 + 2 * y : y <= 10 ? 22 : y <= 15 ? 24 : y <= 20 ? 26 : y <= 25 ? 28 : y <= 30 ? 30 : 32;
+function vacInfo(e) {
+  if (!e.ingreso) return null;
+  const ing = pdate(e.ingreso), hoy = pdate(ymd());
+  let y = hoy.getFullYear() - ing.getFullYear();
+  if (new Date(hoy.getFullYear(), ing.getMonth(), ing.getDate()) > hoy) y--;
+  const ini = y >= 1 ? ymd(new Date(ing.getFullYear() + y, ing.getMonth(), ing.getDate())) : e.ingreso;
+  const prox = ymd(new Date(ing.getFullYear() + y + 1, ing.getMonth(), ing.getDate()));
+  const tomados = N.d.incs.filter(i => i.empleadoId === e.id && i.tipo === 'vacacion' && i.fecha >= ini && i.fecha < prox).reduce((s, i) => s + (+i.cantidad || 0), 0) + (+e.vacAjuste || 0);
+  return { anios: y, ini, prox, tocan: vacTabla(y), tomados, disp: vacTabla(y) - tomados, proxTocan: vacTabla(y + 1) };
+}
+// Texto de una incidencia; las de pesos sin monto para el encargado (el servidor no lo manda).
+const incLabel = i => { const t = NT[i.tipo] || { l: i.tipo, u: '' };
+  return `${t.l}${i.mes ? ' ' + mesL(i.mes) : ''}${i.cantidad == null ? '' : ' · ' + (t.u === '$' ? money(+i.cantidad) : `${+i.cantidad} ${t.u}`)}`; };
+const nChip = (txt, cls = 'bg-surface-container text-on-surface-variant') => `<span class="chip ${cls}">${esc(txt)}</span>`;
+const OKC = 'bg-secondary-container text-on-secondary-container', WARN = 'bg-tertiary-fixed text-on-tertiary-fixed', BAD = 'bg-error-container text-on-error-container';
+const tbl = (head, rows, empty) => `<div class="card overflow-x-auto"><table class="w-full text-sm"><thead><tr class="text-left text-[11px] uppercase tracking-wide text-on-surface-variant">${head.map(h => `<th class="px-3 py-2 font-semibold whitespace-nowrap ${h.startsWith('#') ? 'text-right' : ''}">${esc(h.replace('#', ''))}</th>`).join('')}</tr></thead>
+  <tbody>${rows || `<tr><td colspan="${head.length}" class="px-3 py-6 text-center text-on-surface-variant">${empty}</td></tr>`}</tbody></table></div>`;
+const td = (v, right) => `<td class="px-3 py-2 border-t border-[#f1f5f9] align-top ${right ? 'text-right tabular-nums whitespace-nowrap' : ''}">${v}</td>`;
+const sel = (attrs, opts, v) => `<select class="input" ${attrs}>${opts.map(([k, l]) => `<option value="${esc(k)}" ${String(k) === String(v) ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select>`;
+const weekNav = (act, title, sub, extra = '') => `<div class="flex flex-wrap items-center gap-3 mb-4">
+  <button type="button" data-act="${act}" data-d="-1" class="btn border-[1.5px] border-[#cbd5e1] !px-3" aria-label="Anterior"><span class="material-symbols-outlined">chevron_left</span></button>
+  <div class="min-w-0"><h2 class="text-headline-md">${title}</h2><p class="text-body-sm text-on-surface-variant">${sub}</p></div>
+  <button type="button" data-act="${act}" data-d="1" class="btn border-[1.5px] border-[#cbd5e1] !px-3" aria-label="Siguiente"><span class="material-symbols-outlined">chevron_right</span></button>${extra}</div>`;
+
+const nomTabs = {
+  nomina() {
+    const cierre = N.d.cierres.find(c => c.payday === N.payday), actual = N.payday === nextSat(ymd());
+    const head = weekNav('wk', `Semana ${weekNo(N.payday)}`, `Pago ${fc(N.payday)} ${pdate(N.payday).getFullYear()}${actual ? ' · semana actual' : ''}`,
+      `${actual ? '' : '<button type="button" data-act="wkhoy" class="text-label-md text-primary font-semibold">Ir a esta semana</button>'}<span class="ml-auto">${cierre ? nChip('Cerrada', OKC) : nChip('Abierta', WARN)}</span>`);
+    const pct = +N.d.config.porcentaje || 0;
+    const cards = xs => `<div class="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-4">${xs.map(([l, v, w]) => `<div class="card p-4"><p class="text-[11px] uppercase tracking-wide text-on-surface-variant font-semibold">${l}</p><p class="text-xl font-bold mt-1 tabular-nums ${w ? 'text-tertiary' : ''}">${v}</p></div>`).join('')}</div>`;
+    const cols = ['Empleado', '#Base', '#Faltas', '#T.E.', '#Bonos / extras', '#Descuentos', '#Total'];
+    const csvBtn = '<button type="button" data-act="csv" class="btn border-[1.5px] border-[#cbd5e1] text-primary"><span class="material-symbols-outlined">download</span>Descargar semana (CSV)</button>';
+    if (cierre) {
+      const ls = cierre.lineas || [];
+      return head + cards([['Total pagado', money(cierre.total)], [`Depósito contador +${cierre.porcentaje ?? pct}%`, money(cierre.total * (1 + (cierre.porcentaje ?? pct) / 100))], ['Empleados', ls.length], ['Incidencias pagadas', (cierre.incIds || []).length]])
+        + N.d.areas.map(a => { const x = ls.filter(l => l.planta === a); return x.length ? `<h3 class="text-label-lg text-primary mt-4 mb-2">${esc(a)}</h3>` + tbl(cols, x.map(l => `<tr>${td(`<b>${esc(l.nombre)}</b>${l.detalle ? `<br><span class="text-[11px] text-on-surface-variant">${esc(l.detalle)}</span>` : ''}`)}${[l.base, l.faltas, l.te, l.extras, l.desc].map(v => td(v ? money(v) : '—', 1)).join('')}${td(`<b>${money(l.total)}</b>`, 1)}</tr>`).join('')) : ''; }).join('')
+        + `<div class="flex flex-wrap gap-2 mt-4">${csvBtn}<span class="flex-1"></span>${N.confirm === 'reabrir' ? `<span class="text-body-sm self-center">Las incidencias de esta semana vuelven a quedar pendientes.</span><button type="button" data-act="reabrir" class="btn bg-error text-white">Sí, reabrir</button><button type="button" data-act="cancel" class="btn border-[1.5px] border-[#cbd5e1]">Cancelar</button>`
+          : '<button type="button" data-act="confirm" data-c="reabrir" class="btn border-[1.5px] border-error text-error">Reabrir semana</button>'}</div>`;
+    }
+    if (!N.d.emps.length) return head + '<div class="card p-5"><p class="font-semibold">Aún no hay empleados</p><p class="text-body-md text-on-surface-variant">Agrégalos en la pestaña Empleados con su sueldo y planta; después captura incidencias y la nómina se arma sola.</p></div>';
+    const L = calcSemana(N.payday), total = r2(L.reduce((s, l) => s + l.total, 0));
+    const arrN = L.reduce((s, l) => s + l.items.filter(i => i._arr && !i.diferido).length, 0), difN = L.reduce((s, l) => s + l.items.filter(i => i.diferido).length, 0);
+    const bonos = nomEmps().filter(e => bonoStatus(e, N.bonoMes).st === 'si'), menores = L.filter(l => l.menor);
+    const alert = (cls, b, t, btn = '') => `<div class="rounded-xl p-3 mb-2 flex flex-wrap items-center gap-2 ${cls}"><b>${b}</b><span class="flex-1 min-w-[200px] text-body-md">${t}</span>${btn}</div>`;
+    return head + cards([['Total nómina', money(total)], [`Depósito contador +${pct}%`, money(total * (1 + pct / 100))], ['Horas extra', `${L.reduce((s, l) => s + l.teH, 0)} h`], ['Pendientes arrastrados', arrN, arrN]])
+      + (bonos.length ? alert(WARN, `Bonos de ${mesL(N.bonoMes)}`, `Le toca bono de puntualidad a ${esc(bonos.map(e => e.nombre.split(' ')[0]).join(', '))} y aún no está en nómina.`, '<a href="#/nomina/bonos" class="text-label-md text-primary font-semibold">Revisar</a>') : '')
+      + (menores.length ? alert(BAD, 'Menores de edad', `${esc(menores.map(l => l.e.nombre).join(', '))} tienen tiempo extra o domingo capturado. La LFT prohíbe horas extra y domingos a menores de 18; si se trabajan, se pagan al 200 % adicional.`) : '')
+      + (difN ? alert(WARN, `${difN} pago${difN > 1 ? 's' : ''} diferido${difN > 1 ? 's' : ''}`, 'Seguirán apareciendo cada semana hasta que los incluyas.') : '')
+      + N.d.areas.map(a => {
+        const ls = L.filter(l => l.e.planta === a);
+        if (!ls.length) return '';
+        return `<div class="flex flex-wrap items-baseline gap-2 mt-4 mb-2"><h3 class="text-label-lg text-primary">${esc(a)}</h3><span class="text-body-sm text-on-surface-variant">Periodo ${fc(ls[0].p.ini)} – ${fc(ls[0].p.fin)}</span><span class="ml-auto font-semibold tabular-nums">${money(r2(ls.reduce((s, l) => s + l.total, 0)))}</span></div>`
+          + tbl(cols, ls.map(l => { const op = N.open.has(l.e.id); return `<tr data-act="toggle" data-id="${l.e.id}" class="cursor-pointer hover:bg-surface-container-low" aria-expanded="${op}">
+            ${td(`<span class="font-semibold">${op ? '▾' : '▸'} ${esc(l.e.nombre)}</span> ${l.arr ? nChip('arrastra ' + money(l.arr), WARN) : ''} ${l.items.some(i => i.diferido) ? nChip('pago diferido') : ''} ${l.e.menor ? nChip('menor', l.menor ? BAD : undefined) : ''} ${l.e.pago === 'dia' ? nChip('por día') : ''}`)}
+            ${td(money(l.base), 1)}${td(l.faltas ? `<span class="text-error">${money(l.faltas)}</span>` : '—', 1)}${td(l.te ? `${money(l.te)}<br><span class="text-[11px] text-on-surface-variant">${l.teH} h</span>` : '—', 1)}
+            ${td(l.extras ? money(l.extras) : '—', 1)}${td(l.desc ? `<span class="text-error">${money(l.desc)}</span>` : '—', 1)}${td(`<b>${money(l.total)}</b>`, 1)}</tr>
+            ${op ? `<tr><td colspan="7" class="px-3 pb-3 bg-surface-container-low">${l.items.length ? `<ul class="flex flex-col gap-2 pt-2">${l.items.map(i => `<li class="flex flex-wrap items-center gap-2 text-body-md">
+              <span class="text-on-surface-variant">${fc(i.fecha)}</span><b>${esc(incLabel(i))}</b>${i._arr ? nChip('de semana anterior', WARN) : ''}${i.diferido ? nChip('se paga después') : ''}${i.nota ? `<span class="text-on-surface-variant">${esc(i.nota)}</span>` : ''}
+              <span class="ml-auto tabular-nums ${i._amt < 0 ? 'text-error' : ''}">${i._amt ? money(i._amt) : ''}</span>${i._amt > 0 ? `<button type="button" data-act="diferir" data-id="${i.id}" class="text-label-sm text-primary font-semibold">${i.diferido ? 'Incluir esta semana' : 'Pagar después'}</button>` : ''}</li>`).join('')}</ul>`
+              : '<p class="pt-2 text-body-md text-on-surface-variant">Sin incidencias. Se paga el sueldo base.</p>'}
+              <p class="text-[11px] text-on-surface-variant mt-2">Sueldo ${money(+l.e.sueldo || 0)} ${l.e.pago === 'dia' ? 'por día' : 'semanal'} · día ${money(salDiario(l.e))} · hora extra ${money(teRate(l.e))}${teManual(l.e) ? ' (tarifa propia)' : ''}</p></td></tr>` : ''}`; }).join(''));
+      }).join('')
+      + `<div class="flex flex-wrap items-center gap-2 mt-4">${csvBtn}<span class="flex-1"></span>${N.confirm === 'cerrar'
+        ? `<span class="text-body-sm">Se marcarán como pagadas ${L.reduce((s, l) => s + l.items.filter(i => !i.diferido).length, 0)} incidencias. Lo diferido sigue pendiente.</span><button type="button" data-act="cerrar" class="btn btn-primary">Sí, cerrar semana</button><button type="button" data-act="cancel" class="btn border-[1.5px] border-[#cbd5e1]">Cancelar</button>`
+        : '<button type="button" data-act="confirm" data-c="cerrar" class="btn btn-primary"><span class="material-symbols-outlined">lock</span>Cerrar semana y marcar pagado</button>'}</div>`;
+  },
+
+  capturar() {
+    const c = N.cap, t = NT[c.tipo], menorSel = [...c.emps].some(id => empById(id)?.menor) && ['te', 'dia_extra'].includes(c.tipo);
+    let last = null;
+    const picker = nomEmps().map(e => (e.planta !== last ? `<p class="col-span-full text-[11px] uppercase tracking-wide text-on-surface-variant font-semibold mt-2">${esc(last = e.planta)}</p>` : '')
+      + `<label class="flex items-center gap-2 text-body-md py-1"><input type="checkbox" name="cemp" value="${e.id}" ${c.emps.has(e.id) ? 'checked' : ''} class="w-5 h-5 shrink-0 accent-[#2563eb]">${esc(e.nombre)}${e.menor ? ' ' + nChip('menor') : ''}</label>`).join('');
+    return `<p class="text-body-md text-on-surface-variant mb-3">Lo que captures entra solo a la nómina de su semana. Si no se paga, se arrastra.</p>
+    <form id="capForm" class="card p-4 flex flex-col gap-4">
+      <div><p class="text-label-md text-on-surface-variant mb-2">Tipo</p><div class="flex flex-wrap gap-2">${CAP_TIPOS.map(k => `<button type="button" data-act="ctipo" data-t="${k}" aria-pressed="${c.tipo === k}" class="px-3 py-2 rounded-full text-label-md border-[1.5px] ${c.tipo === k ? 'bg-primary text-white border-primary' : 'border-[#cbd5e1]'}">${NT[k].l}</button>`).join('')}</div></div>
+      <div><p class="text-label-md text-on-surface-variant mb-1">Empleado(s) <span class="font-normal">— marca varios si aplica a más de uno</span></p>
+        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-x-4 max-h-72 overflow-auto p-3 rounded-xl border-[1.5px] border-[#cbd5e1]">${picker || '<p class="text-on-surface-variant">Agrega empleados primero.</p>'}</div></div>
+      <div class="grid grid-cols-2 gap-3">
+        ${labeled({ label: `Fecha${c.tipo === 'vacacion' ? ' (primer día)' : ''}`, required: true }, `<input class="input" type="date" name="fecha" value="${esc(c.fecha)}" required>`)}
+        ${labeled({ label: `Cantidad (${t.u === '$' ? 'pesos' : t.u})`, required: true }, `<input class="input" type="number" name="cant" min="0" step="${t.u === '$' ? 1 : 0.5}" value="${esc(c.cant)}" required inputmode="decimal">`)}
+        ${labeled({ label: c.tipo === 'bono' ? '¿Por qué se le da el bono?' : 'Nota', required: c.tipo === 'bono', wide: true }, `<input class="input" name="nota" maxlength="240" value="${esc(c.nota)}" ${c.tipo === 'bono' ? 'required' : ''} placeholder="${c.tipo === 'te' ? 'Ej. Procesando material de Summit Silao' : c.tipo === 'falta' ? 'Ej. Se reportó enfermo, no trajo receta' : 'Detalle opcional'}">`)}
+      </div>
+      ${nomAdmin() && t.s > 0 ? `<label class="flex items-center gap-2 text-body-md"><input type="checkbox" name="efectivo" ${c.efectivo ? 'checked' : ''} class="w-5 h-5 accent-[#2563eb]">Ya se le pagó en efectivo (queda registrado, no suma a la nómina)</label>` : ''}
+      ${!nomAdmin() && t.u === '$' ? '<p class="text-body-sm text-on-surface-variant">El monto queda guardado para el administrador; después ya no se muestra.</p>' : ''}
+      ${menorSel ? `<p class="rounded-xl p-3 ${BAD} text-body-md"><b>Ojo:</b> elegiste a un menor de edad. La LFT prohíbe tiempo extra y domingos a menores de 18.</p>` : ''}
+      <div class="flex flex-wrap items-center gap-3"><span id="cprev" class="text-body-sm text-on-surface-variant flex-1">${capPreview()}</span>
+        <button class="btn btn-primary"><span class="material-symbols-outlined">save</span>Guardar</button></div>
+    </form>`;
+  },
+
+  incidencias() {
+    const F = N.fil, admin = nomAdmin();
+    const L = N.d.incs.filter(i => (!F.emp || i.empleadoId === +F.emp) && (!F.tipo || i.tipo === F.tipo) && (F.estado === 'todas' || (F.estado === 'pend' ? !i.aplicado : i.aplicado)))
+      .sort((a, b) => b.fecha.localeCompare(a.fecha) || b.id - a.id), shown = L.slice(0, 300);
+    return `<div id="filtros" class="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-3">
+      ${sel('name="emp" aria-label="Empleado"', [['', 'Todos los empleados'], ...nomEmps(true).map(e => [e.id, e.nombre])], F.emp)}
+      ${sel('name="tipo" aria-label="Tipo"', [['', 'Todos los tipos'], ...Object.entries(NT).map(([k, t]) => [k, t.l])], F.tipo)}
+      ${sel('name="estado" aria-label="Estado"', [['pend', 'Pendientes de pago'], ['apl', 'Ya pagadas'], ['todas', 'Todas']], F.estado)}</div>
+    <p class="text-body-sm text-on-surface-variant mb-2">${L.length} registro${L.length === 1 ? '' : 's'}</p>
+    <div class="card divide-y divide-[#f1f5f9]">${shown.map(i => { const e = empById(i.empleadoId), amt = admin && e ? amountOf(i, e) : 0, can = admin || !i.aplicado; return `
+      <div class="flex flex-wrap items-start gap-3 p-3">
+        <span class="text-body-sm text-on-surface-variant w-24 shrink-0">${fc(i.fecha)}</span>
+        <div class="flex-1 min-w-[180px]"><p class="font-semibold">${esc(e ? e.nombre : '(empleado borrado)')} · ${esc(incLabel(i))}</p>
+          <p class="text-body-sm text-on-surface-variant">${i.nota ? esc(i.nota) + ' · ' : ''}${i.aplicado ? (i.efectivo ? 'Pagado en efectivo' : 'Pagado en la semana del ' + fc(i.aplicadoEn)) : i.diferido ? 'Pendiente · se paga después' : 'Pendiente'}${i.creadoPor ? ' · capturó ' + esc(i.creadoPor) : ''}</p></div>
+        ${amt ? `<span class="tabular-nums ${amt < 0 ? 'text-error' : ''}">${money(amt)}</span>` : ''}
+        ${can ? `<div class="flex gap-3"><button type="button" data-act="editinc" data-id="${i.id}" class="text-label-sm text-primary font-semibold">Editar</button>
+          <button type="button" data-act="delinc" data-id="${i.id}" class="text-label-sm text-error font-semibold"><span>Borrar</span></button></div>` : ''}
+      </div>`; }).join('') || '<p class="p-6 text-center text-on-surface-variant">No hay incidencias con estos filtros.</p>'}</div>
+    ${L.length > 300 ? '<p class="text-body-sm text-on-surface-variant mt-2">Se muestran las 300 más recientes. Usa los filtros para ver otras.</p>' : ''}`;
+  },
+
+  bonos() {
+    const admin = nomAdmin(), mes = N.bonoMes, rows = nomEmps().map(e => ({ e, b: bonoStatus(e, mes) })).filter(r => r.b.st !== 'na'), si = rows.filter(r => r.b.st === 'si');
+    const otros = N.d.incs.filter(i => i.tipo === 'bono').sort((a, b) => a.aplicado - b.aplicado || b.fecha.localeCompare(a.fecha)).slice(0, 60), f = N.bf;
+    const quitar = i => `<button type="button" data-act="delinc" data-id="${i.id}" class="text-label-sm text-error font-semibold"><span>Quitar</span></button>`;
+    return weekNav('bmes', 'Bono de puntualidad', `${mesL(mes)} · se pierde con falta, retardo, permiso sin goce o incapacidad en el mes`,
+      si.length ? `<button type="button" data-act="bonoall" class="btn btn-primary ml-auto">Agregar los ${si.length} a nómina</button>` : '')
+    + tbl(['Empleado', 'Planta', ...(admin ? ['#Monto'] : []), 'Estado', ''], rows.map(({ e, b }) => `<tr>${td(`<b>${esc(e.nombre)}</b>`)}${td(esc(e.planta))}${admin ? td(money(+e.bono || 0), 1) : ''}
+      ${td(b.st === 'ya' ? nChip(b.inc.aplicado ? 'Pagado' : 'En nómina, por pagar', OKC) : b.st === 'si' ? nChip('Le toca', WARN) : `${nChip('No le toca', BAD)} <span class="text-[11px] text-on-surface-variant">${esc(b.why)}</span>`)}
+      ${td(b.st === 'si' ? `<button type="button" data-act="bono" data-id="${e.id}" class="text-label-sm text-primary font-semibold">Agregar</button>` : b.st === 'ya' && !b.inc.aplicado ? quitar(b.inc) : '')}</tr>`).join(''),
+      admin ? 'Nadie tiene bono asignado. Ponle monto de bono en Empleados.' : 'Nadie de tu planta tiene bono de puntualidad asignado.')
+    + '<p class="text-body-sm text-on-surface-variant mt-2">Se revisan las incidencias capturadas en el mes; los meses antes de usar el sistema no tienen faltas registradas. Al agregar, el bono entra a la siguiente nómina abierta.</p>'
+    + `<h2 class="text-headline-sm mt-6">Otros bonos</h2><p class="text-body-sm text-on-surface-variant mb-3">Bonos especiales con su motivo. Mientras no se paguen se pueden quitar.</p>
+    <form id="bonoForm" class="card p-4 grid grid-cols-2 lg:grid-cols-4 gap-3 items-end mb-3">
+      ${labeled({ label: 'Empleado', required: true, wide: true }, sel('name="emp" required', [['', 'Elige…'], ...nomEmps().map(e => [e.id, e.nombre])], f.emp))}
+      ${labeled({ label: 'Monto ($)', required: true }, `<input class="input" type="number" name="monto" min="1" step="1" value="${esc(f.monto)}" required inputmode="decimal">`)}
+      ${labeled({ label: 'Fecha', required: true }, `<input class="input" type="date" name="fecha" value="${esc(f.fecha)}" required>`)}
+      ${labeled({ label: '¿Por qué se le da el bono?', required: true, wide: true }, `<input class="input" name="motivo" maxlength="160" required value="${esc(f.motivo)}" placeholder="Ej. Se quedó a terminar el material de Mitchell">`)}
+      <div class="col-span-2 flex flex-wrap gap-2">${MOTIVOS.map(m => `<button type="button" data-act="bfmot" data-m="${esc(m)}" class="px-3 py-1.5 rounded-full text-label-sm border-[1.5px] border-[#cbd5e1]">${esc(m)}</button>`).join('')}</div>
+      <button class="btn btn-primary col-span-2 lg:col-span-4"><span class="material-symbols-outlined">add</span>Agregar bono</button></form>
+    <div class="card divide-y divide-[#f1f5f9]">${otros.map(i => `<div class="flex flex-wrap items-center gap-3 p-3">
+      <span class="text-body-sm text-on-surface-variant w-24 shrink-0">${fc(i.fecha)}</span>
+      <div class="flex-1 min-w-[160px]"><p class="font-semibold">${esc(empById(i.empleadoId)?.nombre || '(empleado borrado)')}</p><p class="text-body-sm text-on-surface-variant">${esc(i.nota || 'Sin motivo')}</p></div>
+      ${i.cantidad != null ? `<span class="tabular-nums text-secondary font-semibold">${money(+i.cantidad)}</span>` : ''}
+      ${i.aplicado ? nChip(i.efectivo ? 'Pagado en efectivo' : 'Pagado ' + fc(i.aplicadoEn), OKC) : nChip(i.diferido ? 'Se paga después' : 'Por pagar', WARN) + quitar(i)}</div>`).join('')
+      || '<p class="p-6 text-center text-on-surface-variant">Sin bonos especiales todavía.</p>'}</div>`;
+  },
+
+  vacaciones() {
+    return '<p class="text-body-md text-on-surface-variant mb-3">Días según la LFT (reforma 2023): 12 el primer año, +2 por año hasta 20, luego +2 cada 5 años.</p>'
+    + tbl(['Empleado', 'Ingreso', '#Antigüedad', '#Le tocan', '#Tomados', '#Disponibles', 'Periodo'], nomEmps().filter(e => e.pago !== 'dia').map(e => {
+      const v = vacInfo(e);
+      if (!v) return `<tr>${td(`<b>${esc(e.nombre)}</b>`)}<td colspan="6" class="px-3 py-2 border-t border-[#f1f5f9]">${nChip('Falta fecha de ingreso', WARN)} <button type="button" data-act="editemp" data-id="${e.id}" class="text-label-sm text-primary font-semibold ml-2">Capturar</button></td></tr>`;
+      const pct = v.tocan ? Math.min(100, v.tomados / v.tocan * 100) : v.tomados ? 100 : 0;
+      return `<tr>${td(`<b>${esc(e.nombre)}</b>`)}${td(fcy(e.ingreso))}${td(v.anios < 1 ? '&lt; 1 año' : `${v.anios} año${v.anios > 1 ? 's' : ''}`, 1)}${td(v.anios < 1 ? '<span class="text-on-surface-variant">12 al cumplir</span>' : v.tocan, 1)}
+        ${td(`${v.tomados}<div class="h-1.5 rounded-full bg-surface-container mt-1 min-w-[60px] overflow-hidden"><div class="h-full ${v.disp < 0 ? 'bg-error' : 'bg-primary'}" style="width:${pct}%"></div></div>`, 1)}
+        ${td(`<b class="${v.disp < 0 ? 'text-error' : ''}">${v.disp}</b>${v.disp < 0 ? '<br><span class="text-[11px]">adelantadas</span>' : ''}`, 1)}
+        ${td(`<span class="text-body-sm text-on-surface-variant">${fcy(v.ini)} → ${fcy(v.prox)}${v.anios < 1 ? '' : ` · luego ${v.proxTocan}`}</span>`)}</tr>`;
+    }).join(''), 'Sin empleados.')
+    + '<p class="text-body-sm text-on-surface-variant mt-2">"Tomados" cuenta las vacaciones capturadas desde el último aniversario más el ajuste inicial de cada empleado (días que ya había tomado antes de usar el sistema).</p>';
+  },
+
+  empleados() {
+    const admin = nomAdmin(), L = nomEmps(true), cfg = N.d.config, today = ymd();
+    const list = tbl(['Nombre', 'Planta', ...(admin ? ['#Sueldo', '#Diario', '#Hora extra', '#Bono mes'] : []), 'Ingreso', ''], L.map(e => `<tr>
+      ${td(`<b>${esc(e.nombre)}</b> ${e.menor ? nChip('menor', BAD) : ''} ${e.baja && e.baja <= today ? nChip('baja ' + fcy(e.baja)) : ''}${e.notas ? `<br><span class="text-[11px] text-on-surface-variant">${esc(e.notas)}</span>` : ''}`)}${td(esc(e.planta))}
+      ${admin ? td(`${money(+e.sueldo || 0)}<br><span class="text-[11px] text-on-surface-variant">${e.pago === 'dia' ? 'por día' : 'semanal'}</span>`, 1) + td(money(salDiario(e)), 1)
+        + td(`${money(teRate(e))}<br><span class="text-[11px] text-on-surface-variant">${teManual(e) ? 'tarifa propia' : 'por fórmula'}</span>`, 1) + td(+e.bono ? money(+e.bono) : '—', 1) : ''}
+      ${td(e.ingreso ? fcy(e.ingreso) : nChip('falta', WARN))}${td(`<button type="button" data-act="editemp" data-id="${e.id}" class="text-label-sm text-primary font-semibold">Editar</button>`)}</tr>`).join(''), 'Sin empleados.');
+    const num = (k, l, step = 0.5, v = cfg?.[k]) => labeled({ label: l }, `<input class="input" type="number" min="0" step="${step}" data-cfg="${k}" value="${esc(v)}">`);
+    return `<div class="flex flex-wrap items-center gap-3 mb-3"><p class="text-body-md text-on-surface-variant flex-1">${L.filter(e => !e.baja || e.baja >= today).length} activos${admin ? '' : ` · planta ${esc(me.plant || '')}`}</p>
+      <button type="button" data-act="newemp" class="btn btn-primary"><span class="material-symbols-outlined">person_add</span>Agregar empleado</button></div>${list}
+    ${admin ? `<form id="cfgForm" class="card p-4 flex flex-col gap-3 mt-6">
+      <h2 class="font-semibold flex items-center gap-2"><span class="material-symbols-outlined text-primary">tune</span>Parámetros de cálculo <span class="chip bg-surface-container-high text-primary">solo admin</span></h2>
+      <p class="text-body-sm text-on-surface-variant">Aplican a quien tiene la hora extra "por fórmula"; quien tiene tarifa propia conserva la suya.</p>
+      <div class="grid grid-cols-2 lg:grid-cols-4 gap-3">
+        ${num('diasDivisor', 'Días para sacar el sueldo diario')}${num('horasJornada', 'Horas por jornada')}
+        ${labeled({ label: 'Factor de hora extra' }, sel('data-cfg="factorTE"', [[1, 'Sencilla (×1)'], [1.5, '×1.5'], [2, 'Doble (×2, LFT primeras 9 h)'], [3, 'Triple (×3, después de 9 h)']], cfg.factorTE))}
+        ${num('bonoDefault', 'Bono de puntualidad por defecto', 1)}${num('porcentaje', 'Comisión del depósito al contador (%)', 0.1)}
+        ${N.d.areas.map(a => labeled({ label: `${a} · la semana empieza en` }, sel(`data-inicio="${esc(a)}"`, DOWL.map((d, k) => [k, d]), cfg.inicio?.[a] ?? 6))).join('')}
+      </div>
+      <div class="p-3 rounded-xl bg-surface-container-low grid grid-cols-1 sm:grid-cols-2 gap-3 items-center">
+        ${labeled({ label: 'Calculadora: sueldo semanal' }, `<input class="input" type="number" min="0" step="50" id="calcSue" value="${esc(N.calcSue)}">`)}<div id="calcOut" class="text-body-md">${calcOut(N.calcSue)}</div></div>
+      <button class="btn btn-primary self-start"><span class="material-symbols-outlined">save</span>Guardar parámetros</button></form>` : ''}`;
+  },
+};
+const calcOut = sue => { const d = (+sue || 0) / P().div, h = d / P().hrs;
+  return [['Sueldo diario', d], ['Valor de la hora', h], [`Hora extra (×${P().fac})`, h * P().fac], ['Mensual aprox. (×4.33)', (+sue || 0) * 4.33]]
+    .map(([l, v]) => `<p class="flex justify-between gap-2"><span class="text-on-surface-variant">${l}</span><b class="tabular-nums">${money(v)}</b></p>`).join(''); };
+function capPreview() {
+  const c = N.cap, t = NT[c.tipo];
+  if (!c.emps.size) return 'Elige al menos un empleado.';
+  const n = `${c.emps.size} empleado${c.emps.size > 1 ? 's' : ''}`;
+  if (!t.s) return `${n} · sin efecto en dinero${t.quita ? ' · quita el bono de puntualidad del mes' : ''}.`;
+  if (!nomAdmin()) return `${n} · ${t.s < 0 ? 'descuenta' : 'suma'} en la nómina.`;
+  const tot = [...c.emps].reduce((s, id) => { const e = empById(id); return e ? s + amountOf({ tipo: c.tipo, cantidad: +c.cant || 0 }, e) : s; }, 0);
+  return `${n} · ${tot < 0 ? 'descuenta' : 'suma'} ${money(Math.abs(tot))}${c.efectivo ? ' (pagado en efectivo)' : ''}`;
+}
+// Formularios para editar un empleado o una incidencia (en lugar de la pestaña).
+function nomEditForm() {
+  const { kind, x } = N.edit, admin = nomAdmin(), back = '<button type="button" data-act="cancel" class="btn border-[1.5px] border-[#cbd5e1]">Cancelar</button>';
+  if (kind === 'inc') {
+    const t = NT[x.tipo] || {};
+    return `<form id="incForm" class="card p-4 grid grid-cols-2 gap-3"><h2 class="col-span-2 font-semibold">Editar incidencia</h2>
+      ${labeled({ label: 'Empleado', wide: true }, sel('name="empleadoId"', nomEmps(true).map(e => [e.id, e.nombre]), x.empleadoId))}
+      ${admin ? labeled({ label: 'Tipo' }, sel('name="tipo"', Object.entries(NT).map(([k, v]) => [k, v.l]), x.tipo)) : labeled({ label: 'Tipo' }, `<input class="input" value="${esc(t.l)}" disabled>`)}
+      ${labeled({ label: 'Fecha' }, `<input class="input" type="date" name="fecha" value="${esc(x.fecha)}" required>`)}
+      ${x.cantidad != null ? labeled({ label: `Cantidad (${t.u === '$' ? 'pesos' : t.u})` }, `<input class="input" type="number" name="cantidad" step="0.5" min="0" value="${esc(x.cantidad)}" required>`) : ''}
+      ${labeled({ label: 'Nota', wide: true }, `<input class="input" name="nota" maxlength="240" value="${esc(x.nota || '')}">`)}
+      ${admin ? `<label class="col-span-2 flex items-center gap-2 text-body-md"><input type="checkbox" name="aplicado" ${x.aplicado ? 'checked' : ''} class="w-5 h-5 accent-[#2563eb]">Ya pagada / aplicada</label>` : ''}
+      <div class="col-span-2 flex justify-end gap-2">${back}<button class="btn btn-primary">Guardar</button></div></form>`;
+  }
+  const e = x || { pago: 'semana', planta: admin ? 'Querétaro' : me.plant, sueldo: 2200, bono: +(N.d.config?.bonoDefault ?? 500), teModo: 'auto', diasBase: 1 };
+  return `<form id="empForm" class="card p-4 grid grid-cols-2 lg:grid-cols-4 gap-3 items-end"><h2 class="col-span-2 lg:col-span-4 font-semibold">${x ? 'Editar empleado' : 'Nuevo empleado'}</h2>
+    ${labeled({ label: 'Nombre completo', required: true, wide: true }, `<input class="input" name="nombre" required maxlength="80" value="${esc(e.nombre || '')}">`)}
+    ${admin ? labeled({ label: 'Planta' }, sel('name="planta"', N.d.areas.map(a => [a, a]), e.planta)) : ''}
+    ${labeled({ label: 'Forma de pago' }, sel('name="pago"', [['semana', 'Sueldo semanal'], ['dia', 'Por día (sabatinos)']], e.pago))}
+    ${admin ? labeled({ label: 'Sueldo (semanal o por día)' }, `<input class="input" type="number" name="sueldo" step="0.01" min="0" value="${esc(e.sueldo ?? 0)}">`)
+      + labeled({ label: 'Hora extra' }, sel('name="teModo"', [['auto', 'Por fórmula'], ['manual', 'Tarifa propia']], e.teModo))
+      + labeled({ label: 'Pago por hora extra (tarifa propia)' }, `<input class="input" type="number" name="te" step="0.01" min="0" value="${esc(e.te ?? 0)}">`)
+      + labeled({ label: 'Bono de puntualidad al mes' }, `<input class="input" type="number" name="bono" step="1" min="0" value="${esc(e.bono ?? 0)}">`) : ''}
+    ${labeled({ label: 'Días que trabaja (solo por día)' }, `<input class="input" type="number" name="diasBase" step="1" min="1" max="7" value="${esc(e.diasBase || 1)}">`)}
+    ${labeled({ label: 'Fecha de ingreso' }, `<input class="input" type="date" name="ingreso" value="${esc(e.ingreso || '')}">`)}
+    ${labeled({ label: 'Fecha de baja' }, `<input class="input" type="date" name="baja" value="${esc(e.baja || '')}">`)}
+    ${labeled({ label: 'Vacaciones ya tomadas en el periodo actual' }, `<input class="input" type="number" name="vacAjuste" step="0.5" value="${esc(e.vacAjuste || 0)}">`)}
+    ${labeled({ label: 'Notas', wide: true }, `<input class="input" name="notas" maxlength="240" value="${esc(e.notas || '')}">`)}
+    <label class="col-span-2 flex items-center gap-2 text-body-md h-12"><input type="checkbox" name="menor" ${e.menor ? 'checked' : ''} class="w-5 h-5 accent-[#2563eb]">Menor de 18 años (avisa si se le captura T.E. o domingo)</label>
+    ${admin ? '<p id="ederiv" class="col-span-2 lg:col-span-4 p-3 rounded-xl bg-surface-container-low text-body-md"></p>' : '<p class="col-span-2 lg:col-span-4 text-body-sm text-on-surface-variant">El sueldo y el bono los pone el administrador.</p>'}
+    ${x ? `<input type="hidden" name="id" value="${x.id}">` : ''}
+    <div class="col-span-2 lg:col-span-4 flex justify-end gap-2">${back}<button class="btn btn-primary">Guardar</button></div></form>`;
+}
+// Sueldo diario y hora extra en vivo mientras el admin edita un empleado.
+function empDeriv(f) {
+  const out = f.querySelector('#ederiv');
+  if (!out) return;
+  const e = { pago: f.elements.pago.value, sueldo: +f.elements.sueldo.value || 0, teModo: f.elements.teModo.value, te: +f.elements.te.value || 0 };
+  f.elements.te.disabled = e.teModo !== 'manual';
+  out.textContent = `${e.pago === 'dia' ? 'Pago por día' : `Sueldo diario (÷${P().div})`} ${money(salDiario(e))} · hora extra por fórmula (×${P().fac}) ${money(teFormula(e))} · se pagará ${money(teRate(e))} por hora extra`;
+}
+
+function nomDraw() {
+  const tabs = NTABS.filter(([k]) => k !== 'nomina' || nomAdmin());
+  if (!tabs.some(([k]) => k === N.tab)) N.tab = tabs[0][0];
+  const pend = nomEmps().filter(e => bonoStatus(e, N.bonoMes).st === 'si').length;
+  $('#app').innerHTML = `<div id="nom" class="${WIDE ? 'max-w-6xl' : ''}">
+    <h1 class="${WIDE ? 'text-3xl font-bold' : 'text-2xl font-semibold'} tracking-tight">Nómina</h1>
+    <p class="text-sm text-on-surface-variant mb-3">${nomAdmin() ? 'Todas las plantas · solo tú ves sueldos y totales' : `Planta ${esc(me.plant || '')} · captura de personal (los montos solo los ve el administrador)`}</p>
+    <nav class="flex gap-1 overflow-x-auto border-b border-[#e2e8f0] mb-4" role="tablist">${tabs.map(([k, l]) => `<a href="#/nomina/${k}" role="tab" aria-selected="${N.tab === k}" class="px-3 py-2.5 whitespace-nowrap text-label-lg border-b-[3px] ${N.tab === k ? 'border-primary text-primary' : 'border-transparent text-on-surface-variant'}">${l}${k === 'bonos' && pend ? ` <span class="chip bg-tertiary text-white !px-1.5">${pend}</span>` : ''}</a>`).join('')}</nav>
+    <p id="err" class="text-sm text-error hidden mb-2" role="alert"></p>
+    ${N.edit ? nomEditForm() : nomTabs[N.tab]()}</div>`;
+  const root = $('#nom'), ef = $('#empForm');
+  if (ef) { empDeriv(ef); ef.oninput = ef.onchange = () => empDeriv(ef); }
+  root.onclick = nomClick; root.onchange = nomChange; root.oninput = nomInput; root.onsubmit = nomSubmit;
+}
+// Guarda y vuelve a cargar los datos (con lo que el servidor deja ver).
+async function nomSave(path, data, after) {
+  try { await api(path, data); N.d = await api('/api/nomina'); after?.(); nomDraw(); }
+  catch (err) { showErr(err); }
+}
+async function nomClick(e) {
+  const b = e.target.closest('[data-act]');
+  if (!b) return;
+  const a = b.dataset.act, id = Number(b.dataset.id);
+  if (a === 'wk') { N.payday = addD(N.payday, 7 * b.dataset.d); N.confirm = ''; }
+  else if (a === 'wkhoy') N.payday = nextSat(ymd());
+  else if (a === 'bmes') { const [y, m] = N.bonoMes.split('-').map(Number); N.bonoMes = ymd(new Date(y, m - 1 + Number(b.dataset.d), 1)).slice(0, 7); }
+  else if (a === 'toggle') N.open.has(id) ? N.open.delete(id) : N.open.add(id);
+  else if (a === 'confirm') N.confirm = b.dataset.c;
+  else if (a === 'cancel') { N.confirm = ''; N.edit = null; }
+  else if (a === 'ctipo') { N.cap.tipo = b.dataset.t; N.cap.cant = NT[b.dataset.t].u === '$' ? '' : '1'; N.cap.efectivo = false; }
+  else if (a === 'editinc') N.edit = { kind: 'inc', x: N.d.incs.find(i => i.id === id) };
+  else if (a === 'editemp') N.edit = { kind: 'emp', x: empById(id) };
+  else if (a === 'newemp') N.edit = { kind: 'emp', x: null };
+  else if (a === 'bfmot') { N.bf.motivo = b.dataset.m; $('#bonoForm [name=motivo]').value = b.dataset.m; return; }
+  else if (a === 'delinc') { if (confirmed(b)) nomSave('/api/nomina/inc/delete', { id }); return; }
+  else if (a === 'diferir') return nomSave('/api/nomina/inc/diferir', { id });
+  else if (a === 'bono') return nomSave('/api/nomina/bono', { emps: [id], mes: N.bonoMes });
+  else if (a === 'bonoall') { b.disabled = true; return nomSave('/api/nomina/bono', { emps: nomEmps().filter(x => bonoStatus(x, N.bonoMes).st === 'si').map(x => x.id), mes: N.bonoMes }); }
+  else if (a === 'cerrar') {
+    b.disabled = true;
+    const L = calcSemana(N.payday), incIds = [], lineas = L.map(l => { const inc = l.items.filter(i => !i.diferido); incIds.push(...inc.map(i => i.id));
+      return { empleadoId: l.e.id, nombre: l.e.nombre, planta: l.e.planta, periodo: l.p, base: l.base, faltas: r2(l.faltas), te: r2(l.te), teH: l.teH, extras: r2(l.extras), desc: r2(l.desc), total: l.total,
+        detalle: inc.map(i => incLabel(i) + (i._arr ? ` (pendiente ${fc(i.fecha)})` : '')).join('; ') }; });
+    return nomSave('/api/nomina/cerrar', { payday: N.payday, semana: weekNo(N.payday), total: r2(lineas.reduce((s, l) => s + l.total, 0)), porcentaje: +N.d.config.porcentaje || 0, lineas, incIds }, () => { N.confirm = ''; });
+  }
+  else if (a === 'reabrir') return nomSave('/api/nomina/reabrir', { payday: N.payday }, () => { N.confirm = ''; });
+  else if (a === 'csv') {
+    const c = N.d.cierres.find(x => x.payday === N.payday), L = c ? c.lineas : calcSemana(N.payday).map(l => ({ nombre: l.e.nombre, planta: l.e.planta, base: l.base, faltas: r2(l.faltas),
+      te: r2(l.te), teH: l.teH, extras: r2(l.extras), desc: r2(l.desc), total: l.total, detalle: l.items.filter(i => !i.diferido).map(incLabel).join('; ') }));
+    const tot = r2(L.reduce((s, l) => s + l.total, 0)), pct = +(c?.porcentaje ?? N.d.config.porcentaje) || 0;
+    return csv(`nomina-polar-sem${weekNo(N.payday)}-${N.payday}.csv`, [['Semana', 'Pago', 'Planta', 'Empleado', 'Base', 'Faltas', 'Tiempo extra', 'Horas extra', 'Bonos/extras', 'Descuentos', 'Total', 'Detalle'],
+      ...L.map(l => [weekNo(N.payday), N.payday, l.planta, l.nombre, l.base, l.faltas, l.te, l.teH || 0, l.extras, l.desc, l.total, l.detalle || '']),
+      [], ['', '', '', 'TOTAL', '', '', '', '', '', '', tot], ['', '', '', `DEPÓSITO +${pct}%`, '', '', '', '', '', '', r2(tot * (1 + pct / 100))]]);
+  }
+  else return;
+  nomDraw();
+}
+function nomChange(e) {
+  const t = e.target;
+  if (t.name === 'cemp') { t.checked ? N.cap.emps.add(+t.value) : N.cap.emps.delete(+t.value); return nomDraw(); }
+  if (t.name === 'efectivo') { N.cap.efectivo = t.checked; $('#cprev').textContent = capPreview(); }
+  if (t.closest('#filtros')) { N.fil[t.name] = t.value; nomDraw(); }
+  if (t.closest('#bonoForm')) N.bf[t.name] = t.value;
+}
+function nomInput(e) {
+  const t = e.target;
+  if (t.closest('#capForm') && ['fecha', 'cant', 'nota'].includes(t.name)) { N.cap[t.name] = t.value; $('#cprev').textContent = capPreview(); }
+  if (t.closest('#bonoForm')) N.bf[t.name] = t.value;
+  if (t.id === 'calcSue') { N.calcSue = t.value; $('#calcOut').innerHTML = calcOut(t.value); }
+}
+function nomSubmit(e) {
+  e.preventDefault();
+  const f = e.target, v = Object.fromEntries(new FormData(f));
+  if (f.id === 'capForm') {
+    const c = N.cap;
+    if (!c.emps.size) return showErr(new Error('Elige al menos un empleado'));
+    f.querySelector('.btn-primary').disabled = true;
+    return nomSave('/api/nomina/inc', { emps: [...c.emps], tipo: c.tipo, fecha: c.fecha, cantidad: +c.cant, nota: c.nota.trim(), efectivo: c.efectivo },
+      () => { N.cap = { ...N.cap, emps: new Set(), nota: '', efectivo: false }; });
+  }
+  if (f.id === 'bonoForm') return nomSave('/api/nomina/inc', { emps: [+v.emp], tipo: 'bono', fecha: v.fecha, cantidad: +v.monto, nota: v.motivo.trim() },
+    () => { N.bf = { emp: '', monto: '', motivo: '', fecha: ymd() }; });
+  if (f.id === 'incForm') return nomSave('/api/nomina/inc/edit', { ...v, id: N.edit.x.id, tipo: v.tipo || N.edit.x.tipo, cantidad: v.cantidad ?? N.edit.x.cantidad, aplicado: !!v.aplicado }, () => { N.edit = null; });
+  if (f.id === 'empForm') return nomSave('/api/nomina/emp', { ...v, menor: !!v.menor }, () => { N.edit = null; });
+  if (f.id === 'cfgForm') {
+    const config = { inicio: {} };
+    f.querySelectorAll('[data-cfg]').forEach(x => { config[x.dataset.cfg] = x.value; });
+    f.querySelectorAll('[data-inicio]').forEach(x => { config.inicio[x.dataset.inicio] = Number(x.value); });
+    return nomSave('/api/nomina/config', { config });
+  }
+}
+views.nomina = async tab => {
+  if (!N || N.uid !== me.id) { const d = new Date(); d.setDate(1); d.setMonth(d.getMonth() - 1);
+    N = { uid: me.id, payday: nextSat(ymd()), open: new Set(), confirm: '', edit: null, calcSue: 2200, bonoMes: ymd(d).slice(0, 7),
+      cap: { tipo: 'falta', emps: new Set(), fecha: ymd(), cant: '1', nota: '', efectivo: false }, fil: { emp: '', tipo: '', estado: 'pend' }, bf: { emp: '', monto: '', motivo: '', fecha: ymd() } }; }
+  N.d = await api('/api/nomina');
+  N.tab = tab || N.tab || (N.d.admin ? 'nomina' : 'capturar'); N.edit = null; N.confirm = '';
+  nomDraw();
+};
+
 // ---------- Navegación ----------
 const NAV = {
   colaborador: [['inicio', 'dashboard', 'Inicio'], ['nuevo', 'add_task', ''], ['historial', 'history', 'Historial'], ['calidad', 'verified', 'Calidad']],
   admin: [['admin', 'groups', 'Reportes'], ['semanal', 'auto_awesome', 'Semanal'], ['calidad', 'verified', 'Calidad'], ['cuentas', 'manage_accounts', 'Cuentas'],
     ['camiones', 'local_shipping', 'Camiones'], ['formulario', 'edit_note', 'Formulario']],
 };
+// Nómina: el admin siempre; el encargado solo si el admin le dio acceso (Cuentas → Nómina).
+const navItems = () => [...NAV[me.role], ...(me.role === 'admin' || me.nomina ? [['nomina', 'badge', 'Nómina']] : [])];
 function renderNav(name) {
   // Calidad lleva el número de alertas pendientes (gerencia).
-  const items = NAV[me.role].map(([p, icon, label]) => [p, icon, p === 'calidad' && alertN ? `${label} <span class="chip bg-error text-white !px-1.5">${alertN}</span>` : label]);
+  const items = navItems().map(([p, icon, label]) => [p, icon, p === 'calidad' && alertN ? `${label} <span class="chip bg-error text-white !px-1.5">${alertN}</span>` : label]);
   // Computadora: menú lateral (panel admin y app en pantalla grande). Teléfono: barra inferior con botón central.
   $('#nav').innerHTML = WIDE ? `<div class="flex flex-col h-full">
     <div class="flex items-center gap-2 px-2 mb-8">${logo(30)}<div class="flex flex-col items-start gap-1"><span class="text-lg font-semibold tracking-tight leading-tight">Reporte Diario Polar</span><span class="chip bg-surface-container-high text-primary">${me.role === 'admin' ? 'Admin' : 'Encargado'}</span></div></div>
@@ -1233,7 +1684,7 @@ async function route() {
   if (!me) return views.login();
   if (WEB && me.role !== 'admin') return views.soloAdmin();
   // pl/ID: PL-FOR-26, solo admin; editar/ID: corregir un reporte; cuenta: mi contraseña (ambos roles).
-  const allowed = [...NAV[me.role].map(n => n[0]), 'editar', 'cuenta', ...QVIEWS, ...(me.role === 'admin' ? ['pl'] : [])];
+  const allowed = [...navItems().map(n => n[0]), 'editar', 'cuenta', ...QVIEWS, ...(me.role === 'admin' ? ['pl'] : [])];
   if (!allowed.includes(name)) return location.hash = '#/' + allowed[0];
   renderNav(navOf(name));
   try { await views[name](arg); } catch (e) { $('#app').innerHTML = `<p class="text-error text-sm">${esc(e.message)}</p>`; }

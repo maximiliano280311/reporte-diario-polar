@@ -1,5 +1,5 @@
 -- Esquema de la base: lo usa server.mjs (SQLite en la compu) y se aplica a Cloudflare D1 con wrangler.
-CREATE TABLE IF NOT EXISTS users(id INTEGER PRIMARY KEY, name TEXT NOT NULL, email TEXT UNIQUE NOT NULL, pass TEXT NOT NULL,
+CREATE TABLE IF NOT EXISTS users(id INTEGER PRIMARY KEY, name TEXT NOT NULL, email TEXT UNIQUE NOT NULL, pass TEXT NOT NULL, nomina INTEGER NOT NULL DEFAULT 0,
   role TEXT NOT NULL DEFAULT 'colaborador', plant TEXT, status TEXT NOT NULL DEFAULT 'activo');
 CREATE TABLE IF NOT EXISTS sessions(token TEXT PRIMARY KEY, user_id INTEGER NOT NULL, created INTEGER NOT NULL DEFAULT 0); -- created: ms (vence a los 30 días)
 CREATE TABLE IF NOT EXISTS reports(id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL, date TEXT NOT NULL, answers TEXT NOT NULL,
@@ -22,3 +22,11 @@ CREATE TABLE IF NOT EXISTS counters(key TEXT PRIMARY KEY, n INTEGER NOT NULL);
 -- Alertas a gerencia dentro de la app (p. ej. nuevo no conforme). seen = ya la vio un admin.
 CREATE TABLE IF NOT EXISTS alerts(id INTEGER PRIMARY KEY, plant TEXT, folio TEXT, text TEXT NOT NULL, seen INTEGER NOT NULL DEFAULT 0,
   created_at TEXT DEFAULT CURRENT_TIMESTAMP);
+-- Nómina (antes artefacto "Nómina POLAR"). users.nomina = 1: el encargado tiene acceso (sin montos); el admin ve todo.
+-- area: Querétaro, Silao o Administración. data = JSON (nombre, sueldo, bono, ingreso, …).
+CREATE TABLE IF NOT EXISTS nom_emps(id INTEGER PRIMARY KEY, area TEXT NOT NULL, data TEXT NOT NULL);
+-- Incidencia (falta, tiempo extra, vacación, bono…). aplicado = ya se pagó en un cierre; data = cantidad, nota, diferido, efectivo, mes, aplicadoEn.
+CREATE TABLE IF NOT EXISTS nom_incs(id INTEGER PRIMARY KEY, emp_id INTEGER NOT NULL, tipo TEXT NOT NULL, fecha TEXT NOT NULL,
+  aplicado INTEGER NOT NULL DEFAULT 0, data TEXT NOT NULL, user_id INTEGER, created_at TEXT DEFAULT CURRENT_TIMESTAMP);
+-- Semana cerrada (sábado de pago): renglones pagados e ids de las incidencias que se marcaron como pagadas.
+CREATE TABLE IF NOT EXISTS nom_cierres(payday TEXT PRIMARY KEY, data TEXT NOT NULL);

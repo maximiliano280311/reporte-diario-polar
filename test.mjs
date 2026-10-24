@@ -164,6 +164,52 @@ assert.equal((await call('GET', '/api/me', null, ana2)).status, 401);
 await ok('GET', '/api/me', null, ana3);
 await login('ana@polar.test', 'otra12345');
 
+// ---------- Nómina: solo admin y encargados con acceso; el encargado ve su planta y nunca montos ----------
+const beto2 = await login('beto@polar.test');
+assert.equal((await call('GET', '/api/nomina', null, beto2)).status, 403); // sin acceso asignado
+const betoId = (await ok('GET', '/api/users', null, admin)).data.find(u => u.email === 'beto@polar.test').id;
+await ok('POST', '/api/users/nomina', { id: betoId, nomina: true }, admin);
+assert.equal((await call('POST', '/api/users/nomina', { id: betoId, nomina: true }, beto2)).status, 403); // asignar es solo del admin
+await ok('POST', '/api/nomina/emp', { nombre: 'Luis', planta: 'Querétaro', sueldo: 2400, bono: 500, ingreso: '2024-01-15' }, admin);
+await ok('POST', '/api/nomina/emp', { nombre: 'Rosa', planta: 'Silao', sueldo: 2600 }, admin);
+let nom = (await ok('GET', '/api/nomina', null, beto2)).data;
+assert.deepEqual(nom.emps.map(e => e.nombre), ['Luis']); // solo su planta
+const luis = nom.emps[0];
+assert.equal(luis.sueldo, undefined); assert.equal(luis.bono, undefined); assert.equal(luis.conBono, true); assert.equal(nom.config, null);
+assert.equal((await call('POST', '/api/nomina/cerrar', { payday: hoy }, beto2)).status, 403);
+// Encargado captura; un bono lo captura con monto pero ya no lo vuelve a ver.
+await ok('POST', '/api/nomina/inc', { emps: [luis.id], tipo: 'falta', fecha: hoy, cantidad: 1 }, beto2);
+await ok('POST', '/api/nomina/inc', { emps: [luis.id], tipo: 'bono', fecha: hoy, cantidad: 300, nota: 'Urgente' }, beto2);
+assert.equal((await call('POST', '/api/nomina/inc', { emps: [luis.id], tipo: 'bono', fecha: hoy, cantidad: 300 }, beto2)).status, 400); // bono sin motivo
+const rosaId = (await ok('GET', '/api/nomina', null, admin)).data.emps.find(e => e.nombre === 'Rosa').id;
+assert.equal((await call('POST', '/api/nomina/inc', { emps: [rosaId], tipo: 'falta', fecha: hoy, cantidad: 1 }, beto2)).status, 404); // otra planta
+nom = (await ok('GET', '/api/nomina', null, beto2)).data;
+const bono = nom.incs.find(i => i.tipo === 'bono');
+assert.equal(bono.cantidad, undefined);
+assert.equal(nom.incs.find(i => i.tipo === 'falta').cantidad, 1);
+// Al editar el bono el encargado no puede cambiar el monto.
+await ok('POST', '/api/nomina/inc/edit', { id: bono.id, fecha: hoy, cantidad: 99999, nota: 'Urgente 2' }, beto2);
+// Editar empleado (encargado) conserva el sueldo que puso el admin.
+await ok('POST', '/api/nomina/emp', { id: luis.id, nombre: 'Luis P.', sueldo: 1, planta: 'Silao' }, beto2);
+let nomA = (await ok('GET', '/api/nomina', null, admin)).data;
+const luisA = nomA.emps.find(e => e.id === luis.id);
+assert.deepEqual([luisA.nombre, luisA.sueldo, luisA.planta], ['Luis P.', 2400, 'Querétaro']);
+assert.equal(nomA.incs.find(i => i.id === bono.id).cantidad, 300);
+// Bono de puntualidad: monto del empleado, uno por mes.
+await ok('POST', '/api/nomina/bono', { emps: [luis.id], mes: '2026-09' }, beto2);
+assert.equal((await ok('POST', '/api/nomina/bono', { emps: [luis.id], mes: '2026-09' }, beto2)).data.n, 0);
+// Cierre: marca pagadas; el encargado ya no puede borrarlas; reabrir las regresa.
+nomA = (await ok('GET', '/api/nomina', null, admin)).data;
+const ids = nomA.incs.map(i => i.id);
+assert.equal(nomA.incs.find(i => i.tipo === 'bono_puntualidad').cantidad, 500);
+await ok('POST', '/api/nomina/cerrar', { payday: '2026-10-31', total: 1, lineas: [], incIds: ids }, admin);
+assert.equal((await call('POST', '/api/nomina/cerrar', { payday: '2026-10-31', incIds: ids }, admin)).status, 409);
+assert.equal((await call('POST', '/api/nomina/inc/delete', { id: ids[0] }, beto2)).status, 403);
+await ok('POST', '/api/nomina/reabrir', { payday: '2026-10-31' }, admin);
+await ok('POST', '/api/nomina/inc/delete', { id: ids[0] }, beto2);
+await ok('POST', '/api/users/nomina', { id: betoId, nomina: false }, admin);
+assert.equal((await call('GET', '/api/nomina', null, beto2)).status, 403); // se le quitó el acceso
+
 // Sesiones vencidas (más de 30 días) ya no sirven.
 sqlite.prepare('UPDATE sessions SET created = 0').run();
 assert.equal((await call('GET', '/api/me', null, admin)).status, 401);
