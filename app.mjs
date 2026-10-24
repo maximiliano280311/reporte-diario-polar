@@ -880,6 +880,9 @@ export function createApp({ db, files, env = {} }) {
       return json(200, config);
     }),
 
+    // Vista previa: el formulario tal como lo vería el encargado con esta configuración (sin guardarla).
+    'POST /api/form-config/preview': adminOnly(async req => json(200, formFor(cleanConfig((await body(req)).config)))),
+
     // La IA solo PROPONE: devuelve una configuración validada que el admin revisa y aplica (o descarta).
     'POST /api/form-config/ai': adminOnly(async req => {
       const instruction = String((await body(req)).instruction ?? '').trim().slice(0, 1000);

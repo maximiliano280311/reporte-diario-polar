@@ -164,6 +164,12 @@ assert.equal((await call('GET', '/api/me', null, ana2)).status, 401);
 await ok('GET', '/api/me', null, ana3);
 await login('ana@polar.test', 'otra12345');
 
+// Vista previa del formulario: aplica la configuración sin guardarla; solo admin.
+const prev = (await ok('POST', '/api/form-config/preview', { config: { sections: { 9: { hidden: true }, 2: { title: 'Gente' } } } }, admin)).data;
+assert.ok(!prev.some(s => s.n === 9) && prev.find(s => s.n === 2).title === 'Gente');
+assert.ok((await ok('GET', '/api/questions')).data.some(s => s.n === 9)); // no se guardó
+assert.equal((await call('POST', '/api/form-config/preview', { config: {} }, beto)).status, 403);
+
 // ---------- Nómina: solo admin y encargados con acceso; el encargado ve su planta y nunca montos ----------
 const beto2 = await login('beto@polar.test');
 assert.equal((await call('GET', '/api/nomina', null, beto2)).status, 403); // sin acceso asignado

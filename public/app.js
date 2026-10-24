@@ -914,8 +914,11 @@ const views = {
           <div data-extras class="flex flex-col gap-2">${(config.extra[s.n] || []).map(extraRow).join('')}</div>
           <button type="button" data-add-extra class="btn border-[1.5px] border-[#cbd5e1] text-primary ${WIDE ? 'self-start' : ''}"><span class="material-symbols-outlined">add</span>Agregar pregunta</button>
         </section>`; }).join('')}
-        <button class="btn btn-primary sticky bottom-24 lg:bottom-4 shadow-lg"><span class="material-symbols-outlined">save</span>Guardar cambios</button>
+        <div class="sticky bottom-24 lg:bottom-4 grid grid-cols-2 gap-2">
+          <button type="button" data-preview class="btn bg-surface-container-lowest border-[1.5px] border-[#cbd5e1] text-primary shadow-lg"><span class="material-symbols-outlined">visibility</span>Vista previa</button>
+          <button class="btn btn-primary shadow-lg"><span class="material-symbols-outlined">save</span>Guardar cambios</button></div>
       </form>
+      <div id="preview" class="hidden flex-col gap-4"></div>
     </div>`;
     const form = $('#cfg');
     // Lee la configuración tal como está en pantalla.
@@ -931,7 +934,22 @@ const views = {
       }
       return c;
     };
+    // Vista previa (solo para ver): el formulario como lo llena el encargado, con lo que hay en pantalla aunque no esté guardado.
+    // Al volver, lo editado sigue ahí. Los camiones dependen de la planta, por eso esa lista sale vacía.
+    const preview = async (c, what) => {
+      const secs = await api('/api/form-config/preview', { config: c }), box = $('#preview');
+      box.innerHTML = `<div class="rounded-xl p-3 flex flex-wrap items-center gap-2 bg-surface-container-high sticky top-0 lg:top-4 z-10 shadow">
+          <span class="material-symbols-outlined text-primary">visibility</span>
+          <span class="flex-1 min-w-[200px] text-body-md"><b>Vista previa</b> — así ve el formulario el encargado (${what}). No se puede enviar.</span>
+          <button type="button" data-back class="btn btn-primary !min-h-10"><span class="material-symbols-outlined">edit</span>Volver a editar</button></div>
+        <p class="text-label-sm font-semibold text-primary">PL-FOR-26 · REV. 06</p>
+        <h2 class="text-headline-lg-mobile tracking-tight -mt-3">Reporte diario de operación</h2>
+        <fieldset disabled class="flex flex-col gap-4">${sectionsHtml(secs, null, t => t.fixed ? tableRows(t) : [{}])}</fieldset>`;
+      form.classList.add('hidden'); box.classList.replace('hidden', 'flex'); scrollTo(0, 0);
+      box.querySelector('[data-back]').onclick = () => { box.classList.replace('flex', 'hidden'); form.classList.remove('hidden'); };
+    };
     form.onclick = e => {
+      if (e.target.closest('[data-preview]')) return preview(read(), 'con los cambios de esta pantalla, aunque no estén guardados').catch(showErr);
       const add = e.target.closest('[data-add-extra]'), del = e.target.closest('[data-del-extra]');
       if (add) add.previousElementSibling.insertAdjacentHTML('beforeend', extraRow());
       if (del) del.closest('[data-extra]').remove();
@@ -954,7 +972,9 @@ const views = {
           ${p.resumen ? `<p class="text-sm">${esc(p.resumen)}</p>` : ''}
           ${changes.length ? `<ul class="list-disc pl-5 text-sm">${changes.map(c => `<li>${esc(c)}</li>`).join('')}</ul>` : '<p class="text-sm text-on-surface-variant">La IA no propuso cambios.</p>'}
           <div class="flex gap-2">${changes.length ? '<button id="ai-apply" class="btn btn-primary"><span class="material-symbols-outlined">check</span>Aplicar</button>' : ''}
+            ${changes.length ? '<button id="ai-preview" class="btn border-[1.5px] border-[#cbd5e1] text-primary"><span class="material-symbols-outlined">visibility</span>Vista previa</button>' : ''}
             <button id="ai-discard" class="btn border-[1.5px] border-[#cbd5e1]">Descartar</button></div></div>`;
+        if (changes.length) $('#ai-preview').onclick = () => preview(p.config, 'con la propuesta de la IA, sin aplicar').catch(showErr);
         $('#ai-discard').onclick = () => { out.innerHTML = ''; };
         if (changes.length) $('#ai-apply').onclick = async () => { try { await save(p.config); } catch (err) { showErr(err); } };
       } catch (err) { showErr(err); }
