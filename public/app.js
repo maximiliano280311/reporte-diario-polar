@@ -136,6 +136,11 @@ const rowHtml = (t, r = {}) => {
   const i = rowN++, cols = t.cols.filter(c => !c.auto), f = id => input(cols.find(c => c.id === id), `${t.id}.${i}.${id}`, r[id]);
   const info = { material: 'data-pend class="col-span-2 self-end p-2 rounded-lg bg-tertiary-fixed/50 text-label-md text-on-tertiary-fixed"',
     partidas: 'data-dif class="col-span-2 self-end p-2 rounded-lg bg-surface-container text-label-md"' }[t.id];
+  // Check lists (PL-FOR-21/22/23): renglón compacto — el punto arriba y en una línea el resultado y la observación.
+  if (cols[0].id === 'punto') return `<div data-row class="flex flex-col gap-1.5 p-3 rounded-xl bg-surface-container-low">
+    <p class="text-body-md font-medium text-on-surface">${esc(r.punto)}</p><input type="hidden" name="${t.id}.${i}.punto" value="${esc(r.punto)}">
+    <div class="grid grid-cols-[minmax(110px,auto)_1fr] gap-2"><label><span class="sr-only">Resultado</span>${f('res')}</label>
+      <label><span class="sr-only">Observaciones</span>${f('obs').replace('<input ', '<input placeholder="Observaciones" ')}</label></div></div>`;
   return `
   <div data-row class="grid grid-cols-2 lg:grid-cols-4 gap-2 p-3 rounded-xl bg-surface-container-low">
     ${cols.map(c => labeled(c, f(c.id))).join('')}
@@ -190,9 +195,36 @@ const tableRows = (t, pre) => {
 const STATUS_CLS = { 'EN PLANTA': 'bg-surface-container-high text-primary', LIBERADO: 'bg-secondary-container text-on-secondary-container',
   ENTREGADO: 'bg-surface-container text-on-surface-variant', RETENIDO: 'bg-error-container text-on-error-container', RETRABAJO: 'bg-tertiary-fixed text-on-tertiary-fixed',
   ABIERTO: 'bg-error-container text-on-error-container', CERRADO: 'bg-surface-container text-on-surface-variant',
-  CONFORME: 'bg-secondary-container text-on-secondary-container', 'CON OBSERVACIONES': 'bg-tertiary-fixed text-on-tertiary-fixed' };
+  CONFORME: 'bg-secondary-container text-on-secondary-container', 'CON OBSERVACIONES': 'bg-tertiary-fixed text-on-tertiary-fixed',
+  APROBADA: 'bg-secondary-container text-on-secondary-container', 'APROBADA CON OBSERVACIONES': 'bg-tertiary-fixed text-on-tertiary-fixed',
+  'RECHAZADA (NO SALE)': 'bg-error-container text-on-error-container', FUNCIONANDO: 'bg-secondary-container text-on-secondary-container',
+  'FUNCIONA PARCIALMENTE': 'bg-tertiary-fixed text-on-tertiary-fixed', 'NO FUNCIONA (SIGUE PENDIENTE)': 'bg-error-container text-on-error-container',
+  REALIZADA: 'bg-secondary-container text-on-secondary-container' };
 const statusChip = s => `<span class="chip ${STATUS_CLS[s] || 'bg-surface-container'}">${esc(s)}</span>`;
-const KIND = { REC: ['PL-FOR-28', 'Recepción', 'inventory'], LIB: ['PL-FOR-29', 'Liberación', 'fact_check'], NC: ['PL-FOR-30', 'No conforme', 'report'] };
+const KIND = { REC: ['PL-FOR-28', 'Recepción', 'inventory'], LIB: ['PL-FOR-29', 'Liberación', 'fact_check'], NC: ['PL-FOR-30', 'No conforme', 'report'],
+  CL21: ['PL-FOR-21', 'Check list de camión', 'local_shipping'], CL22: ['PL-FOR-22', 'Check list de gas', 'propane_tank'],
+  CL23: ['PL-FOR-23', 'Check list de horno', 'local_fire_department'], PLA: ['PL-FOR-25', 'Plática', 'record_voice_over'], MT: ['PL-FOR-35', 'Mantenimiento', 'build'] };
+// Equipos para el PL-FOR-35 (catálogo base de MOD-000; se puede escribir otro).
+const EQUIPOS = ['Horno de pirólisis', 'Quemador / control de flama', 'Controlador / PLC', 'Hidrolavadora', 'Montacargas', 'Vehículo', 'Compresor', 'Bomba / Rotoplas',
+  'Instalación de gas', 'Instalación eléctrica', 'Tanque de proceso / decapado', 'Herramienta', 'Cómputo / software', 'Edificio'];
+// Documentos vigentes para consultar o imprimir (public/docs, de la carpeta "Modificaciones App Polar").
+const DOCS = [['Consulta', [['PL-POL-01', 'Política de calidad', 'PL-POL-01_POLITICA_DE_CALIDAD_v1.pdf'], ['PL-DOC-07', 'Instrucciones de trabajo', 'PL-DOC-07_INSTRUCCIONES_DE_TRABAJO_v1.pdf'],
+    ['RIT', 'Reglamento interior de trabajo', 'REGLAMENTO_INTERIOR_DE_TRABAJO_POLAR_v1.pdf']]],
+  ['Formatos para imprimir', [['PL-FOR-25', 'Asistencia a pláticas de seguridad', 'PL-FOR-25_ASISTENCIA_PLATICAS_SEGURIDAD_v1.pdf'],
+    ['PL-FOR-26', 'Reporte diario de operación e incidencias', 'PL-FOR-26_REPORTE_DIARIO_INCIDENCIAS_v8.pdf'], ['PL-FOR-28', 'Recepción de material', 'PL-FOR-28_RECEPCION_MATERIAL_TRAZABILIDAD_v1.pdf'],
+    ['PL-FOR-29', 'Inspección y liberación', 'PL-FOR-29_INSPECCION_LIBERACION_v1.pdf'], ['PL-FOR-30', 'Producto no conforme', 'PL-FOR-30_PRODUCTO_NO_CONFORME_v1.pdf'],
+    ['PL-FOR-35', 'Registro de mantenimiento', 'PL-FOR-35_REGISTRO_MANTENIMIENTO_v1.pdf']]]];
+// Botones de los formatos de operación (obligatorios 1 vez por semana). sem: /api/semana; plants: de qué plantas se cuenta lo que falta.
+const fmtButtons = (sem, plants = PLANTS) => {
+  const falta = kinds => (sem?.formatos || []).filter(x => kinds.includes(x.kind) && plants.includes(x.plant)).flatMap(x => x.faltan.map(f => plants.length > 1 ? `${x.plant}: ${f}` : f));
+  const btn = (href, icon, label, code, kinds) => { const f = kinds && sem ? falta(kinds) : null; return `<a href="${href}" class="card p-3 flex flex-col gap-1 hover:bg-surface-container-low ${f?.length ? 'ring-2 ring-tertiary-fixed-dim' : ''}">
+    <span class="flex items-center gap-2"><span class="material-symbols-outlined text-primary">${icon}</span><span class="text-label-lg leading-tight">${label}</span></span>
+    <span class="text-[11px] text-on-surface-variant">${code}</span>
+    ${!f ? '' : f.length ? `<span class="text-[11px] font-semibold text-tertiary">⚠ Falta esta semana${kinds[0] === 'CL21' || plants.length > 1 ? ': ' + esc(f.join(', ')) : ''}</span>` : '<span class="text-[11px] font-semibold text-secondary">✔ Hecho esta semana</span>'}</a>`; };
+  return `<div class="grid grid-cols-2 gap-2">${btn('#/fmt/MT', 'build', 'Mantenimiento / actualización', 'PL-FOR-35', ['MT'])}${btn('#/fmt/CL21', 'local_shipping', 'Check list vehículos', 'PL-FOR-21', ['CL21'])}
+    ${btn('#/fmt/HG', 'local_fire_department', 'Check list horno y gas', 'PL-FOR-22 / 23', ['CL22', 'CL23'])}${btn('#/fmt/PLA', 'record_voice_over', 'Plática / capacitación', 'PL-FOR-25', ['PLA'])}
+    ${btn('#/docs', 'folder_open', 'Documentos', 'Política, instrucciones, reglamento')}</div>`;
+};
 // Franja roja de emergencia (sección 2 del documento): llamada directa a gerencia.
 const emergencia = tel => tel ? `<a href="tel:${esc(tel.replace(/[^\d+]/g, ''))}" class="no-print flex items-center gap-3 p-3 rounded-xl bg-error text-white lg:col-span-2">
   <span class="material-symbols-outlined">emergency</span><span class="text-label-md">Fuga de gas, falla eléctrica, incendio o accidente: llama a gerencia</span>
@@ -253,7 +285,10 @@ function qDoc(r) {
   const a = r.data, kv = pairs => `<table><tbody>${pairs.map(([k, v]) => `<tr><td class="k">${esc(k)}</td><td>${esc(v) || '&nbsp;'}</td></tr>`).join('')}</tbody></table>`;
   const head = { REC: [['Folio', r.folio], ['Planta', r.plant], ['Recibió', r.name], ['Estatus', r.status]],
     LIB: [['Folio', r.folio], ['Planta', r.plant], ['Cliente', a.cliente], ['No. de parte', a.parte], ['Folio REC', a.rec], ['Estatus', r.status]],
-    NC: [['Folio', r.folio], ['Planta', r.plant], ['Elaboró', r.name], ['Origen', a.origen || '—'], ['¿Requiere 8D? (sugerido)', a.sugiere_8d], ['Estatus', r.status]] }[r.kind];
+    NC: [['Folio', r.folio], ['Planta', r.plant], ['Elaboró', r.name], ['Origen', a.origen || '—'], ['¿Requiere 8D? (sugerido)', a.sugiere_8d], ['Estatus', r.status]] }[r.kind]
+    || [['Folio', r.folio], ['Planta', r.plant], ['Elaboró / revisó', r.name], ['Resultado', r.status],
+      ...(a.fallas ? [['Puntos con falla', a.fallas]] : []), ...(a.duracion ? [['Duración (min)', a.duracion], ['Total de asistentes', a.total]] : []),
+      ...(r.kind === 'MT' ? [['Costo total', money(Number(a.total) || 0)], ...(a.sin_respaldo === 'Sí' ? [['⚠ Software', 'Sin respaldo previo']] : [])] : [])];
   const fotos = r.sections.flatMap(s => (s.fields || []).filter(f => f.type === 'photos').flatMap(f => (a[f.id] || []).map(k => [f.label, k])));
   return `<div class="pl">
     <table class="head"><tr><td rowspan="3" class="logo">POLAR</td><td rowspan="2" class="t">RETRABAJOS INDUSTRIALES Y LIMPIEZAS ESPECIALIZADAS POLAR</td><td class="k">Número de control</td><td>${r.code}</td></tr>
@@ -329,8 +364,8 @@ const views = {
 
   // Diseño: pantalla "Dashboard Principal" del proyecto Stitch "Remix of Daily Form Dashboard".
   async inicio() {
-    let cal; // panel de Calidad (si falla, el resto del inicio se muestra igual)
-    [reports, cal] = await Promise.all([api('/api/reports?desde=' + daysAgo(60)), api('/api/calidad').catch(() => null)]); // racha, semana y mes
+    let cal, sem; // panel de Calidad y formatos de la semana (si fallan, el resto del inicio se muestra igual)
+    [reports, cal, sem] = await Promise.all([api('/api/reports?desde=' + daysAgo(60)), api('/api/calidad').catch(() => null), api('/api/semana').catch(() => null)]); // racha, semana y mes
     const nLot = st => cal ? cal.lotes.filter(l => l.status === st).length : 0;
     const today = ymd(), todayDone = reports.find(r => r.date === today);
     const monday = new Date(); monday.setDate(monday.getDate() - (monday.getDay() + 6) % 7);
@@ -392,8 +427,8 @@ const views = {
         <p class="text-label-sm text-on-surface-variant">${nLot('EN PLANTA')} lotes en planta · ${nLot('RETENIDO')} retenidos · ${nLot('LIBERADO')} por entregar
           ${cal.alertas.length ? `· <a href="#/calidad" class="text-error font-semibold">⚠ ${cal.alertas.length} ${cal.alertas.length === 1 ? 'alerta' : 'alertas'}</a>` : ''}</p>
       </div>` : ''}
-      <div class="grid grid-cols-2 gap-2">${['Mantenimiento PL-FOR-35', 'Check list vehículos PL-FOR-21/24', 'Check list horno y gas PL-FOR-22/23',
-        'Plática / capacitación PL-FOR-25', 'Documentos'].map(t => `<button type="button" disabled class="p-3 rounded-lg bg-surface-container text-on-surface-variant/60 text-label-sm text-left cursor-not-allowed">${t}<br><span class="text-[10px]">Próximamente</span></button>`).join('')}</div>
+      <div class="flex flex-col gap-space-sm"><h3 class="text-label-lg flex items-center gap-2"><span class="material-symbols-outlined text-primary text-[20px]">checklist</span>Formatos de la semana</h3>
+        <p class="text-label-sm text-on-surface-variant -mt-1">Obligatorios al menos 1 vez por semana (el check list de vehículos, por cada unidad).</p>${fmtButtons(sem, [me.plant])}</div>
       <div class="grid grid-cols-2 gap-space-md">
         <div class="flex flex-col justify-between p-space-md rounded-xl bg-surface-container-lowest shadow-sm">
           <div class="flex items-center justify-between">
@@ -613,7 +648,8 @@ const views = {
 
   async admin() {
     let users, week;
-    [week, users] = await Promise.all([api('/api/reports?desde=' + daysAgo(6)), api('/api/users')]);
+    let sem;
+    [week, users, sem] = await Promise.all([api('/api/reports?desde=' + daysAgo(6)), api('/api/users'), api('/api/semana').catch(() => null)]);
     users = users.filter(u => u.role === 'colaborador' && u.status === 'activo');
     const today = week.filter(r => r.date === ymd());
     const team = users.map(u => {
@@ -633,7 +669,8 @@ const views = {
       ['Pendientes con más de 7 días', rows(last, 'mantenimiento', m => m.estatus !== 'Cerrado' && m.detectado && m.detectado < daysAgo(7), m => `${m.equipo || ''} — ${m.falla || ''} (desde ${m.detectado.split('-').reverse().join('/')})`), 'red'],
       ['Incidencias críticas de la semana', rows(week, 'incidencias', i => ['GA', 'EL', 'SE'].includes(i.tipo), (i, r) => `${r.date.split('-').reverse().join('/')} ${i.tipo}: ${i.que_paso || ''}`), 'red'],
       ['Químicos por pedir', rows(last, 'quimicos', q => ['PT', 'A'].includes(q.existencia), q => `${q.quimico} (${q.existencia})`), 'yellow'],
-      ['Vehículos con check list vencido', rows(last, 'vehiculos', v => v.vehiculo && (!v.checklist || v.checklist < daysAgo(7)), v => `${v.vehiculo} (${v.checklist ? v.checklist.split('-').reverse().join('/') : 'sin registro'})`), 'red']];
+      ['Vehículos con check list vencido', rows(last, 'vehiculos', v => v.vehiculo && (!v.checklist || v.checklist < daysAgo(7)), v => `${v.vehiculo} (${v.checklist ? v.checklist.split('-').reverse().join('/') : 'sin registro'})`), 'red'],
+      ['Formatos de la semana pendientes', (sem?.formatos || []).flatMap(x => x.faltan.map(f => `${x.plant} · ${x.code} ${x.title}${x.kind === 'CL21' ? ': ' + f : ''}`)), 'red']];
     $('#app').innerHTML = `
     <h1 class="${WIDE ? 'text-3xl font-bold' : 'text-2xl font-semibold'} tracking-tight">Reportes del equipo</h1>
     <p class="text-sm text-on-surface-variant">${fdate(ymd())}</p>
@@ -1013,7 +1050,7 @@ const views = {
   // ---------- Calidad ISO 9001 (etapa 1) ----------
   // Tablero: emergencia, botones de captura, alertas, lotes y registros. Admin: filtro de planta y catálogo de clientes.
   async calidad() {
-    const c = await api('/api/calidad' + (me.role === 'admin' && calPlant ? '?planta=' + encodeURIComponent(calPlant) : ''));
+    const [c, sem] = await Promise.all([api('/api/calidad' + (me.role === 'admin' && calPlant ? '?planta=' + encodeURIComponent(calPlant) : '')), api('/api/semana').catch(() => null)]);
     if (me.role === 'admin') { alertN = c.alertas.length; renderNav('calidad'); }
     const F = { activos: ['EN PLANTA', 'RETENIDO', 'LIBERADO'], 'EN PLANTA': ['EN PLANTA'], RETENIDO: ['RETENIDO'], LIBERADO: ['LIBERADO'], ENTREGADO: ['ENTREGADO'] };
     const lotes = c.lotes.filter(l => F[calFilter].includes(l.status)), days = l => Math.round((Date.parse(ymd()) - Date.parse(l.received)) / 86_400_000);
@@ -1029,6 +1066,7 @@ const views = {
       ${me.role === 'admin' ? `<label class="flex items-center gap-2 text-label-md text-on-surface-variant">Planta
         <select id="cal-planta" class="input w-auto"><option value="">Todas</option>${PLANTS.map(p => `<option ${p === calPlant ? 'selected' : ''}>${p}</option>`).join('')}</select></label>` : ''}
       ${qButtons()}
+      ${fmtButtons(sem, calPlant ? [calPlant] : me.role === 'admin' ? PLANTS : [me.plant])}
       <p id="err" class="text-sm text-error hidden" role="alert"></p>
       ${c.alertas.length ? `<section id="alertas" class="card p-4 flex flex-col gap-2 border-l-4 border-error">
         <h2 class="font-semibold flex items-center gap-2"><span class="material-symbols-outlined text-error">notifications_active</span>Alertas (${c.alertas.length})</h2>
@@ -1049,7 +1087,7 @@ const views = {
           <h2 class="font-semibold flex items-center gap-2 mb-2"><span class="material-symbols-outlined text-primary">history</span>Registros recientes</h2>
           ${c.registros.length ? c.registros.map(r => `<a href="#/q/${esc(r.folio)}" class="flex items-center justify-between gap-2 py-2 border-t border-[#f1f5f9] hover:bg-surface-container-low">
             <div class="min-w-0"><p class="font-semibold">${esc(r.folio)} <span class="text-label-sm text-on-surface-variant font-normal">${KIND[r.kind][1]} · ${KIND[r.kind][0]}</span></p>
-              <p class="text-[12px] text-on-surface-variant truncate">${dmy(r.date)} · ${esc(r.data.cliente || '')} · ${esc(r.name)}${me.role === 'admin' ? ' · ' + esc(r.plant) : ''}</p></div>
+              <p class="text-[12px] text-on-surface-variant truncate">${dmy(r.date)} · ${esc(r.data.cliente || r.data.unidad || r.data.horno || r.data.tema || r.data.equipo || '')} · ${esc(r.name)}${me.role === 'admin' ? ' · ' + esc(r.plant) : ''}</p></div>
             ${statusChip(r.status)}</a>`).join('') : '<p class="text-sm text-on-surface-variant">Aún no hay registros.</p>'}
         </section>
       </div>
@@ -1079,6 +1117,28 @@ const views = {
     };
   },
 
+  // Formatos de operación: #/fmt/CL21 · CL22 · CL23 · PLA · MT; HG = elegir check list de horno o de gas.
+  async fmt(kind) {
+    if (kind !== 'HG') return views.qnuevo(KIND[kind] && !['REC', 'LIB', 'NC'].includes(kind) ? kind : 'MT');
+    const sem = await api('/api/semana').catch(() => null);
+    $('#app').innerHTML = `<div class="flex flex-col gap-4 ${WIDE ? 'max-w-xl' : ''}">
+      <a href="#/${me.role === 'admin' ? 'calidad' : 'inicio'}" class="text-primary text-label-md flex items-center gap-1"><span class="material-symbols-outlined text-[18px]">arrow_back</span>Volver</a>
+      <h1 class="text-headline-lg-mobile tracking-tight">Check list de horno y gas</h1>
+      ${['CL22', 'CL23'].map(k => { const f = (sem?.formatos || []).filter(x => x.kind === k && (me.role === 'admin' || x.plant === me.plant) && x.faltan.length);
+        return `<a href="#/fmt/${k}" class="card p-4 flex items-center gap-3 hover:bg-surface-container-low"><span class="material-symbols-outlined text-primary text-[32px]">${KIND[k][2]}</span>
+          <span class="flex-1"><span class="text-label-lg block">${KIND[k][1]}</span><span class="text-[11px] text-on-surface-variant">${KIND[k][0]}</span></span>
+          ${f.length ? `<span class="chip bg-tertiary-fixed text-on-tertiary-fixed">Falta esta semana${me.role === 'admin' ? ': ' + f.map(x => x.plant).join(', ') : ''}</span>` : '<span class="chip bg-secondary-container text-on-secondary-container">✔ Hecho</span>'}</a>`; }).join('')}</div>`;
+  },
+  // Documentos vigentes (solo consulta / imprimir).
+  docs() {
+    $('#app').innerHTML = `<div class="flex flex-col gap-4 ${WIDE ? 'max-w-2xl' : ''}">
+      <div><h1 class="${WIDE ? 'text-3xl font-bold' : 'text-2xl font-semibold'} tracking-tight">Documentos</h1>
+        <p class="text-sm text-on-surface-variant">Revisión vigente para consultar o imprimir.</p></div>
+      ${DOCS.map(([g, xs]) => `<section class="card p-4"><h2 class="text-label-lg text-primary mb-2">${g}</h2>${xs.map(([code, name, file]) => `
+        <a href="/docs/${file}" target="_blank" rel="noopener" class="flex items-center gap-3 py-2.5 border-t border-[#f1f5f9] first:border-0 hover:bg-surface-container-low">
+          <span class="material-symbols-outlined text-error">picture_as_pdf</span><span class="flex-1 min-w-0"><span class="font-medium block">${name}</span><span class="text-[11px] text-on-surface-variant">${code}</span></span>
+          <span class="material-symbols-outlined text-on-surface-variant">open_in_new</span></a>`).join('')}</section>`).join('')}</div>`;
+  },
   rec: () => views.qnuevo('REC'),
   lib: lote => views.qnuevo('LIB', lote),
   nc: origen => views.qnuevo('NC', origen),
@@ -1102,6 +1162,7 @@ const views = {
         ${me.role === 'admin' && !prev ? `<label class="flex flex-col gap-1 text-label-md text-on-surface-variant max-w-xs">Planta${plantSelect('id="q-planta"', plant)}</label>` : ''}
         ${kind === 'LIB' && !secs[0].fields[0].options.length ? '<p class="card p-4 text-body-md">No hay lotes EN PLANTA para liberar. Registra primero la recepción (PL-FOR-28).</p>' : ''}
         <datalist id="dl-piezas">${[...new Set(f.lotes.map(l => l.part))].map(p => `<option value="${esc(p)}">`).join('')}</datalist>
+        <datalist id="dl-equipos">${EQUIPOS.map(p => `<option value="${esc(p)}">`).join('')}</datalist>
         <form id="qform" class="flex flex-col gap-4">
           ${sectionsHtml(secs, pre, t => t.fixed ? tableRows(t, pre) : pre[t.id] || (t.id === 'partidas' ? [{}] : []), (s, at) => at !== 'bottom' ? ''
             : kind === 'LIB' && s.n === 1 ? '<p data-lote-info class="p-3 rounded-xl bg-surface-container text-label-md"></p>'
@@ -1164,6 +1225,8 @@ const views = {
         + `<p class="text-body-md">Lotes asignados: ${r.partidas.map(p => `<b>${esc(p.lote)}</b> (${esc(p.parte)}, ${esc(p.contada)} pza)`).join(', ')}</p>`
       : kind === 'LIB' ? (r.requiereNC ? box('bg-error-container text-on-error-container', 'block', `El lote ${esc(r.lote)} quedó <b>RETENIDO</b>. Levanta ahora el no conforme (PL-FOR-30).`)
         : `<p class="text-body-md">Lote <b>${esc(r.lote)}</b>: ${statusChip(r.status)} · aceptación ${esc(r.pct)} %</p>`)
+      : kind !== 'NC' ? `<p class="text-body-md">Resultado: ${statusChip(r.status)}${r.status.startsWith('RECHAZADA') ? ' · se avisó a gerencia' : ''}</p>`
+        + (r.sin_respaldo === 'Sí' ? box('bg-tertiary-fixed text-on-tertiary-fixed', 'warning', 'Actualización de software <b>sin respaldo</b> previo.') : '')
       : `<p class="text-body-md">Estatus ${statusChip(r.estatus)} · ¿Requiere 8D? (sugerido): <b>${esc(r.sugiere_8d)}</b></p>${edit ? '' : '<p class="text-body-sm text-on-surface-variant">Se avisó a gerencia.</p>'}`;
     const nc = (kind === 'REC' && r.anomalia) || (kind === 'LIB' && r.requiereNC);
     $('#app').innerHTML = `
@@ -1697,7 +1760,7 @@ function renderNav(name) {
 }
 
 // Opción del menú que se marca en pantallas que no están en el menú.
-const QVIEWS = ['rec', 'lib', 'nc', 'ncedit', 'q']; // pantallas de Calidad que no están en el menú
+const QVIEWS = ['rec', 'lib', 'nc', 'ncedit', 'q', 'fmt', 'docs']; // pantallas de Calidad que no están en el menú
 const navOf = name => ({ pl: 'admin', editar: me.role === 'admin' ? 'admin' : 'historial' })[name] ?? (QVIEWS.includes(name) ? 'calidad' : name);
 async function route() {
   const [name, arg] = location.hash.slice(2).split('/');

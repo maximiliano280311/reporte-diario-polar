@@ -159,6 +159,96 @@ const NOM_MONEY = ['sueldo', 'te', 'teModo', 'bono']; // campos del empleado que
 const NOM_CONFIG = { porcentaje: 4, diasDivisor: 6, horasJornada: 8, factorTE: 2, bonoDefault: 500, inicio: { Querétaro: 6, Silao: 0, Administración: 1 } };
 const isDate = s => /^\d{4}-\d{2}-\d{2}$/.test(String(s ?? ''));
 
+// ---------- Formatos de operación (etapa 2): check lists PL-FOR-21/22/23, plática PL-FOR-25, mantenimiento PL-FOR-35 ----------
+// Mismo esquema que QFORMS; se guardan en qrecords. Todos son obligatorios al menos 1 vez por semana por planta
+// (el PL-FOR-21, por cada unidad que no es montacargas). Puntos tomados de los Excel de "Modificaciones App Polar".
+const chkCols = opciones => [{ id: 'punto', label: 'Punto', readonly: true, wide: true }, { id: 'res', label: 'Resultado', type: 'select', options: opciones, required: true },
+  { id: 'obs', label: 'Observaciones', wide: true }];
+const RESULTADO_CHK = ['APROBADA', 'APROBADA CON OBSERVACIONES', 'RECHAZADA (NO SALE)'];
+// Check list: datos + un grupo por sección (renglones fijos) + resultado. bad: respuestas que piden observación.
+const checklist = (code, title, opciones, bad, datos, grupos) => ({ code, title, bad, sections: [
+  { n: 1, title: 'Datos', fields: datos },
+  ...grupos.map(([t, items], i) => ({ n: i + 2, title: t, table: { id: 'g' + (i + 1), fixed: items, cols: chkCols(opciones) } })),
+  { n: grupos.length + 2, title: 'Resultado de la inspección', hint: `Si marcas ${bad.join(' o ')} en algún punto, anota en observaciones qué falla (y de qué lado, si aplica).`,
+    fields: [{ id: 'resultado', label: 'Resultado', type: 'select', options: RESULTADO_CHK, required: true, wide: true },
+      { id: 'pendientes', label: 'Pendientes / reparaciones a realizar', type: 'textarea', wide: true },
+      { id: 'fotos', label: 'Fotos (de lo que está mal)', type: 'photos', wide: true }] }] });
+const hoyHora = [{ id: 'fecha', label: 'Fecha', type: 'date', required: true }, { id: 'hora', label: 'Hora', type: 'time', required: true }];
+const TEMAS = ['5S / orden y limpieza', 'Uso de EPP', 'Manejo de químicos / HDS', 'Prevención de incendios / extintores', 'Bloqueo y etiquetado (LOTO)',
+  'Manejo seguro de gas LP', 'Operación segura de hornos', 'Trabajo en caliente', 'Levantamiento de cargas', 'Plan de emergencia / evacuación',
+  'Primeros auxilios', 'Manejo de residuos', 'Otro'];
+const PEND_NUEVO = 'NO, ES UN TRABAJO NUEVO';
+const RESULTADO_MT = ['FUNCIONANDO', 'FUNCIONA PARCIALMENTE', 'NO FUNCIONA (SIGUE PENDIENTE)'];
+const FORMATOS = {
+  CL21: checklist('PL-FOR-21', 'Check list de camión', ['BIEN', 'MAL', 'N/A'], ['MAL'], [
+    { id: 'unidad', label: 'Unidad / placas', type: 'select', options: [], src: 'unidades', required: true, wide: true }, ...hoyHora,
+    { id: 'km', label: 'Kilometraje', type: 'number', required: true }, { id: 'operador', label: 'Operador', required: true }], [
+    ['Frenos', ['Nivel de líquido de frenos', 'Pedal de freno (recorrido y firmeza)', 'Freno de mano', 'Mangueras y conexiones de freno sin fugas', 'Sistema de aire / compresor (si aplica)']],
+    ['Motor', ['Sin fugas de aceite, anticongelante o diésel', 'Mangueras sin fugas ni grietas', 'Nivel de aceite de motor', 'Nivel de anticongelante / radiador',
+      'Nivel de urea (si aplica)', 'Filtro de aire', 'Filtros de aceite y combustible sin fugas', 'Batería (terminales limpias y bien sujeta)']],
+    ['Llantas y rines', ['Presión de aire en todas las llantas (100 PSI)', 'Llantas delanteras (izq. y der.)', 'Llantas traseras exteriores (izq. y der.)',
+      'Llantas traseras interiores (izq. y der.)', 'Llanta de refacción', 'Tuercas y birlos (apriete y faltantes)', 'Guardapolvos y salpicaderas']],
+    ['Luces', ['Luces bajas', 'Luces altas', 'Luces de freno', 'Luces de reversa', 'Intermitentes', 'Direccionales delanteras y traseras', 'Luz interior de cabina']],
+    ['Cabina', ['Tablero sin testigos de falla encendidos', 'Claxon', 'Limpiaparabrisas', 'Parabrisas y vidrios sin estrellar', 'Espejos', 'Cinturón de seguridad', 'Aire acondicionado']],
+    ['Plataforma', ['Plataforma bien sujeta al chasis', 'Argollas y puntos de amarre completos', 'Eslingas y matracas sin daño', 'Piso sin hoyos ni piezas sueltas']],
+    ['Equipo de seguridad y documentos', ['Extintor (vigente y cargado)', 'Triángulos de seguridad', 'Gato y llave de cruz', 'Botiquín de primeros auxilios',
+      'Licencia del operador vigente', 'Tarjeta de circulación (original o copia)', 'Póliza de seguro vigente', 'Limpieza de la unidad']]]),
+  CL22: checklist('PL-FOR-22', 'Check list de área de gas', ['BUENO', 'REQUIERE ATENCIÓN', 'FUERA DE SERVICIO'], ['REQUIERE ATENCIÓN', 'FUERA DE SERVICIO'], hoyHora, [
+    ['Inspección del tanque principal', ['Nivel de gas (medidor / flotador) dentro de 10 %', 'No hay olor a gas en el área', 'Tanques sin golpes, corrosión o fugas',
+      'Válvulas de servicio, llenado y de alivio sin fugas (agua jabonosa)', 'Cuerpo del tanque sin corrosión, golpes o daños en pintura', 'Manómetros con lectura normal y sin fugas']],
+    ['Vaporizador', ['Fugas en conexiones y roscas (agua jabonosa, nunca con flama)', 'Válvulas de venteo del regulador no obstruidas', 'Carcasa sin corrosión, golpes ni tornillería floja',
+      'Manómetros con lectura dentro del rango normal de operación', 'Sin escarcha excesiva ni sobrecalentamiento anormal']],
+    ['Tanque pulmón', ['Presión dentro de rango normal (manómetro)', 'Sin fugas en válvulas y uniones', 'Válvula de alivio opera correctamente']],
+    ['Tubería y trayectoria', ['Recorrido visible sin fugas, golpes o corrosión', 'Conducto de gas líquido (tubo blanco) sin fugas']]]),
+  CL23: checklist('PL-FOR-23', 'Check list de horno de pirólisis', ['BIEN', 'REGULAR', 'FALLA'], ['REGULAR', 'FALLA'],
+    [{ id: 'horno', label: 'Horno', required: true, list: 'hornos' }, ...hoyHora], [
+    ['Inspección previa al arranque', ['Puerta de cámara cierra y sella correctamente (sin fugas visibles ni humo)', 'Aislamiento cerámico interior sin daños mayores, desprendimientos o huecos',
+      'Riel de carga y ruedas del carro libres de obstrucciones y bien lubricadas', 'Carga (racks) sin tocar paredes, techo ni quemadores', 'Ductos de chimeneas sin obstrucciones visibles',
+      'Aspersores de agua libres']],
+    ['Sistema de gas LP', ['Tubería amarilla de gas sin golpes, corrosión ni fugas (prueba con agua jabonosa)', 'Válvula de corte principal opera libremente y cierra por completo',
+      'Manómetros funcionando y con lectura de presión normal', 'Conexiones y uniones roscadas sin fugas']],
+    ['Quemadores, postquemadores y agua', ['Quemadores giran libremente, sin vibración ni ruido anormal', 'Llama estable sin pulsaciones de los quemadores', 'Motor de los quemadores sin sobrecalentamiento',
+      'Postquemadores giran libremente, sin vibración ni ruido anormal', 'Motor de los postquemadores sin sobrecalentamiento', 'Llama estable sin pulsaciones de los postquemadores',
+      'Bomba de agua sin fugas y con presión correcta']]]),
+  PLA: { code: 'PL-FOR-25', title: 'Asistencia a pláticas de seguridad y capacitación', sections: [
+    { n: 1, title: 'Datos de la plática', hint: 'La duración se calcula sola.', fields: [{ id: 'fecha', label: 'Fecha', type: 'date', required: true },
+      { id: 'hora', label: 'Hora inicio', type: 'time', required: true }, { id: 'hora_fin', label: 'Hora fin', type: 'time', required: true },
+      { id: 'turno', label: 'Turno', type: 'select', options: ['Matutino', 'Vespertino', 'Nocturno'] }, { id: 'area', label: 'Área / lugar', wide: true },
+      { id: 'imparte', label: 'Impartió', required: true }, { id: 'puesto', label: 'Puesto de quien imparte' }] },
+    { n: 2, title: 'Tema', fields: [{ id: 'tema', label: 'Tema', type: 'select', options: TEMAS, required: true, wide: true }, { id: 'tema_otro', label: 'Si es "Otro", ¿cuál?', wide: true }] },
+    { n: 3, title: 'Contenido', fields: [{ id: 'puntos', label: 'Puntos tratados', type: 'textarea', required: true, wide: true },
+      { id: 'acuerdos', label: 'Observaciones / acuerdos', type: 'textarea', wide: true }] },
+    { n: 4, title: 'Asistentes', hint: 'Marca al personal de la planta que asistió (es el de Nómina → Empleados). Personas de fuera: escríbelas abajo, separadas por coma.',
+      fields: [{ id: 'asistentes', label: 'Personal que asistió', type: 'checks', options: [], src: 'personal' }, { id: 'otros', label: 'Otros asistentes', wide: true }] },
+    { n: 5, title: 'Evidencia', fields: [{ id: 'fotos', label: 'Fotos de la plática', type: 'photos', wide: true }] }] },
+  MT: { code: 'PL-FOR-35', title: 'Registro de mantenimiento y actualizaciones', sections: [
+    { n: 1, title: 'Datos generales', fields: [{ id: 'fecha', label: 'Fecha', type: 'date', required: true },
+      { id: 'tipo', label: 'Tipo de trabajo', type: 'select', options: ['CORRECTIVO (REPARACIÓN)', 'PREVENTIVO', 'ACTUALIZACIÓN DE SOFTWARE', 'MEJORA / MODIFICACIÓN'], required: true, wide: true },
+      { id: 'pendiente', label: '¿Viene de un pendiente del reporte diario?', type: 'select', options: [], src: 'pendientes', required: true, wide: true }] },
+    { n: 2, title: 'Equipo', fields: [{ id: 'equipo', label: 'Equipo', required: true, list: 'equipos', wide: true }, { id: 'serie', label: 'Serie / ID' }] },
+    { n: 3, title: 'Falla y trabajo realizado', fields: [{ id: 'falla', label: 'Falla o motivo del trabajo', type: 'textarea', required: true, wide: true },
+      { id: 'trabajo', label: 'Trabajo realizado', type: 'textarea', required: true, wide: true }] },
+    { n: 4, title: 'Solo para actualizaciones de software', fields: [{ id: 'sistema', label: 'Sistema / equipo actualizado', wide: true },
+      { id: 'version_ant', label: 'Versión anterior' }, { id: 'version_nueva', label: 'Versión nueva' },
+      { id: 'respaldo', label: '¿Se hizo respaldo antes?', type: 'select', options: SN }, { id: 'probado', label: '¿Se probó después?', type: 'select', options: SN }] },
+    { n: 5, title: 'Refacciones, materiales y costos', hint: 'El costo total se calcula solo.', table: { id: 'refacciones', item: 'refacción', cols: [
+      { id: 'cant', label: 'Cant.', type: 'number' }, { id: 'descripcion', label: 'Descripción', wide: true }, { id: 'costo', label: 'Costo ($)', type: 'number' },
+      { id: 'factura', label: '¿Factura?', type: 'select', options: SN }] },
+      fields: [{ id: 'mano_obra', label: 'Mano de obra externa ($)', type: 'number', after: true }, { id: 'fotos', label: 'Fotos (facturas, equipo)', type: 'photos', wide: true, after: true }] },
+    { n: 6, title: 'Quién lo realizó y tiempos', fields: [{ id: 'quien', label: '¿Quién lo hizo?', type: 'select', options: ['PERSONAL INTERNO', 'PROVEEDOR EXTERNO'], required: true },
+      { id: 'nombre', label: 'Nombre', required: true }, { id: 'proveedor', label: 'Empresa y teléfono (si es externo)', wide: true },
+      { id: 'hora', label: 'Hora inicio', type: 'time' }, { id: 'hora_fin', label: 'Hora fin', type: 'time' }, { id: 'horas_paro', label: 'Horas que estuvo parado el equipo', type: 'number' }] },
+    { n: 7, title: 'Resultado y liberación', hint: 'Si viene de un pendiente y queda FUNCIONANDO, el pendiente se cierra solo. Si es trabajo nuevo y NO FUNCIONA, se abre un pendiente.',
+      fields: [{ id: 'resultado', label: 'El equipo quedó', type: 'select', options: RESULTADO_MT, required: true, wide: true },
+        { id: 'pruebas', label: 'Pruebas realizadas', wide: true }, { id: 'libero', label: 'Liberó / recibió (encargado)', required: true },
+        { id: 'proximo', label: 'Próximo mantenimiento', type: 'date' }, { id: 'observaciones', label: 'Observaciones', type: 'textarea', wide: true }] }] },
+};
+Object.assign(QFORMS, FORMATOS); // mismas rutas de formato, registro e impresión que Calidad
+const pendKey = m => `${m.equipo}|${m.falla}`.trim().toLowerCase();
+const pendLabel = m => `${m.equipo || '(sin equipo)'} — ${m.falla || ''}`.slice(0, 200);
+// Lunes de la semana de una fecha AAAA-MM-DD (las fechas ya vienen en hora de México).
+const lunes = s => { const d = new Date(s + 'T12:00:00Z'); d.setUTCDate(d.getUTCDate() - (d.getUTCDay() + 6) % 7); return d.toISOString().slice(0, 10); };
+
 // Entrega de un lote: va completa (fecha, remisión POLAR, quién recibió) o vacía, y solo si el lote se libera.
 function entregaDe(a, libera) {
   if (!(a.entrega_fecha || a.remision_polar || a.recibio || a.foto_remision?.length)) return false;
@@ -281,7 +371,21 @@ export function createApp({ db, files, env = {} }) {
       for (const v of a.vehiculos || []) if (v.vehiculo && v.km_fin) km[v.vehiculo] = v.km_fin;
       for (const m of a.material || []) saldos[matKey(m)] = m;
     }
-    return { km, saldos, pendientes: (rows.at(-1)?.mantenimiento || []).filter(m => m.estatus !== 'Cerrado') };
+    return { km, saldos, pendientes: plant ? await pendientesAbiertos(plant, rows.at(-1) || {}) : [] };
+  }
+  // Pendientes de mantenimiento abiertos: los del último reporte de la planta, menos los que cerró un PL-FOR-35 que quedó
+  // FUNCIONANDO, más los que abrió un trabajo nuevo que NO FUNCIONA (hasta que un reporte los marque Cerrado).
+  async function pendientesAbiertos(plant, last) {
+    last ??= JSON.parse((await db.get('SELECT answers FROM reports WHERE plant = ? ORDER BY date DESC, id DESC LIMIT 1', plant))?.answers || '{}');
+    const mts = (await db.all("SELECT data FROM qrecords WHERE kind = 'MT' AND plant = ? ORDER BY created_at", plant)).map(r => JSON.parse(r.data));
+    const cerrados = new Set(mts.filter(m => m.resultado === 'FUNCIONANDO' && m.pendiente_key).map(m => m.pendiente_key));
+    const out = (last.mantenimiento || []).filter(m => m.estatus !== 'Cerrado' && !cerrados.has(pendKey(m)));
+    const enReporte = new Set((last.mantenimiento || []).map(pendKey));
+    for (const m of mts) if (m.pendiente === PEND_NUEVO && m.resultado.startsWith('NO FUNCIONA')) {
+      const p = { detectado: m.fecha, equipo: m.equipo, falla: m.falla, responsable: m.nombre, estatus: 'Abierto' };
+      if (!enReporte.has(pendKey(p)) && !cerrados.has(pendKey(p)) && !out.some(x => pendKey(x) === pendKey(p))) out.push(p);
+    }
+    return out;
   }
   const getConfig = async () => cleanConfig(JSON.parse((await db.get("SELECT value FROM settings WHERE key = 'form'"))?.value || '{}'));
   const currentForm = async () => formFor(await getConfig());
@@ -341,7 +445,11 @@ export function createApp({ db, files, env = {} }) {
     if (a.hubo_reportes === 'No') a.reportes_n = 'N/A';
     // Solo camiones registrados de la planta (secciones ocultas no traen tabla, de ahí el || []).
     const trucks = new Set((await db.all('SELECT name FROM trucks WHERE plant = ?', plant)).map(t => t.name));
+    // Último check list de cada unidad: el PL-FOR-21 más reciente (si es más nuevo que lo capturado a mano).
+    const chk = {};
+    for (const r of await db.all("SELECT date, data FROM qrecords WHERE kind = 'CL21' AND plant = ?", plant)) { const u = JSON.parse(r.data).unidad; if (!(chk[u] >= r.date)) chk[u] = r.date; }
     for (const v of a.vehiculos || []) {
+      if (chk[v.vehiculo] && !(v.checklist >= chk[v.vehiculo])) v.checklist = chk[v.vehiculo];
       if (!trucks.has(v.vehiculo)) throw httpError(400, `El vehículo "${v.vehiculo || '(vacío)'}" no está registrado en la planta ${plant}`);
       v.recorrido = v.km_ini && v.km_fin ? String(num(v.km_fin) - num(v.km_ini)) : '';
     }
@@ -378,6 +486,10 @@ export function createApp({ db, files, env = {} }) {
     const lotes = (kind === 'LIB' ? await db.all("SELECT code FROM lots WHERE plant = ? AND status = 'EN PLANTA' ORDER BY code", plant)
       : await db.all('SELECT code FROM lots WHERE plant = ? AND received >= ? ORDER BY code DESC', plant, ymd(new Date(Date.now() - 180 * DAY)))).map(l => l.code);
     const src = { clientes, lotes };
+    if (kind === 'CL21') src.unidades = (await db.all('SELECT name FROM trucks WHERE plant = ? ORDER BY horometro, name', plant)).map(t => t.name);
+    if (kind === 'PLA') src.personal = (await db.all('SELECT data FROM nom_emps WHERE area = ?', plant)).map(r => JSON.parse(r.data))
+      .filter(e => !e.baja || e.baja >= ymd()).map(e => e.nombre).sort();
+    if (kind === 'MT') src.pendientes = [...(await pendientesAbiertos(plant)).map(pendLabel), PEND_NUEVO];
     return { ...QFORMS[kind], sections: QFORMS[kind].sections.map(s => ({ ...s, fields: s.fields?.map(f => f.src ? { ...f, options: src[f.src] } : f) })) };
   }
   const getRecord = async (folio, user) => {
@@ -420,6 +532,57 @@ export function createApp({ db, files, env = {} }) {
     }
     await syncLots(plant, [...new Set([...(existing?.data.lotes || []), ...a.lotes])]);
     return { folio, ...a };
+  }
+
+  // Guarda un formato de operación (check list, plática, mantenimiento) con sus reglas. Estatus = su resultado.
+  async function saveFormato(kind, user, b) {
+    const plant = plantFor(user, b.planta), F = await qform(kind, plant), a = clean(b.answers || {}, F.sections), fx = FORMATOS[kind];
+    if (fx.bad) { // check list: todos los puntos contestados; lo que está mal lleva observación
+      for (const s of F.sections.filter(s => s.table)) {
+        if (a[s.table.id].length !== s.table.fixed.length || a[s.table.id].some((r, i) => r.punto !== s.table.fixed[i]))
+          throw httpError(400, `Contesta todos los puntos de "${s.title}"`);
+        const r = a[s.table.id].find(r => fx.bad.includes(r.res) && !r.obs);
+        if (r) throw httpError(400, `Anota en observaciones qué falla: "${r.punto}"`);
+      }
+      const malos = F.sections.filter(s => s.table).flatMap(s => a[s.table.id]).filter(r => fx.bad.includes(r.res));
+      if (malos.length && a.resultado === 'APROBADA') throw httpError(400, 'Hay puntos con falla: el resultado no puede ser APROBADA. Elige "con observaciones" o "rechazada".');
+      a.fallas = String(malos.length);
+    }
+    if (kind === 'PLA') {
+      a.otros = a.otros.split(',').map(x => x.trim()).filter(Boolean).join(', ');
+      a.total = String(a.asistentes.length + (a.otros ? a.otros.split(', ').length : 0));
+      if (a.total === '0') throw httpError(400, 'Marca al menos un asistente');
+      if (a.tema === 'Otro' && !a.tema_otro) throw httpError(400, 'Escribe cuál es el tema');
+      const [h1, m1] = a.hora.split(':').map(Number), [h2, m2] = a.hora_fin.split(':').map(Number);
+      a.duracion = String(Math.max(0, h2 * 60 + m2 - h1 * 60 - m1));
+    }
+    if (kind === 'MT') {
+      if (a.tipo === 'ACTUALIZACIÓN DE SOFTWARE' && !a.sistema) throw httpError(400, 'Anota qué sistema o equipo se actualizó');
+      a.sin_respaldo = a.tipo === 'ACTUALIZACIÓN DE SOFTWARE' && a.respaldo !== 'Sí' ? 'Sí' : 'No';
+      a.total = String(a.refacciones.reduce((t, r) => t + num(r.costo), 0) + num(a.mano_obra));
+      const p = (await pendientesAbiertos(plant)).find(m => pendLabel(m) === a.pendiente);
+      a.pendiente_key = p ? pendKey(p) : '';
+    }
+    const folio = await nextFolio(kind), status = a.resultado || 'REALIZADA';
+    await saveRecord(folio, kind, plant, a.fecha, user, status, a);
+    if (status.startsWith('RECHAZADA')) await db.run('INSERT INTO alerts(plant, folio, text) VALUES (?, ?, ?)', plant, folio,
+      `${fx.code} ${fx.title} RECHAZADO ${a.unidad || a.horno || ''} · ${plant}: ${a.fallas} punto(s) con falla`);
+    return { folio, status, ...a };
+  }
+  // Formatos de la semana (lunes a hoy) por planta: cuáles faltan. PL-FOR-21: cada unidad que no es montacargas.
+  async function semana(plants) {
+    const desde = lunes(ymd()), out = [];
+    for (const plant of plants) {
+      const recs = (await db.all("SELECT kind, data FROM qrecords WHERE plant = ? AND date >= ? AND kind IN ('CL21', 'CL22', 'CL23', 'PLA', 'MT')", plant, desde))
+        .map(r => ({ kind: r.kind, ...JSON.parse(r.data) }));
+      const unidades = (await db.all('SELECT name FROM trucks WHERE plant = ? AND horometro = 0 ORDER BY name', plant)).map(t => t.name);
+      for (const kind of ['CL21', 'CL22', 'CL23', 'PLA', 'MT']) {
+        const mine = recs.filter(r => r.kind === kind);
+        const faltan = kind === 'CL21' ? unidades.filter(u => !mine.some(r => r.unidad === u)) : mine.length ? [] : [FORMATOS[kind].code];
+        out.push({ plant, kind, code: FORMATOS[kind].code, title: FORMATOS[kind].title, hechos: mine.length, faltan });
+      }
+    }
+    return { desde, formatos: out };
   }
 
   const userOf = req => {
@@ -835,6 +998,10 @@ export function createApp({ db, files, env = {} }) {
       if (r.kind !== 'NC') return json(400, { error: 'Ese folio no es un no conforme' });
       return json(200, await saveNC(user, r.plant, b.answers || {}, null, r));
     },
+
+    // Formatos de operación de la semana (encargado: su planta; admin: todas).
+    'GET /api/semana': async (req, user) => json(200, await semana(user.role === 'admin' ? PLANTS : PLANTS.includes(user.plant) ? [user.plant] : [])),
+    ...Object.fromEntries(Object.keys(FORMATOS).map(k => [`POST /api/calidad/${k.toLowerCase()}`, async (req, user) => json(200, await saveFormato(k, user, await body(req)))])),
 
     // Catálogo de clientes (con su especificación para el criterio 7) y teléfono de gerencia (solo admin).
     'POST /api/calidad/config': adminOnly(async req => {

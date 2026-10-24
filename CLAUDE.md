@@ -85,7 +85,13 @@ Especificación: `Modificaciones App Polar/MOD_APP_POLAR_SGC_ISO9001.md` (pedido
   `settings.calidad`, se edita en Calidad (admin). Inicial: KH México y Mitchell (Querétaro), Summit Silao y Summit Guanajuato (Silao).
 - Encargado: solo su planta; admin (= gerencia): todas. Documento imprimible de cada registro con pie "Documento controlado".
 - Decisiones de las dudas del documento (sección 12), ajustables: lote `PLANTA-AAAAMMDD-consecutivo`, alerta a los 7 días, firma = usuario que guarda.
-- **Pendiente (etapas 2 y 3):** quejas PL-FOR-31, check lists PL-FOR-21 a 24, pláticas PL-FOR-25, calibración PL-FOR-36, tablero de
+- **Formatos de operación** (`FORMATOS` en `app.mjs`, mismo motor y tabla `qrecords`): check lists PL-FOR-21 camión (CL21), 22 gas (CL22),
+  23 horno (CL23), plática PL-FOR-25 (PLA, asistentes = empleados de Nómina) y mantenimiento PL-FOR-35 (MT: cierra el pendiente si queda
+  FUNCIONANDO; un trabajo nuevo que NO FUNCIONA abre pendiente — ver `pendientesAbiertos`). **Obligatorios 1 vez por semana** (lunes a hoy)
+  por planta; el PL-FOR-21 por cada unidad que no es montacargas (`GET /api/semana`, botones del inicio y semáforo del admin).
+  El último check list de cada unidad sale solo del PL-FOR-21. Check list RECHAZADO → alerta a gerencia.
+- **Documentos**: PDF vigentes en `public/docs` (de la carpeta de Drive "Modificaciones App Polar"); solo con sesión (`worker.mjs` / `server.mjs`).
+- **Pendiente (etapas 2 y 3):** quejas PL-FOR-31, PL-FOR-24 (no está en los archivos), calibración PL-FOR-36, tablero de
   indicadores, lista maestra de documentos (consulta de PDF), formatos de gerencia (8D, auditorías, proveedores, revisión por la dirección),
   correo a gerencia, rol "administración".
 

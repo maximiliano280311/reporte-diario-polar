@@ -32,6 +32,12 @@ const handleApi = createApp({ db, files, env: process.env });
 async function handler(req, res) {
   try {
     const path = req.url.split('?')[0];
+    // Documentos (PDF de public/docs): solo con sesión iniciada.
+    if (/^\/docs\/[\w.-]+\.pdf$/.test(path)) {
+      const ok = (await handleApi(new Request(`http://${req.headers.host}/api/me`, { headers: req.headers }))).ok;
+      res.writeHead(ok ? 200 : 401, { 'Content-Type': ok ? 'application/pdf' : 'text/plain; charset=utf-8' });
+      return res.end(ok ? await readFile(new URL(`./public${path}`, import.meta.url)) : 'Inicia sesión en la app para ver los documentos');
+    }
     if (!path.startsWith('/api/')) {
       // Puerto admin (o /admin, para hosting de un solo puerto) → panel web; lo demás → app de teléfono.
       const admin = req.socket.localPort === Number(ADMIN_PORT) || path.startsWith('/admin');

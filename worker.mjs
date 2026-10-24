@@ -21,6 +21,11 @@ export default {
   async fetch(req, env) {
     const path = new URL(req.url).pathname;
     if (path.startsWith('/api/')) return createApp({ db: d1(env.DB), files: r2(env.FILES), env })(req);
+    // Documentos (PDF de public/docs): solo con sesión iniciada.
+    if (/^\/docs\/[\w.-]+\.pdf$/.test(path)) {
+      const me = await createApp({ db: d1(env.DB), files: r2(env.FILES), env })(new Request(new URL('/api/me', req.url), { headers: req.headers }));
+      return me.ok ? env.ASSETS.fetch(req) : new Response('Inicia sesión en la app para ver los documentos', { status: 401 });
+    }
     // Archivos de public/: /admin… → panel web; /app.js; lo demás → app de teléfono.
     const file = path === '/app.js' ? '/app.js' : path.startsWith('/admin') ? '/admin.html' : '/index.html';
     const res = await env.ASSETS.fetch(new Request(new URL(file, req.url)));

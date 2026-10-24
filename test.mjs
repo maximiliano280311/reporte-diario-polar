@@ -218,6 +218,40 @@ await ok('POST', '/api/nomina/inc/delete', { id: ids[0] }, beto2);
 await ok('POST', '/api/users/nomina', { id: betoId, nomina: false }, admin);
 assert.equal((await call('GET', '/api/nomina', null, beto2)).status, 403); // se le quitó el acceso
 
+// ---------- Formatos semanales: check lists, plática y mantenimiento ----------
+const qf = async kind => (await ok('GET', `/api/calidad/form?tipo=${kind}`, null, beto2)).data;
+const puntos = (f, res = () => 'BIEN', obs = '') => Object.fromEntries(f.sections.filter(s => s.table).map(s => [s.table.id, s.table.fixed.map((p, i) => ({ punto: p, res: res(s, i), obs }))]));
+let sem = (await ok('GET', '/api/semana', null, beto2)).data.formatos;
+assert.deepEqual(sem.find(x => x.kind === 'CL21').faltan, ['NP300']); // camión registrado de Querétaro
+assert.ok(sem.every(x => x.plant === 'Querétaro' && x.faltan.length));
+const cl21 = await qf('CL21');
+assert.deepEqual(cl21.sections[0].fields[0].options, ['NP300']);
+const chk = (answers) => call('POST', '/api/calidad/cl21', { answers: { unidad: 'NP300', fecha: hoy, hora: '07:00', km: '1000', operador: 'Juan', resultado: 'APROBADA', ...answers } }, beto2);
+assert.equal((await chk({ g1: [] })).status, 400); // faltan puntos
+const conMal = puntos(cl21, (s, i) => s.table.id === 'g1' && i === 0 ? 'MAL' : 'BIEN');
+assert.equal((await chk(conMal)).status, 400); // MAL sin observación
+assert.equal((await chk({ ...puntos(cl21, (s, i) => s.table.id === 'g1' && i === 0 ? 'MAL' : 'BIEN', 'Fuga') })).status, 400); // APROBADA con falla
+const c1 = (await ok('POST', '/api/calidad/cl21', { answers: { unidad: 'NP300', fecha: hoy, hora: '07:00', km: '1000', operador: 'Juan',
+  resultado: 'RECHAZADA (NO SALE)', ...puntos(cl21, (s, i) => s.table.id === 'g1' && i === 0 ? 'MAL' : 'BIEN', 'Fuga') } }, beto2)).data;
+assert.deepEqual([c1.folio, c1.status, c1.fallas], ['CL21-0001', 'RECHAZADA (NO SALE)', '1']);
+assert.ok((await ok('GET', '/api/calidad', null, admin)).data.alertas.some(a => a.folio === 'CL21-0001')); // rechazada avisa a gerencia
+// Plática: al menos un asistente; duración y total se calculan.
+const pla = { fecha: hoy, hora: '08:00', hora_fin: '08:45', imparte: 'Beto', tema: 'Uso de EPP', puntos: 'Guantes y lentes' };
+assert.equal((await call('POST', '/api/calidad/pla', { answers: pla }, beto2)).status, 400);
+const p1 = (await ok('POST', '/api/calidad/pla', { answers: { ...pla, otros: 'Pedro, Juan' } }, beto2)).data;
+assert.deepEqual([p1.duracion, p1.total, p1.status], ['45', '2', 'REALIZADA']);
+// Mantenimiento: trabajo nuevo que NO FUNCIONA abre pendiente; otro MT que lo deja FUNCIONANDO lo cierra.
+const mt = { fecha: hoy, tipo: 'CORRECTIVO (REPARACIÓN)', equipo: 'Bomba Rotoplas', falla: 'Sello', trabajo: 'Se cambió sello', quien: 'PERSONAL INTERNO', nombre: 'Beto', libero: 'Beto' };
+await ok('POST', '/api/calidad/mt', { answers: { ...mt, pendiente: 'NO, ES UN TRABAJO NUEVO', resultado: 'NO FUNCIONA (SIGUE PENDIENTE)', refacciones: [{ cant: '1', descripcion: 'Sello', costo: '350' }], mano_obra: '200' } }, beto2);
+let pend = (await ok('GET', '/api/defaults', null, beto2)).data.pendientes;
+assert.ok(pend.some(m => m.equipo === 'Bomba Rotoplas'));
+assert.ok((await qf('MT')).sections[0].fields[2].options.includes('Bomba Rotoplas — Sello'));
+const mt2 = (await ok('POST', '/api/calidad/mt', { answers: { ...mt, pendiente: 'Bomba Rotoplas — Sello', resultado: 'FUNCIONANDO' } }, beto2)).data;
+assert.equal(mt2.folio, 'MT-0002');
+assert.ok(!(await ok('GET', '/api/defaults', null, beto2)).data.pendientes.some(m => m.equipo === 'Bomba Rotoplas'));
+sem = (await ok('GET', '/api/semana', null, beto2)).data.formatos;
+assert.deepEqual(sem.filter(x => x.faltan.length).map(x => x.kind), ['CL22', 'CL23']);
+
 // Sesiones vencidas (más de 30 días) ya no sirven.
 sqlite.prepare('UPDATE sessions SET created = 0').run();
 assert.equal((await call('GET', '/api/me', null, admin)).status, 401);
