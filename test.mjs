@@ -275,6 +275,27 @@ assert.ok(!(await ok('GET', '/api/defaults', null, beto2)).data.pendientes.some(
 sem = (await ok('GET', '/api/semana', null, beto2)).data.formatos;
 assert.deepEqual(sem.filter(x => x.faltan.length).map(x => x.kind), ['CL22', 'CL23']);
 
+// ---------- Entregas parciales: la recepción sigue abierta hasta entregar todo ----------
+const recP = (await ok('POST', '/api/calidad/rec', { answers: { fecha: hoy, hora: '09:00', cliente: 'KH México', remision: 'R-PARCIAL', fotos: [foto], ...estadoOK,
+  partidas: [{ parte: 'P-9', remision: '12', contada: '10', proceso: 'Lavado' }] } }, beto2)).data;
+const loteP = recP.partidas[0].lote, libP = a => call('POST', '/api/calidad/lib', { answers: { fecha: hoy, proceso: 'Lavado', criterios: criterios(), disposicion: 'LIBERADO', lote: loteP, ...a } }, beto2);
+const abierta = async () => (await ok('GET', '/api/calidad', null, beto2)).data.abiertas.find(x => x.folio === recP.folio);
+assert.deepEqual([(await abierta()).total, (await abierta()).partidas[0].faltanLlegar], [10, 2]); // faltan 2 por llegar según remisión
+const lp1 = (await libP({ inspeccionadas: '6', aceptadas: '6', entrega_fecha: hoy, remision_polar: 'POL-P1', recibio: 'Juan' })).data; // entrega parcial
+assert.deepEqual([lp1.status, lp1.estadoLote, lp1.quedan], ['ENTREGADO', 'EN PLANTA', 4]);
+assert.equal((await abierta()).total, 4);
+assert.equal((await libP({ inspeccionadas: '5', aceptadas: '5' })).status, 400); // solo quedan 4
+const lp2 = (await libP({ inspeccionadas: '4', aceptadas: '4' })).data; // liberado, falta entregarlo
+assert.deepEqual([lp2.status, lp2.estadoLote], ['LIBERADO', 'LIBERADO']);
+assert.deepEqual((await abierta()).partidas[0].libsPorEntregar, [lp2.folio]);
+await ok('POST', '/api/calidad/entrega', { folio: lp2.folio, answers: { entrega_fecha: hoy, remision_polar: 'POL-P2', recibio: 'Juan' } }, beto2);
+assert.equal(await abierta(), undefined); // ya se entregó todo: la recepción se cierra
+const calP = (await ok('GET', '/api/calidad', null, beto2)).data;
+assert.equal(calP.lotes.find(l => l.code === loteP).status, 'ENTREGADO');
+assert.equal(calP.registros.find(r => r.folio === recP.folio).porEntregar, 0);
+const movP = (await ok('GET', '/api/defaults', null, beto2)).data.mov['kh méxico|p-9'];
+assert.deepEqual([movP.recibido, movP.entregado], [10, 10]); // la sección 7 suma las dos entregas
+
 // Sesiones vencidas (más de 30 días) ya no sirven.
 sqlite.prepare('UPDATE sessions SET created = 0').run();
 assert.equal((await call('GET', '/api/me', null, admin)).status, 401);

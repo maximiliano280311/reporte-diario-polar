@@ -232,6 +232,21 @@ const emergencia = tel => tel ? `<a href="tel:${esc(tel.replace(/[^\d+]/g, ''))}
 // Botones de captura de Calidad (panel del encargado y tablero).
 const qButtons = () => `<div class="grid grid-cols-3 gap-2">${['REC', 'LIB', 'NC'].map(k => `<a href="#/${k.toLowerCase()}" class="card p-3 flex flex-col items-center text-center gap-1 hover:bg-surface-container-low">
   <span class="material-symbols-outlined text-primary text-[28px]">${KIND[k][2]}</span><span class="text-label-lg leading-tight">${KIND[k][1]}</span><span class="text-[11px] text-on-surface-variant">${KIND[k][0]}</span></a>`).join('')}</div>`;
+// Piezas pendientes por entregar: recepciones (PL-FOR-28) abiertas con el avance de cada lote. Se cierran al entregar todo.
+const pendientesHtml = (abiertas, admin) => abiertas.length ? `<section class="card p-4 flex flex-col gap-2 border-l-4 border-tertiary-fixed-dim">
+  <h2 class="font-semibold flex items-center gap-2"><span class="material-symbols-outlined text-tertiary">pending_actions</span>Piezas pendientes por entregar
+    <span class="chip bg-tertiary-fixed text-on-tertiary-fixed">${abiertas.reduce((t, r) => t + r.total, 0)} pzas</span></h2>
+  <p class="text-body-sm text-on-surface-variant">Recepciones abiertas: no se cierran hasta entregar todo lo recibido. Se puede liberar y entregar por partes.</p>
+  ${abiertas.map(r => `<div class="py-2 border-t border-[#f1f5f9]">
+    <p class="font-semibold flex flex-wrap items-center gap-2"><a href="#/q/${esc(r.folio)}" class="text-primary">${esc(r.folio)}</a> ${esc(r.cliente)} · remisión ${esc(r.remision)}
+      <span class="chip bg-tertiary-fixed text-on-tertiary-fixed">${r.total} por entregar</span></p>
+    <p class="text-[12px] text-on-surface-variant">Recibido ${dmy(r.date)}${r.compromiso ? ` · compromiso ${dmy(r.compromiso)}${r.compromiso < ymd() ? ' ⚠ vencido' : ''}` : ''}${admin ? ' · ' + esc(r.plant) : ''}</p>
+    ${r.partidas.filter(x => x.porEntregar).map(x => `<div class="flex flex-wrap items-center gap-2 mt-1 text-body-sm">
+      <span class="font-medium">${esc(x.lote)}</span><span class="text-on-surface-variant">${esc(x.parte)} · recibidas ${x.recibidas} · entregadas ${x.entregadas}${x.rechazadas ? ` · rechazadas ${x.rechazadas}` : ''}${x.faltanLlegar ? ` · faltan por llegar ${x.faltanLlegar}` : ''}</span>
+      <b class="text-tertiary">${x.porEntregar} por entregar</b>
+      ${x.porLiberar ? `<a href="#/lib/${encodeURIComponent(x.lote)}" class="text-label-sm text-primary font-semibold">Liberar ${x.porLiberar}</a>` : ''}
+      ${x.libsPorEntregar.map(f => `<a href="#/q/${esc(f)}" class="text-label-sm text-primary font-semibold">Entregar ${esc(f)}</a>`).join(' ')}</div>`).join('')}
+  </div>`).join('')}</section>` : '';
 // Datos con los que se abre un no conforme desde una recepción, una liberación o un lote (#/nc/REC-0001, #/nc/LIB-0001, #/nc/QRO-…).
 function ncPrefill(prev, arg, f) {
   const d = prev?.data;
@@ -283,7 +298,8 @@ function plDoc(r) {
 // Registro de Calidad (PL-FOR-28 / 29 / 30) armado como el formato en papel, para ver e imprimir.
 function qDoc(r) {
   const a = r.data, kv = pairs => `<table><tbody>${pairs.map(([k, v]) => `<tr><td class="k">${esc(k)}</td><td>${esc(v) || '&nbsp;'}</td></tr>`).join('')}</tbody></table>`;
-  const head = { REC: [['Folio', r.folio], ['Planta', r.plant], ['Recibió', r.name], ['Estatus', r.status]],
+  const head = { REC: [['Folio', r.folio], ['Planta', r.plant], ['Recibió', r.name], ['Estatus', r.status],
+      ['Entrega', r.avance?.total ? `ABIERTA — ${r.avance.total} piezas por entregar` : 'COMPLETA']],
     LIB: [['Folio', r.folio], ['Planta', r.plant], ['Cliente', a.cliente], ['No. de parte', a.parte], ['Folio REC', a.rec], ['Estatus', r.status]],
     NC: [['Folio', r.folio], ['Planta', r.plant], ['Elaboró', r.name], ['Origen', a.origen || '—'], ['¿Requiere 8D? (sugerido)', a.sugiere_8d], ['Estatus', r.status]] }[r.kind]
     || [['Folio', r.folio], ['Planta', r.plant], ['Elaboró / revisó', r.name], ['Resultado', r.status],
@@ -424,7 +440,7 @@ const views = {
           <a href="#/calidad" class="text-label-sm text-primary font-bold flex items-center gap-0.5">Ver todo<span class="material-symbols-outlined text-[16px]">chevron_right</span></a>
         </div>
         ${qButtons()}
-        <p class="text-label-sm text-on-surface-variant">${nLot('EN PLANTA')} lotes en planta · ${nLot('RETENIDO')} retenidos · ${nLot('LIBERADO')} por entregar
+        <p class="text-label-sm text-on-surface-variant">${nLot('EN PLANTA')} lotes en planta · ${nLot('RETENIDO')} retenidos · ${nLot('LIBERADO')} por entregar${cal.abiertas?.length ? ` · <a href="#/calidad" class="text-tertiary font-semibold">${cal.abiertas.reduce((t, r) => t + r.total, 0)} pzas pendientes de entregar</a>` : ''}
           ${cal.alertas.length ? `· <a href="#/calidad" class="text-error font-semibold">⚠ ${cal.alertas.length} ${cal.alertas.length === 1 ? 'alerta' : 'alertas'}</a>` : ''}</p>
       </div>` : ''}
       <div class="flex flex-col gap-space-sm"><h3 class="text-label-lg flex items-center gap-2"><span class="material-symbols-outlined text-primary text-[20px]">checklist</span>Formatos de la semana</h3>
@@ -648,8 +664,8 @@ const views = {
 
   async admin() {
     let users, week;
-    let sem;
-    [week, users, sem] = await Promise.all([api('/api/reports?desde=' + daysAgo(6)), api('/api/users'), api('/api/semana').catch(() => null)]);
+    let sem, cal;
+    [week, users, sem, cal] = await Promise.all([api('/api/reports?desde=' + daysAgo(6)), api('/api/users'), api('/api/semana').catch(() => null), api('/api/calidad').catch(() => null)]);
     users = users.filter(u => u.role === 'colaborador' && u.status === 'activo');
     const today = week.filter(r => r.date === ymd());
     const team = users.map(u => {
@@ -668,6 +684,7 @@ const views = {
       ['Incidencias críticas de la semana', rows(week, 'incidencias', i => ['GA', 'EL', 'SE'].includes(i.tipo), (i, r) => `${r.date.split('-').reverse().join('/')} ${i.tipo}: ${i.que_paso || ''}`), 'red'],
       ['Químicos por pedir', rows(last, 'quimicos', q => ['PT', 'A'].includes(q.existencia), q => `${q.quimico} (${q.existencia})`), 'yellow'],
       ['Vehículos con check list vencido', rows(last, 'vehiculos', v => v.vehiculo && (!v.checklist || v.checklist < daysAgo(7)), v => `${v.vehiculo} (${v.checklist ? v.checklist.split('-').reverse().join('/') : 'sin registro'})`), 'red'],
+      ['Piezas pendientes por entregar', (cal?.abiertas || []).map(r => `${r.plant} · ${r.folio} ${r.cliente}: ${r.total} pzas`), 'yellow'],
       ['Formatos de la semana pendientes', (sem?.formatos || []).flatMap(x => x.faltan.map(f => `${x.plant} · ${x.code} ${x.title}${x.kind === 'CL21' ? ': ' + f : ''}`)), 'red']];
     $('#app').innerHTML = `
     <h1 class="${WIDE ? 'text-3xl font-bold' : 'text-2xl font-semibold'} tracking-tight">Reportes del equipo</h1>
@@ -1066,6 +1083,7 @@ const views = {
       ${qButtons()}
       ${fmtButtons(sem, calPlant ? [calPlant] : me.role === 'admin' ? PLANTS : [me.plant])}
       <p id="err" class="text-sm text-error hidden" role="alert"></p>
+      ${pendientesHtml(c.abiertas || [], me.role === 'admin')}
       ${c.alertas.length ? `<section id="alertas" class="card p-4 flex flex-col gap-2 border-l-4 border-error">
         <h2 class="font-semibold flex items-center gap-2"><span class="material-symbols-outlined text-error">notifications_active</span>Alertas (${c.alertas.length})</h2>
         ${c.alertas.map(a => `<div class="flex items-start justify-between gap-2 p-2 rounded-lg bg-error-container/40"><p class="text-sm">${esc(a.text)}
@@ -1077,7 +1095,7 @@ const views = {
           <div id="cal-filtro" class="flex flex-wrap gap-1">${Object.keys(F).map(k => `<button data-f="${k}" class="chip !py-1 ${k === calFilter ? 'bg-primary-container text-white' : 'bg-surface-container text-on-surface-variant'}">${k === 'activos' ? 'Activos' : k}</button>`).join('')}</div>
           ${lotes.length ? `<div class="flex flex-col">${lotes.map(l => `<div class="flex flex-wrap items-center justify-between gap-2 py-2 border-t border-[#f1f5f9]">
             <div class="min-w-0"><p class="font-semibold flex flex-wrap items-center gap-2">${esc(l.code)} ${statusChip(l.status)}</p>
-              <p class="text-[12px] text-on-surface-variant">${esc(l.client)} · ${esc(l.part)} · ${l.qty} pza · recibido ${dmy(l.received)}${l.status === 'EN PLANTA' ? ` (${days(l)} d)` : ''}${me.role === 'admin' ? ' · ' + esc(l.plant) : ''}
+              <p class="text-[12px] text-on-surface-variant">${esc(l.client)} · ${esc(l.part)} · ${l.qty} pza${l.delivered_qty && l.status !== 'ENTREGADO' ? ` (entregadas ${l.delivered_qty})` : ''} · recibido ${dmy(l.received)}${l.status === 'EN PLANTA' ? ` (${days(l)} d)` : ''}${me.role === 'admin' ? ' · ' + esc(l.plant) : ''}
                 · <a href="#/q/${esc(l.rec)}" class="text-primary">${esc(l.rec)}</a></p></div>
             ${accion(l)}</div>`).join('')}</div>` : '<p class="text-sm text-on-surface-variant">Sin lotes con ese filtro.</p>'}
         </section>
@@ -1086,7 +1104,7 @@ const views = {
           ${c.registros.length ? c.registros.map(r => `<a href="#/q/${esc(r.folio)}" class="flex items-center justify-between gap-2 py-2 border-t border-[#f1f5f9] hover:bg-surface-container-low">
             <div class="min-w-0"><p class="font-semibold">${esc(r.folio)} <span class="text-label-sm text-on-surface-variant font-normal">${KIND[r.kind][1]} · ${KIND[r.kind][0]}</span></p>
               <p class="text-[12px] text-on-surface-variant truncate">${dmy(r.date)} · ${esc(r.data.cliente || r.data.unidad || r.data.horno || r.data.tema || r.data.equipo || '')} · ${esc(r.name)}${me.role === 'admin' ? ' · ' + esc(r.plant) : ''}</p></div>
-            ${statusChip(r.status)}</a>`).join('') : '<p class="text-sm text-on-surface-variant">Aún no hay registros.</p>'}
+            ${r.porEntregar ? `<span class="chip bg-tertiary-fixed text-on-tertiary-fixed">Abierta · ${r.porEntregar} por entregar</span>` : statusChip(r.status)}</a>`).join('') : '<p class="text-sm text-on-surface-variant">Aún no hay registros.</p>'}
         </section>
       </div>
       ${me.role === 'admin' ? `<section id="catalogo" class="card p-4 flex flex-col gap-3">
@@ -1185,7 +1203,7 @@ const views = {
         }
         if (kind === 'LIB') {
           const l = f.lotes.find(x => x.code === form.elements.lote?.value), spec = l && f.specs[l.client];
-          form.querySelector('[data-lote-info]').textContent = l ? `${l.client} · ${l.part} · ${l.qty} pza · ${l.rec}${spec ? ` · Especificación del cliente (criterio 7): ${spec}` : ''}`
+          form.querySelector('[data-lote-info]').textContent = l ? `${l.client} · ${l.part} · quedan ${l.porLiberar} de ${l.qty} pza por liberar${l.entregadas ? ` (ya entregadas ${l.entregadas})` : ''} · ${l.rec}${spec ? ` · Especificación del cliente (criterio 7): ${spec}` : ''}`
             : 'Elige un lote para ver cliente, no. de parte y folio REC.';
           const ins = Number(form.elements.inspeccionadas.value) || 0, acc = Number(form.elements.aceptadas.value) || 0;
           form.querySelector('[data-pct]').textContent = `% de aceptación: ${ins ? Math.round(acc / ins * 1000) / 10 : 0} %`;
@@ -1223,7 +1241,8 @@ const views = {
     const msg = kind === 'REC' ? (r.anomalia ? box('bg-tertiary-fixed text-on-tertiary-fixed', 'warning', 'Hay diferencia de conteo o algo en "No". Anótalo en la remisión antes de firmar y levanta el no conforme.') : '')
         + `<p class="text-body-md">Lotes asignados: ${r.partidas.map(p => `<b>${esc(p.lote)}</b> (${esc(p.parte)}, ${esc(p.contada)} pza)`).join(', ')}</p>`
       : kind === 'LIB' ? (r.requiereNC ? box('bg-error-container text-on-error-container', 'block', `El lote ${esc(r.lote)} quedó <b>RETENIDO</b>. Levanta ahora el no conforme (PL-FOR-30).`)
-        : `<p class="text-body-md">Lote <b>${esc(r.lote)}</b>: ${statusChip(r.status)} · aceptación ${esc(r.pct)} %</p>`)
+        : `<p class="text-body-md">Lote <b>${esc(r.lote)}</b>: ${statusChip(r.status)} · aceptación ${esc(r.pct)} %</p>`
+          + (r.quedan > 0 ? box('bg-tertiary-fixed text-on-tertiary-fixed', 'pending_actions', `Entrega parcial: quedan <b>${r.quedan}</b> piezas del lote por liberar. La recepción ${esc(r.rec)} sigue abierta hasta entregar todo.`) : ''))
       : kind !== 'NC' ? `<p class="text-body-md">Resultado: ${statusChip(r.status)}${r.status.startsWith('RECHAZADA') ? ' · se avisó a gerencia' : ''}</p>`
         + (r.sin_respaldo === 'Sí' ? box('bg-tertiary-fixed text-on-tertiary-fixed', 'warning', 'Actualización de software <b>sin respaldo</b> previo.') : '')
       : `<p class="text-body-md">Estatus ${statusChip(r.estatus)} · ¿Requiere 8D? (sugerido): <b>${esc(r.sugiere_8d)}</b></p>${edit ? '' : '<p class="text-body-sm text-on-surface-variant">Se avisó a gerencia.</p>'}`;
@@ -1261,6 +1280,7 @@ const views = {
       <h2 class="font-semibold flex items-center gap-2"><span class="material-symbols-outlined text-primary">local_shipping</span>Registrar entrega del lote ${esc(r.data.lote)}</h2>
       <div class="grid grid-cols-2 lg:grid-cols-4 gap-3">${entrega.map(f => labeled(f, input(f, f.id, f.type === 'date' ? ymd() : ''))).join('')}</div>
       <button class="btn btn-primary"><span class="material-symbols-outlined">save</span>Guardar entrega</button></form>` : ''}
+    ${r.kind === 'REC' && r.avance?.total ? `<div class="no-print mb-3">${pendientesHtml([r.avance], false)}</div>` : ''}
     ${qDoc(r)}`;
     const form = $('#entrega');
     if (!form) return;

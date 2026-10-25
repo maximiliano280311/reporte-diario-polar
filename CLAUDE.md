@@ -82,6 +82,11 @@ Especificación: `Modificaciones App Polar/MOD_APP_POLAR_SGC_ISO9001.md` (pedido
 - Formatos `QFORMS` en `app.mjs` (mismo esquema que `FORM`): **PL-FOR-28 Recepción (REC)**, **PL-FOR-29 Inspección y liberación (LIB)**,
   **PL-FOR-30 No conforme (NC)**. Folios `REC-0001`… consecutivos por tipo (`counters`, `INSERT … RETURNING`), no editables.
 - Cada partida de REC crea un **lote POLAR** `QRO|SIL-AAAAMMDD-NN` (tabla `lots`): EN PLANTA → LIBERADO / RETENIDO → ENTREGADO.
+- **Entregas parciales**: un lote se libera y se entrega por partes (cada PL-FOR-29 inspecciona una parte; no más de lo que queda).
+  El lote sigue EN PLANTA mientras le falten piezas por liberar (`avanceLotes` / `estadoLote`). La recepción PL-FOR-28 queda
+  **abierta** hasta entregar todo lo recibido (lo rechazado no cuenta): `recepcionesAbiertas`, lista "Piezas pendientes por entregar"
+  en Calidad, chip "Abierta" en registros, renglón "Entrega" del documento y luz en el semáforo del admin. Lo entregado del día
+  (sección 7) sale de cada PL-FOR-29 entregado (`movimientos`).
 - Reglas: REC con diferencia o algún "No" → aviso + botón "Crear no conforme" precargado. LIB con algún NOK no permite LIBERADO;
   NOK o RETENIDO → lote RETENIDO y pide NC. No se entrega sin LIBERADO (`entregaDe`). NC abierto retiene sus lotes; al cerrarlo
   (con fecha) vuelven a EN PLANTA (`syncLots`). 8D sugerido: lo detectó el cliente, >1 lote, daño con costo, o mismo cliente + tipo en 90 días.

@@ -450,8 +450,10 @@ export function createApp({ db, files, env = {} }) {
       const d = JSON.parse(r.data);
       for (const p of d.partidas) add(d.cliente, p.parte, 'recibido', num(p.contada), r.folio);
     }
-    for (const l of await db.all('SELECT client, part, lib, delivered_qty FROM lots WHERE plant = ? AND delivered = ?', plant, date))
-      add(l.client, l.part, 'entregado', num(l.delivered_qty), l.lib);
+    for (const r of await db.all("SELECT folio, data FROM qrecords WHERE kind = 'LIB' AND plant = ? AND status = 'ENTREGADO'", plant)) {
+      const d = JSON.parse(r.data);
+      if (d.entrega_fecha === date) add(d.cliente, d.parte, 'entregado', num(d.aceptadas), r.folio);
+    }
     return m;
   }
 
@@ -528,6 +530,38 @@ export function createApp({ db, files, env = {} }) {
   };
   const saveRecord = (folio, kind, plant, date, user, status, data) =>
     db.run('INSERT INTO qrecords(folio, kind, plant, date, user_id, status, data) VALUES (?, ?, ?, ?, ?, ?, ?)', folio, kind, plant, date, user.id, status, JSON.stringify(data));
+  // Entregas parciales: un lote se libera (PL-FOR-29) y se entrega en partes. Avance por lote: piezas inspeccionadas en liberaciones
+  // LIBERADO / ENTREGADO, entregadas, rechazadas y folios LIB liberados que faltan por entregar.
+  async function avanceLotes(plant) {
+    const out = {};
+    for (const r of await db.all("SELECT folio, status, data FROM qrecords WHERE kind = 'LIB' AND plant = ? AND status IN ('LIBERADO', 'ENTREGADO')", plant)) {
+      const d = JSON.parse(r.data), x = out[d.lote] ??= { inspeccionadas: 0, entregadas: 0, rechazadas: 0, porEntregar: [] };
+      x.inspeccionadas += num(d.inspeccionadas); x.rechazadas += num(d.inspeccionadas) - num(d.aceptadas);
+      if (r.status === 'ENTREGADO') x.entregadas += num(d.aceptadas); else x.porEntregar.push(r.folio);
+    }
+    return out;
+  }
+  const AV0 = { inspeccionadas: 0, entregadas: 0, rechazadas: 0, porEntregar: [] };
+  // Estatus de un lote que no está RETENIDO: EN PLANTA mientras le falten piezas por liberar; LIBERADO si falta entregar algo liberado.
+  async function estadoLote(code, plant) {
+    const l = await db.get('SELECT qty FROM lots WHERE code = ?', code), a = (await avanceLotes(plant))[code] || AV0;
+    const status = l.qty - a.inspeccionadas > 0 ? 'EN PLANTA' : a.porEntregar.length ? 'LIBERADO' : 'ENTREGADO';
+    await db.run('UPDATE lots SET status = ?, delivered_qty = ? WHERE code = ?', status, a.entregadas, code);
+    return status;
+  }
+  // Recepciones (PL-FOR-28) con piezas por entregar: siguen ABIERTAS hasta que se entregue todo lo recibido (lo rechazado no cuenta).
+  // ponytail: recorre todas las recepciones de la planta en cada consulta; si llegan a ser miles, guardar el avance en la tabla lots.
+  async function recepcionesAbiertas(plant) {
+    const av = await avanceLotes(plant), out = [];
+    for (const r of await db.all("SELECT folio, date, data FROM qrecords WHERE kind = 'REC' AND plant = ? ORDER BY date, folio", plant)) {
+      const d = JSON.parse(r.data), partidas = d.partidas.map(x => { const a = av[x.lote] || AV0, recibidas = num(x.contada);
+        return { lote: x.lote, parte: x.parte, recibidas, entregadas: a.entregadas, rechazadas: a.rechazadas, porLiberar: Math.max(0, recibidas - a.inspeccionadas),
+          porEntregar: Math.max(0, recibidas - a.entregadas - a.rechazadas), faltanLlegar: Math.max(0, num(x.remision) - recibidas), libsPorEntregar: a.porEntregar }; });
+      const total = partidas.reduce((t, x) => t + x.porEntregar, 0);
+      if (total > 0) out.push({ folio: r.folio, plant, date: r.date, cliente: d.cliente, remision: d.remision, compromiso: d.compromiso, partidas, total });
+    }
+    return out;
+  }
   // Un lote con no conforme ABIERTO queda RETENIDO; al cerrarse todos vuelve a EN PLANTA (hay que volver a inspeccionarlo).
   // Los ya entregados no cambian (un NC que detectó el cliente queda solo como registro).
   async function syncLots(plant, codes) {
@@ -535,7 +569,8 @@ export function createApp({ db, files, env = {} }) {
     for (const code of codes) {
       const l = await db.get('SELECT status FROM lots WHERE code = ?', code);
       if (!l || l.status === 'ENTREGADO' || (l.status === 'LIBERADO' && !open.includes(code))) continue;
-      await db.run('UPDATE lots SET status = ? WHERE code = ?', open.includes(code) ? 'RETENIDO' : 'EN PLANTA', code);
+      if (open.includes(code)) await db.run("UPDATE lots SET status = 'RETENIDO' WHERE code = ?", code);
+      else await estadoLote(code, plant); // vuelve a EN PLANTA (o como vaya su liberación por partes)
     }
   }
   // 8D sugerido (sección 4.3): lo detectó el cliente, más de un lote, daño con costo, o se repite cliente + tipo en 90 días.
@@ -981,7 +1016,9 @@ export function createApp({ db, files, env = {} }) {
         if (l.status === 'EN PLANTA' && l.received < old) alertas.push({ folio: l.rec, text: `Lote ${l.code} (${l.client}) lleva más de ${LOT_DAYS} días en planta sin liberar` });
         if (l.status === 'RETENIDO' && !openNC.includes(l.code)) alertas.push({ lote: l.code, text: `Lote ${l.code} está RETENIDO sin no conforme abierto: levanta el PL-FOR-30` });
       }
-      return json(200, { clientes: cal.clientes.filter(c => plants.includes(c.plant)), tel: cal.tel, lotes, registros, alertas });
+      const abiertas = (await Promise.all(plants.map(recepcionesAbiertas))).flat(), porRec = Object.fromEntries(abiertas.map(r => [r.folio, r.total]));
+      for (const r of registros) if (r.kind === 'REC') r.porEntregar = porRec[r.folio] || 0;
+      return json(200, { clientes: cal.clientes.filter(c => plants.includes(c.plant)), tel: cal.tel, lotes, registros, alertas, abiertas });
     },
 
     // Formato con las listas de la planta, más los datos de los lotes (para llenar cliente / parte solos) y las especificaciones por cliente.
@@ -989,7 +1026,8 @@ export function createApp({ db, files, env = {} }) {
       const q = new URL(req.url).searchParams, kind = q.get('tipo');
       if (!QFORMS[kind]) return json(404, { error: 'Formato no encontrado' });
       const plant = plantFor(user, q.get('planta')), cal = await getCalidad();
-      const lotes = await db.all('SELECT code, client, part, qty, rec, status, proceso FROM lots WHERE plant = ? AND received >= ?', plant, ymd(new Date(Date.now() - 180 * DAY)));
+      const av = await avanceLotes(plant), lotes = (await db.all('SELECT code, client, part, qty, rec, status, proceso FROM lots WHERE plant = ? AND received >= ?', plant, ymd(new Date(Date.now() - 180 * DAY))))
+        .map(l => ({ ...l, porLiberar: l.qty - (av[l.code] || AV0).inspeccionadas, entregadas: (av[l.code] || AV0).entregadas }));
       return json(200, { ...await qform(kind, plant), plant, lotes, specs: Object.fromEntries(cal.clientes.filter(c => c.plant === plant).map(c => [c.name, c.spec])) });
     },
 
@@ -1000,7 +1038,8 @@ export function createApp({ db, files, env = {} }) {
       const lotes = codes.length ? await db.all(`SELECT * FROM lots WHERE code IN (${codes.map(() => '?').join(', ')})`, ...codes) : [];
       const ligados = (await db.all("SELECT folio, kind, status, data FROM qrecords WHERE kind = 'NC' AND plant = ?", r.plant))
         .filter(n => JSON.parse(n.data).origen === r.folio).map(({ folio, status }) => ({ folio, status }));
-      return json(200, { ...r, lotes, ligados, ...QFORMS[r.kind] }); // + code, title y sections (para imprimirlo)
+      const avance = r.kind === 'REC' ? (await recepcionesAbiertas(r.plant)).find(x => x.folio === r.folio) || { total: 0, partidas: [] } : null;
+      return json(200, { ...r, lotes, ligados, avance, ...QFORMS[r.kind] }); // + code, title y sections (para imprimirlo)
     },
 
     // PL-FOR-28: cada partida crea su lote EN PLANTA (suma al saldo de la sección 7 de ese día).
@@ -1030,6 +1069,8 @@ export function createApp({ db, files, env = {} }) {
         throw httpError(400, 'Marca OK o NOK en los 8 criterios de inspección');
       const nok = a.criterios.some(c => c.resultado === 'NOK'), insp = num(a.inspeccionadas), acc = num(a.aceptadas), libera = a.disposicion.startsWith('LIBERADO');
       if (acc > insp) throw httpError(400, 'Las piezas aceptadas no pueden ser más que las inspeccionadas');
+      const quedan = lot.qty - ((await avanceLotes(plant))[lot.code] || AV0).inspeccionadas; // se puede liberar por partes
+      if (insp > quedan) throw httpError(400, `Del lote ${lot.code} quedan ${quedan} piezas por liberar`);
       if (nok && libera) throw httpError(400, 'Con un criterio NOK no se puede liberar: elige RETENIDO / NO CONFORME y levanta el no conforme (PL-FOR-30)');
       if (a.disposicion === 'LIBERADO CON DESVIACIÓN' && !a.autorizo_cliente) throw httpError(400, 'Anota quién autorizó la desviación por parte del cliente');
       const entrega = entregaDe(a, libera);
@@ -1037,19 +1078,21 @@ export function createApp({ db, files, env = {} }) {
       const status = nok || a.disposicion.startsWith('RETENIDO') ? 'RETENIDO' : a.disposicion === 'RETRABAJO INTERNO' ? 'RETRABAJO' : entrega ? 'ENTREGADO' : 'LIBERADO';
       const folio = await nextFolio('LIB');
       await saveRecord(folio, 'LIB', plant, a.fecha, user, status, a);
-      await db.run('UPDATE lots SET status = ?, lib = ?, delivered = ?, delivered_qty = ? WHERE code = ?',
-        status === 'RETRABAJO' ? 'EN PLANTA' : status, folio, entrega ? a.entrega_fecha : null, entrega ? acc : null, lot.code);
-      return json(200, { folio, status, requiereNC: status === 'RETENIDO', ...a });
+      await db.run('UPDATE lots SET status = ?, lib = ?, delivered = COALESCE(?, delivered) WHERE code = ?',
+        status === 'RETENIDO' ? 'RETENIDO' : 'EN PLANTA', folio, entrega ? a.entrega_fecha : null, lot.code);
+      const estado = status === 'RETENIDO' ? 'RETENIDO' : await estadoLote(lot.code, plant); // parcial: sigue EN PLANTA
+      return json(200, { ...a, folio, status, estadoLote: estado, quedan: quedan - (['LIBERADO', 'ENTREGADO'].includes(status) ? insp : 0), requiereNC: status === 'RETENIDO' });
     },
 
     // Registrar la entrega de un lote ya LIBERADO (no se puede entregar sin liberación LIBERADO).
     'POST /api/calidad/entrega': async (req, user) => {
       const b = await body(req), r = await getRecord(b.folio, user), lot = r.kind === 'LIB' && await db.get('SELECT * FROM lots WHERE code = ?', r.data.lote);
-      if (r.status !== 'LIBERADO' || lot?.status !== 'LIBERADO') throw httpError(400, 'Solo se puede entregar un lote LIBERADO');
+      if (r.status !== 'LIBERADO' || !lot || lot.status === 'RETENIDO') throw httpError(400, 'Solo se puede entregar una liberación LIBERADO');
       const e = clean(b.answers || {}, [{ n: 5, title: 'Entrega', fields: ENTREGA }]);
       if (!entregaDe(e, true)) throw httpError(400, 'Para la entrega anota fecha, remisión POLAR y quién recibió');
       await db.run("UPDATE qrecords SET status = 'ENTREGADO', data = ? WHERE folio = ?", JSON.stringify({ ...r.data, ...e }), r.folio);
-      await db.run("UPDATE lots SET status = 'ENTREGADO', delivered = ?, delivered_qty = ? WHERE code = ?", e.entrega_fecha, num(r.data.aceptadas), lot.code);
+      await db.run('UPDATE lots SET delivered = ? WHERE code = ?', e.entrega_fecha, lot.code);
+      await estadoLote(lot.code, r.plant); // ENTREGADO solo cuando ya se entregó todo el lote
       return json(200, { ok: true });
     },
 
