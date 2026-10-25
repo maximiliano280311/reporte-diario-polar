@@ -45,8 +45,11 @@ App web para **Retrabajos Industriales y Limpiezas Especializadas Polar**: los e
   - Fotos (`type: 'photos'`, en gas, visitas, incidencias y gastos): el teléfono las reduce a JPEG ≤1600 px, se suben a `/api/upload`
     y el reporte guarda solo sus claves; el PL-FOR-26 las imprime como "Anexos".
 - **Borrador**: el formulario se guarda en `localStorage` mientras se llena (uno por día) y se recupera si se cierra la página.
-- **Corregir un reporte**: el encargado, el suyo de hoy; el admin, cualquiera. Solo el **último de la planta** (los siguientes ya
-  arrastraron sus km y saldos); se recalcula con `carry(plant, id)` excluyéndolo y se vuelve a calificar.
+- **Corregir un reporte**: el encargado, el suyo de hoy; **el admin, cualquiera** (regla: todo reporte y formato nuevo debe poder
+  corregirlo el admin). Se recalcula contra los reportes anteriores (`carry(plant, before)`) y después se vuelven a calcular los
+  saldos de material de los siguientes de la planta (`saldar`); se vuelve a calificar. Check lists, plática y mantenimiento:
+  el admin los corrige desde el registro (`#/fmtedit/FOLIO`, `POST /api/calidad/formato/editar`, mismo folio). REC y LIB no se
+  corrigen (mueven lotes); el NC se actualiza mientras está abierto.
 - **Reportes del admin**: filtros por planta y fechas (`GET /api/reports?planta=&desde=&hasta=&id=`) y exportar a CSV para Excel.
 - **Personalización del formulario** (pestaña Formulario, solo admin): renombrar secciones/preguntas, ocultar las no protegidas,
   agregar preguntas propias (`x_...`). Los campos en `PROTECTED` los usan los cálculos: se renombran pero no se ocultan. La config va en

@@ -656,8 +656,6 @@ const views = {
       const mine = week.filter(r => r.user_id === u.id);
       return { ...u, today: today.some(r => r.user_id === u.id), count: mine.length, score: avg(mine.map(r => r.score)) };
     });
-    // Se puede corregir el último reporte de cada planta (vienen del más reciente al más viejo).
-    const latest = new Set(Object.values(Object.fromEntries([...week].reverse().map(r => [r.plant, r.id]))));
     const tables = questions.filter(s => s.table);
     // Semáforo de gerencia (MOD-005): sale del último reporte de cada planta en la semana.
     const last = PLANTS.map(p => week.find(r => r.plant === p)).filter(Boolean);
@@ -715,7 +713,7 @@ const views = {
     const shown = () => reports.filter(r => JSON.stringify(r).toLowerCase().includes(filt.q.toLowerCase()));
     const draw = () => {
       const list = shown();
-      $('#list').innerHTML = list.length ? list.map(r => reportCard(r, true, latest.has(r.id))).join('') : '<p class="text-on-surface-variant text-sm">Sin reportes con esos filtros.</p>';
+      $('#list').innerHTML = list.length ? list.map(r => reportCard(r, true, true)).join('') : '<p class="text-on-surface-variant text-sm">Sin reportes con esos filtros.</p>';
     };
     // Planta y fechas se piden al servidor; la búsqueda de texto filtra lo que ya se bajó.
     const load = async () => {
@@ -1143,11 +1141,12 @@ const views = {
   lib: lote => views.qnuevo('LIB', lote),
   nc: origen => views.qnuevo('NC', origen),
   ncedit: folio => views.qnuevo('NC', folio, true),
+  fmtedit: folio => views.qnuevo(decodeURIComponent(folio).split('-')[0], folio, true), // admin: corregir check list, plática o mantenimiento
 
   // Captura de PL-FOR-28 / 29 / 30. arg: LIB → lote preseleccionado; NC → folio REC / LIB de origen o código de lote; edit: NC a actualizar.
   async qnuevo(kind, arg = '', edit = false) {
     arg = decodeURIComponent(arg);
-    const prev = /^(REC|LIB|NC)-\d+$/.test(arg) ? await api('/api/calidad/registro?folio=' + encodeURIComponent(arg)) : null;
+    const prev = /^(REC|LIB|NC|CL2[123]|PLA|MT)-\d+$/.test(arg) ? await api('/api/calidad/registro?folio=' + encodeURIComponent(arg)) : null;
     let plant = prev?.plant || (me.role === 'admin' ? calPlant || PLANTS[0] : me.plant);
     if (!plant) throw new Error('Tu cuenta no tiene planta asignada: pide al administrador que te asigne una.');
     const draw = async () => {
@@ -1208,7 +1207,7 @@ const views = {
         const btn = form.querySelector('.btn-primary'); btn.disabled = true;
         try {
           const answers = collect(form, secs);
-          const r = edit ? await api('/api/calidad/nc/actualizar', { folio: prev.folio, answers })
+          const r = edit ? await api(kind === 'NC' ? '/api/calidad/nc/actualizar' : '/api/calidad/formato/editar', { folio: prev.folio, answers })
             : await api('/api/calidad/' + kind.toLowerCase(), { planta: plant, answers, origen: prev?.folio || '' });
           views.qhecho(kind, r, edit);
         } catch (err) { showErr(err); btn.disabled = false; }
@@ -1251,6 +1250,7 @@ const views = {
       <div class="flex flex-wrap gap-2">
         ${needNC ? `<a href="#/nc/${esc(r.folio)}" class="btn btn-primary"><span class="material-symbols-outlined">report</span>Crear no conforme</a>` : ''}
         ${r.kind === 'NC' && r.status === 'ABIERTO' ? `<a href="#/ncedit/${esc(r.folio)}" class="btn btn-primary"><span class="material-symbols-outlined">edit</span>Actualizar / cerrar</a>` : ''}
+        ${me.role === 'admin' && ['CL21', 'CL22', 'CL23', 'PLA', 'MT'].includes(r.kind) ? `<a href="#/fmtedit/${esc(r.folio)}" class="btn btn-primary"><span class="material-symbols-outlined">edit</span>Corregir</a>` : ''}
         <button onclick="print()" class="btn border-[1.5px] border-[#cbd5e1] text-primary"><span class="material-symbols-outlined">print</span>Imprimir</button>
       </div></div>
     <p id="err" class="text-sm text-error hidden no-print" role="alert"></p>
@@ -1760,7 +1760,7 @@ function renderNav(name) {
 }
 
 // Opción del menú que se marca en pantallas que no están en el menú.
-const QVIEWS = ['rec', 'lib', 'nc', 'ncedit', 'q', 'fmt', 'docs']; // pantallas de Calidad que no están en el menú
+const QVIEWS = ['rec', 'lib', 'nc', 'ncedit', 'q', 'fmt', 'fmtedit', 'docs']; // pantallas de Calidad que no están en el menú
 const navOf = name => ({ pl: 'admin', editar: me.role === 'admin' ? 'admin' : 'historial' })[name] ?? (QVIEWS.includes(name) ? 'calidad' : name);
 async function route() {
   const [name, arg] = location.hash.slice(2).split('/');

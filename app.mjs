@@ -363,9 +363,11 @@ export function createApp({ db, files, env = {} }) {
   const ymd = (d = new Date()) => d.toLocaleDateString('en-CA', { timeZone: TZ });
 
   // Arrastre entre días por planta: último km de cada unidad, último saldo por pieza y pendientes abiertos del último reporte.
-  // exclude: el reporte que se está corrigiendo (se recalcula contra los anteriores).
-  async function carry(plant, exclude = 0) {
-    const rows = plant ? (await db.all('SELECT answers FROM reports WHERE plant = ? AND id != ? ORDER BY date, id', plant, exclude)).map(r => JSON.parse(r.answers)) : [];
+  // before: el reporte que se está corrigiendo ({ id, date }): solo cuentan los anteriores a él.
+  async function carry(plant, before = null) {
+    const rows = !plant ? [] : (before
+      ? await db.all('SELECT answers FROM reports WHERE plant = ? AND (date < ? OR (date = ? AND id < ?)) ORDER BY date, id', plant, before.date, before.date, before.id)
+      : await db.all('SELECT answers FROM reports WHERE plant = ? ORDER BY date, id', plant)).map(r => JSON.parse(r.answers));
     const km = {}, saldos = {};
     for (const a of rows) {
       for (const v of a.vehiculos || []) if (v.vehiculo && v.km_fin) km[v.vehiculo] = v.km_fin;
@@ -428,13 +430,19 @@ export function createApp({ db, files, env = {} }) {
     return m;
   }
 
-  // Limpia las respuestas y calcula los campos automáticos (para guardar o para corregir; exclude = el reporte que se corrige).
-  async function prepare(plant, answers, exclude = 0, date = ymd()) {
-    const form = await currentForm(), a = clean(answers, form), { saldos } = await carry(plant, exclude);
+  // Sección 7: saldo en planta y pendientes por procesar de cada pieza, a partir de los saldos anteriores.
+  const saldar = (a, saldos) => { for (const m of a.material || []) {
+    m.saldo_ant = String(num(saldos[matKey(m)]?.saldo));
+    m.saldo = String(num(m.saldo_ant) + num(m.cantidad) - num(m.entregado)); // las piezas del renglón son lo que entró
+    m.pendientes = String(num(saldos[matKey(m)]?.pendientes) + num(m.cantidad) - num(m.procesado)); // se arrastra como el saldo
+  } };
+  // Limpia las respuestas y calcula los campos automáticos (para guardar o para corregir; before = el reporte que se corrige).
+  async function prepare(plant, answers, before = null, date = ymd()) {
+    const form = await currentForm(), a = clean(answers, form), { saldos } = await carry(plant, before);
     // Sección 7: recibido / entregado salen de Calidad (no se capturan). Cada pieza con movimiento ese día lleva su renglón.
     if (a.material) {
       // ponytail: los movimientos del día cuentan solo en el primer reporte de la planta ese día (si no, el saldo los sumaría dos veces).
-      const otro = await db.get('SELECT 1 FROM reports WHERE plant = ? AND date = ? AND id != ?', plant, date, exclude);
+      const otro = await db.get('SELECT 1 FROM reports WHERE plant = ? AND date = ? AND id < ?', plant, date, before?.id ?? Number.MAX_SAFE_INTEGER);
       const mov = otro ? {} : await movimientos(plant, date);
       for (const [k, x] of Object.entries(mov)) if (!a.material.some(m => matKey(m) === k)) a.material.push({ cliente: x.cliente, pieza: x.pieza, procesado: '' });
       for (const m of a.material) {
@@ -453,11 +461,7 @@ export function createApp({ db, files, env = {} }) {
       if (!trucks.has(v.vehiculo)) throw httpError(400, `El vehículo "${v.vehiculo || '(vacío)'}" no está registrado en la planta ${plant}`);
       v.recorrido = v.km_ini && v.km_fin ? String(num(v.km_fin) - num(v.km_ini)) : '';
     }
-    for (const m of a.material || []) {
-      m.saldo_ant = String(num(saldos[matKey(m)]?.saldo));
-      m.saldo = String(num(m.saldo_ant) + num(m.cantidad) - num(m.entregado)); // las piezas del renglón son lo que entró
-      m.pendientes = String(num(saldos[matKey(m)]?.pendientes) + num(m.cantidad) - num(m.procesado)); // se arrastra como el saldo
-    }
+    saldar(a, saldos);
     return { a, form };
   }
   // El reporte se guarda aunque la IA falle; queda sin calificación (o con la anterior, si se corrigió).
@@ -535,8 +539,9 @@ export function createApp({ db, files, env = {} }) {
   }
 
   // Guarda un formato de operación (check list, plática, mantenimiento) con sus reglas. Estatus = su resultado.
-  async function saveFormato(kind, user, b) {
-    const plant = plantFor(user, b.planta), F = await qform(kind, plant), a = clean(b.answers || {}, F.sections), fx = FORMATOS[kind];
+  // existing: el registro que corrige el admin (conserva folio y planta).
+  async function saveFormato(kind, user, b, existing = null) {
+    const plant = existing?.plant || plantFor(user, b.planta), F = await qform(kind, plant), a = clean(b.answers || {}, F.sections), fx = FORMATOS[kind];
     if (fx.bad) { // check list: todos los puntos contestados; lo que está mal lleva observación
       for (const s of F.sections.filter(s => s.table)) {
         if (a[s.table.id].length !== s.table.fixed.length || a[s.table.id].some((r, i) => r.punto !== s.table.fixed[i]))
@@ -561,9 +566,14 @@ export function createApp({ db, files, env = {} }) {
       a.sin_respaldo = a.tipo === 'ACTUALIZACIÓN DE SOFTWARE' && a.respaldo !== 'Sí' ? 'Sí' : 'No';
       a.total = String(a.refacciones.reduce((t, r) => t + num(r.costo), 0) + num(a.mano_obra));
       const p = (await pendientesAbiertos(plant)).find(m => pendLabel(m) === a.pendiente);
-      a.pendiente_key = p ? pendKey(p) : '';
+      a.pendiente_key = p ? pendKey(p) : a.pendiente === existing?.data.pendiente ? existing.data.pendiente_key || '' : '';
     }
-    const folio = await nextFolio(kind), status = a.resultado || 'REALIZADA';
+    const status = a.resultado || 'REALIZADA';
+    if (existing) {
+      await db.run('UPDATE qrecords SET date = ?, status = ?, data = ? WHERE folio = ?', a.fecha, status, JSON.stringify(a), existing.folio);
+      return { folio: existing.folio, status, ...a };
+    }
+    const folio = await nextFolio(kind);
     await saveRecord(folio, kind, plant, a.fecha, user, status, a);
     if (status.startsWith('RECHAZADA')) await db.run('INSERT INTO alerts(plant, folio, text) VALUES (?, ?, ?)', plant, folio,
       `${fx.code} ${fx.title} RECHAZADO ${a.unidad || a.horno || ''} · ${plant}: ${a.fallas} punto(s) con falla`);
@@ -782,7 +792,8 @@ export function createApp({ db, files, env = {} }) {
     // ?planta= y ?excluir= (admin corrigiendo un reporte): la planta de ese reporte y el arrastre sin él.
     'GET /api/defaults': async (req, user) => {
       const q = new URL(req.url).searchParams, plant = (user.role === 'admin' && q.get('planta')) || user.plant;
-      const { km, saldos, pendientes } = await carry(plant, Number(q.get('excluir')) || 0), mats = Object.values(saldos);
+      const before = q.get('excluir') ? await db.get('SELECT id, date FROM reports WHERE id = ?', Number(q.get('excluir'))) : null;
+      const { km, saldos, pendientes } = await carry(plant, before), mats = Object.values(saldos);
       const pend = Object.fromEntries(Object.entries(saldos).map(([k, m]) => [k, num(m.pendientes)])); // pendientes por procesar de días anteriores
       const trucks = await db.all('SELECT name, horometro FROM trucks WHERE plant = ? ORDER BY name', plant ?? '');
       // mov: recibido / entregado por pieza ese día (?fecha= al corregir un reporte de otro día) — la sección 7 los muestra sin capturarlos.
@@ -869,16 +880,20 @@ export function createApp({ db, files, env = {} }) {
       return json(200, parseReport(await db.get('SELECT * FROM reports WHERE id = ?', id)));
     },
 
-    // Corregir: el encargado, su reporte de hoy; el admin, cualquiera. Solo el último de la planta,
-    // porque los siguientes ya arrastraron sus km y saldos.
+    // Corregir: el encargado, su reporte de hoy; el admin, cualquiera. Se recalcula contra los reportes anteriores
+    // y después se vuelven a calcular los saldos de material de los siguientes de la planta (los arrastran).
     'POST /api/reports/edit': async (req, user) => {
       const { id, answers = {} } = await body(req);
       const r = await db.get('SELECT id, user_id, date, plant FROM reports WHERE id = ?', Number(id));
       if (!r || (user.role !== 'admin' && (r.user_id !== user.id || r.date !== ymd()))) throw httpError(403, 'Solo puedes corregir tu reporte de hoy');
-      const last = await db.get('SELECT id FROM reports WHERE plant = ? ORDER BY date DESC, id DESC LIMIT 1', r.plant);
-      if (last?.id !== r.id) return json(409, { error: 'Solo se puede corregir el último reporte de la planta' });
-      const { a, form } = await prepare(r.plant, answers, r.id, r.date);
+      const { a, form } = await prepare(r.plant, answers, r, r.date);
       await db.run('UPDATE reports SET answers = ? WHERE id = ?', JSON.stringify(a), r.id);
+      // ponytail: un UPDATE por reporte siguiente; si alguna planta llega a miles de reportes, recalcular en lote.
+      for (const n of await db.all('SELECT id, date, answers FROM reports WHERE plant = ? AND (date > ? OR (date = ? AND id > ?)) ORDER BY date, id', r.plant, r.date, r.date, r.id)) {
+        const b = JSON.parse(n.answers);
+        saldar(b, (await carry(r.plant, n)).saldos);
+        await db.run('UPDATE reports SET answers = ? WHERE id = ?', JSON.stringify(b), n.id);
+      }
       await grade(r.id, a, form);
       return json(200, parseReport(await db.get('SELECT * FROM reports WHERE id = ?', r.id)));
     },
@@ -1002,6 +1017,12 @@ export function createApp({ db, files, env = {} }) {
     // Formatos de operación de la semana (encargado: su planta; admin: todas).
     'GET /api/semana': async (req, user) => json(200, await semana(user.role === 'admin' ? PLANTS : PLANTS.includes(user.plant) ? [user.plant] : [])),
     ...Object.fromEntries(Object.keys(FORMATOS).map(k => [`POST /api/calidad/${k.toLowerCase()}`, async (req, user) => json(200, await saveFormato(k, user, await body(req)))])),
+    // Corregir un check list, plática o mantenimiento ya guardado (solo admin).
+    'POST /api/calidad/formato/editar': adminOnly(async (req, user) => {
+      const b = await body(req), r = await getRecord(b.folio, user);
+      if (!FORMATOS[r.kind]) return json(400, { error: 'Ese registro no se corrige aquí' });
+      return json(200, await saveFormato(r.kind, user, b, r));
+    }),
 
     // Catálogo de clientes (con su especificación para el criterio 7) y teléfono de gerencia (solo admin).
     'POST /api/calidad/config': adminOnly(async req => {

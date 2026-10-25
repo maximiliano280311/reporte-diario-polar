@@ -131,11 +131,13 @@ assert.equal((await call('POST', '/api/reports', { answers: { ...base, vehiculos
 const r2 = (await ok('POST', '/api/reports', { answers: { ...base, material: [{ cliente: 'kh méxico', pieza: 'p-1', procesado: '2' }] } }, beto)).data;
 assert.deepEqual([r2.answers.material[0].cantidad, r2.answers.material[0].saldo_ant, r2.answers.material[0].saldo, r2.answers.material[0].pendientes], ['0', '0', '0', '4']);
 
-// Corregir: solo el último de la planta; se recalcula contra los anteriores, no contra sí mismo.
-assert.equal((await call('POST', '/api/reports/edit', { id: r1.id, answers: base }, ana)).status, 409);
+// Corregir un reporte que no es el último: se recalcula contra los anteriores y el siguiente vuelve a arrastrar sus saldos.
+const e1 = (await ok('POST', '/api/reports/edit', { id: r1.id, answers: { ...base, vehiculos: [{ vehiculo: 'NP300', km_ini: '100', km_fin: '150' }], material: [{ cliente: 'KH México', pieza: 'P-1', procesado: '6' }] } }, ana)).data;
+assert.equal(e1.answers.material.find(m => m.pieza === 'P-1').pendientes, '4');
+assert.equal((await ok('GET', '/api/reports?id=' + r2.id, null, admin)).data[0].answers.material[0].pendientes, '2'); // 4 + 0 − 2
 assert.equal((await call('POST', '/api/reports/edit', { id: r2.id, answers: base }, ana)).status, 403); // no es suyo
 const e2 = (await ok('POST', '/api/reports/edit', { id: r2.id, answers: { ...base, material: [{ cliente: 'KH México', pieza: 'P-1', procesado: '1' }] } }, beto)).data;
-assert.deepEqual([e2.answers.material[0].saldo_ant, e2.answers.material[0].saldo, e2.answers.material[0].pendientes], ['0', '0', '5']);
+assert.deepEqual([e2.answers.material[0].saldo_ant, e2.answers.material[0].saldo, e2.answers.material[0].pendientes], ['0', '0', '3']);
 await ok('POST', '/api/reports/edit', { id: r2.id, answers: base }, admin); // el admin también
 assert.equal((await ok('GET', '/api/defaults?planta=Querétaro&excluir=' + r2.id, null, admin)).data.km.NP300, '150');
 
@@ -235,6 +237,12 @@ const c1 = (await ok('POST', '/api/calidad/cl21', { answers: { unidad: 'NP300', 
   resultado: 'RECHAZADA (NO SALE)', ...puntos(cl21, (s, i) => s.table.id === 'g1' && i === 0 ? 'MAL' : 'BIEN', 'Fuga') } }, beto2)).data;
 assert.deepEqual([c1.folio, c1.status, c1.fallas], ['CL21-0001', 'RECHAZADA (NO SALE)', '1']);
 assert.ok((await ok('GET', '/api/calidad', null, admin)).data.alertas.some(a => a.folio === 'CL21-0001')); // rechazada avisa a gerencia
+// Corregir un formato: solo el admin; conserva folio y vuelve a validar.
+const fix = { unidad: 'NP300', fecha: hoy, hora: '07:00', km: '1001', operador: 'Juan', resultado: 'APROBADA', ...puntos(cl21) };
+assert.equal((await call('POST', '/api/calidad/formato/editar', { folio: 'CL21-0001', answers: fix }, beto2)).status, 403);
+assert.equal((await call('POST', '/api/calidad/formato/editar', { folio: 'REC-0001', answers: fix }, admin)).status, 400);
+const c1b = (await ok('POST', '/api/calidad/formato/editar', { folio: 'CL21-0001', answers: fix }, admin)).data;
+assert.deepEqual([c1b.folio, c1b.status, c1b.km], ['CL21-0001', 'APROBADA', '1001']);
 // Plática: al menos un asistente; duración y total se calculan.
 const pla = { fecha: hoy, hora: '08:00', hora_fin: '08:45', imparte: 'Beto', tema: 'Uso de EPP', puntos: 'Guantes y lentes' };
 assert.equal((await call('POST', '/api/calidad/pla', { answers: pla }, beto2)).status, 400);
