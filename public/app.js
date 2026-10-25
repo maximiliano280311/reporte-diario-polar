@@ -1335,7 +1335,7 @@ const fc = s => s ? fdate(s, { weekday: 'short', day: 'numeric', month: 'short' 
 const fcy = s => s ? fdate(s, { day: 'numeric', month: 'short', year: 'numeric' }) : '—';
 const r2 = n => Math.round((+n || 0) * 100) / 100;
 const mesL = m => `${MESL[+m.slice(5) - 1]} ${m.slice(0, 4)}`;
-const NTABS = [['nomina', 'Nómina'], ['capturar', 'Capturar'], ['incidencias', 'Incidencias'], ['bonos', 'Bonos'], ['vacaciones', 'Vacaciones'], ['empleados', 'Empleados']];
+const NTABS = [['nomina', 'Nómina'], ['ia', 'Asistente IA'], ['capturar', 'Capturar'], ['incidencias', 'Incidencias'], ['bonos', 'Bonos'], ['vacaciones', 'Vacaciones'], ['empleados', 'Empleados']];
 let N = null; // estado de la pantalla (se conserva al cambiar de pestaña)
 
 const nomAdmin = () => N.d.admin;
@@ -1426,7 +1426,120 @@ const weekNav = (act, title, sub, extra = '') => `<div class="flex flex-wrap ite
   <div class="min-w-0"><h2 class="text-headline-md">${title}</h2><p class="text-body-sm text-on-surface-variant">${sub}</p></div>
   <button type="button" data-act="${act}" data-d="1" class="btn border-[1.5px] border-[#cbd5e1] !px-3" aria-label="Siguiente"><span class="material-symbols-outlined">chevron_right</span></button>${extra}</div>`;
 
+// Excel (.xlsx) o CSV a texto para el asistente, sin librerías: un .xlsx es un zip de XML y el navegador lo abre con DecompressionStream.
+async function leerArchivo(file) {
+  if (/\.(csv|txt)$/i.test(file.name)) return file.text();
+  if (!/\.xlsx$/i.test(file.name)) throw new Error('Sube un Excel .xlsx o un .csv (en Excel: Archivo → Guardar como → Libro de Excel)');
+  const buf = new Uint8Array(await file.arrayBuffer()), dv = new DataView(buf.buffer), files = {};
+  let e = buf.length - 22;
+  while (e >= 0 && dv.getUint32(e, true) !== 0x06054b50) e--; // fin del directorio del zip
+  if (e < 0) throw new Error('El archivo no es un Excel válido');
+  for (let i = 0, p = dv.getUint32(e + 16, true); i < dv.getUint16(e + 10, true); i++) {
+    const n = dv.getUint16(p + 28, true), off = dv.getUint32(p + 42, true), start = off + 30 + dv.getUint16(off + 26, true) + dv.getUint16(off + 28, true);
+    files[new TextDecoder().decode(buf.subarray(p + 46, p + 46 + n))] = { method: dv.getUint16(p + 10, true), data: buf.subarray(start, start + dv.getUint32(p + 20, true)) };
+    p += 46 + n + dv.getUint16(p + 30, true) + dv.getUint16(p + 32, true);
+  }
+  const xml = async name => { const f = files[name];
+    const txt = !f ? '' : f.method ? await new Response(new Blob([f.data]).stream().pipeThrough(new DecompressionStream('deflate-raw'))).text() : new TextDecoder().decode(f.data);
+    return new DOMParser().parseFromString(txt || '<x/>', 'application/xml'); };
+  const tags = (doc, t) => [...doc.getElementsByTagName(t)], texto = el => tags(el, 't').map(t => t.textContent).join('');
+  const strings = tags(await xml('xl/sharedStrings.xml'), 'si').map(texto);
+  const rels = Object.fromEntries(tags(await xml('xl/_rels/workbook.xml.rels'), 'Relationship').map(r => [r.getAttribute('Id'), r.getAttribute('Target')]));
+  const col = ref => [...ref.replace(/\d+/g, '')].reduce((t, ch) => t * 26 + ch.charCodeAt(0) - 64, 0) - 1;
+  let out = '';
+  for (const sh of tags(await xml('xl/workbook.xml'), 'sheet')) {
+    const tg = rels[sh.getAttribute('r:id')] || '', rows = tags(await xml(tg.startsWith('/') ? tg.slice(1) : 'xl/' + tg), 'row').map(r => {
+      const cells = [];
+      for (const c of tags(r, 'c')) { const t = c.getAttribute('t'), v = tags(c, 'v')[0]?.textContent ?? '', ref = c.getAttribute('r');
+        cells[ref ? col(ref) : cells.length] = t === 's' ? strings[v] : t === 'inlineStr' ? texto(c) : v; }
+      return [...cells].map(v => String(v ?? '').trim()).join(' | ').replace(/( \|\s*)+$/, '');
+    }).filter(r => r.replace(/[\s|]/g, ''));
+    if (rows.length) out += `### Hoja: ${sh.getAttribute('name')}\n${rows.join('\n')}\n\n`;
+  }
+  return out;
+}
+// Aplica las propuestas marcadas (ya editadas por el admin) con las rutas normales: primero empleados, después incidencias.
+async function nomAplicar() {
+  const c = N.chat, sel = c.cambios.filter(x => x.incluir), errs = [], norm = v => String(v ?? '').trim().toLowerCase();
+  let ok = 0;
+  c.busy = true; nomDraw();
+  for (const x of sel.filter(x => x.tipo === 'empleado')) {
+    const { tipo, incluir, ...rest } = x, old = x.id ? empById(x.id) : null;
+    const d = Object.fromEntries(Object.entries(rest).filter(([, v]) => v !== '' && v != null)); // vacío = sin cambio
+    try { await api('/api/nomina/emp', { ...(old || {}), ...d, id: old?.id }); ok++; } catch (err) { errs.push(`${x.nombre}: ${err.message}`); }
+  }
+  N.d = await api('/api/nomina');
+  for (const x of sel.filter(x => x.tipo === 'incidencia')) {
+    const id = Number(x.empleadoId) || N.d.emps.find(e => norm(e.nombre) === norm(x.empleado))?.id;
+    if (!id) { errs.push(`${x.empleado || '(sin nombre)'}: no existe ese empleado`); continue; }
+    try { await api('/api/nomina/inc', { emps: [id], tipo: x.clase, fecha: x.fecha, cantidad: +x.cantidad, nota: x.nota }); ok++; }
+    catch (err) { errs.push(`${x.empleado} · ${NT[x.clase]?.l || x.clase}: ${err.message}`); }
+  }
+  N.d = await api('/api/nomina');
+  c.cambios = []; c.busy = false;
+  c.msgs.push({ rol: 'sistema', texto: `Apliqué ${ok} cambio${ok === 1 ? '' : 's'}.${errs.length ? ' No se pudieron: ' + errs.join(' · ') : ''}` });
+  nomDraw();
+}
+async function nomEnviar() {
+  const c = N.chat, texto = c.draft.trim();
+  if (!texto && !c.file) return showErr(new Error('Escribe un mensaje o adjunta un archivo'));
+  c.msgs.push({ rol: 'admin', texto: texto || 'Revisa el archivo y propón los cambios.', archivo: c.file?.nombre });
+  const archivo = c.file; c.draft = ''; c.file = null; c.busy = true; nomDraw();
+  try {
+    const r = await api('/api/nomina/ai', { mensajes: c.msgs.filter(m => m.rol !== 'sistema').map(({ rol, texto }) => ({ rol, texto })), archivo });
+    c.msgs.push({ rol: 'ia', texto: r.respuesta || 'Listo.' });
+    c.cambios = r.cambios.map(x => ({ ...x, incluir: true }));
+  } catch (err) { c.msgs.push({ rol: 'sistema', texto: 'No se pudo: ' + err.message }); }
+  c.busy = false; nomDraw();
+}
+
 const nomTabs = {
+  // Asistente con IA (solo admin): conversa, lee Excel / CSV y PROPONE altas o cambios de empleados e incidencias.
+  // Cada propuesta se puede editar a mano o quitar antes de aplicar; las demás pestañas siguen para capturar a mano.
+  ia() {
+    const c = N.chat, emps = nomEmps(true);
+    const bubble = m => m.rol === 'sistema' ? `<p class="self-center text-center text-body-sm text-on-surface-variant max-w-[90%]">${esc(m.texto)}</p>`
+      : `<div class="max-w-[85%] ${m.rol === 'admin' ? 'self-end bg-primary text-white' : 'self-start bg-surface-container-low'} rounded-2xl px-4 py-2.5 text-body-md whitespace-pre-wrap">${esc(m.texto)}${m.archivo ? `<span class="block mt-1 text-[11px] opacity-80">📎 ${esc(m.archivo)}</span>` : ''}</div>`;
+    // Campos editables de cada propuesta, con su etiqueta (L = etiqueta).
+    const L = (label, html, wide) => `<label class="flex flex-col gap-1 text-label-sm text-on-surface-variant ${wide ? 'col-span-2' : ''}"><span>${label}</span>${html}</label>`;
+    const inp = (i, k, v, type = 'text', attrs = '') => `<input class="input !py-2" data-ci="${i}" data-k="${k}" type="${type}" value="${esc(v ?? '')}" ${attrs}>`;
+    const extra = x => ['te', 'teModo', 'diasBase', 'baja', 'vacAjuste', 'menor', 'notas'].filter(k => x[k] !== undefined);
+    const fila = (x, i) => `<div class="p-3 rounded-xl ${x.incluir ? 'bg-surface-container-low' : 'bg-surface-container-low/40 opacity-60'} flex flex-col gap-2">
+      <label class="flex items-center gap-2 text-label-md"><input type="checkbox" data-ci="${i}" data-k="incluir" ${x.incluir ? 'checked' : ''} class="w-5 h-5 accent-[#2563eb]">
+        ${x.tipo === 'empleado' ? nChip(x.id ? 'Cambio de empleado' : 'Empleado nuevo', x.id ? WARN : OKC) : nChip('Incidencia')}</label>
+      ${x.tipo === 'incidencia' ? `<div class="grid grid-cols-2 lg:grid-cols-4 gap-2">
+        ${L('Empleado', sel(`data-ci="${i}" data-k="empleadoId"`, [['', x.empleado ? `(se da de alta) ${x.empleado}` : 'Elige…'], ...emps.map(e => [e.id, e.nombre])], x.empleadoId ?? ''), true)}
+        ${L('Tipo', sel(`data-ci="${i}" data-k="clase"`, CAP_TIPOS.map(k => [k, NT[k].l]), x.clase), true)}
+        ${L('Fecha', inp(i, 'fecha', x.fecha, 'date'))}${L(`Cantidad (${NT[x.clase]?.u === '$' ? 'pesos' : NT[x.clase]?.u || ''})`, inp(i, 'cantidad', x.cantidad, 'number', 'min="0" step="0.5"'))}
+        ${L('Nota', inp(i, 'nota', x.nota), true)}</div>`
+      : `<div class="grid grid-cols-2 lg:grid-cols-4 gap-2">${L('Nombre', inp(i, 'nombre', x.nombre), true)}
+        ${L('Planta', sel(`data-ci="${i}" data-k="planta"`, N.d.areas.map(a => [a, a]), x.planta))}
+        ${L('Forma de pago', sel(`data-ci="${i}" data-k="pago"`, [['', '(sin cambio)'], ['semana', 'Sueldo semanal'], ['dia', 'Por día']], x.pago ?? ''))}
+        ${L('Sueldo ($)', inp(i, 'sueldo', x.sueldo, 'number', 'min="0" placeholder="(sin cambio)"'))}${L('Bono puntualidad ($)', inp(i, 'bono', x.bono, 'number', 'min="0" placeholder="(sin cambio)"'))}
+        ${L('Fecha de ingreso', inp(i, 'ingreso', x.ingreso, 'date'), true)}</div>
+        ${extra(x).length ? `<p class="text-body-sm text-on-surface-variant">También: ${esc(extra(x).map(k => `${k}: ${x[k]}`).join(' · '))}</p>` : ''}`}</div>`;
+    const n = c.cambios.filter(x => x.incluir).length;
+    return `<div class="card p-4 flex flex-col gap-3 min-h-[240px]">
+      ${c.msgs.length ? c.msgs.map(bubble).join('') : `<div class="text-body-md text-on-surface-variant flex flex-col gap-1"><p class="font-semibold text-on-surface">Asistente de nómina</p>
+        <p>Pídele cosas como "Luis faltó el lunes y María hizo 3 horas extra el martes", "da de alta a Pedro Gómez en Silao con 2,300 semanales" o adjunta el Excel de asistencias o de personal para que proponga todo.</p>
+        <p class="text-body-sm">Nada se guarda hasta que revisas las propuestas y das "Aplicar". Puedes editarlas o quitar las que no quieras.</p></div>`}
+      ${c.busy ? '<p class="self-start flex items-center gap-2 text-body-md text-on-surface-variant"><span class="material-symbols-outlined animate-spin">progress_activity</span>Pensando…</p>' : ''}
+    </div>
+    ${c.cambios.length ? `<section class="card p-4 mt-3 flex flex-col gap-2"><h2 class="font-semibold flex items-center gap-2"><span class="material-symbols-outlined text-primary">fact_check</span>Propuestas (${c.cambios.length}) · revisa y corrige antes de aplicar</h2>
+      ${c.cambios.map(fila).join('')}
+      <div class="flex flex-wrap gap-2 justify-end"><button type="button" data-act="iadescartar" class="btn border-[1.5px] border-[#cbd5e1]">Descartar</button>
+        <button type="button" data-act="iaaplicar" class="btn btn-primary" ${n && !c.busy ? '' : 'disabled'}><span class="material-symbols-outlined">done_all</span>Aplicar ${n} cambio${n === 1 ? '' : 's'}</button></div></section>` : ''}
+    <form id="iaForm" class="card p-3 mt-3 flex flex-col gap-2">
+      <textarea class="input" name="texto" rows="2" maxlength="4000" placeholder="Escribe aquí… (puedes adjuntar un Excel)" aria-label="Mensaje para el asistente">${esc(c.draft)}</textarea>
+      <div class="flex flex-wrap items-center gap-2">
+        <label class="btn border-[1.5px] border-[#cbd5e1] text-primary cursor-pointer"><span class="material-symbols-outlined">attach_file</span>Excel / CSV
+          <input type="file" accept=".xlsx,.csv" class="sr-only" data-iafile></label>
+        ${c.file ? `<span class="chip bg-surface-container-high text-primary">📎 ${esc(c.file.nombre)} <button type="button" data-act="iaquitar" aria-label="Quitar archivo" class="ml-1">✕</button></span>` : ''}
+        <span class="flex-1"></span>
+        <button class="btn btn-primary" ${c.busy ? 'disabled' : ''}><span class="material-symbols-outlined">send</span>Enviar</button></div>
+    </form>`;
+  },
+
   nomina() {
     const cierre = N.d.cierres.find(c => c.payday === N.payday), actual = N.payday === nextSat(ymd());
     const head = weekNav('wk', `Semana ${weekNo(N.payday)}`, `Pago ${fc(N.payday)} ${pdate(N.payday).getFullYear()}${actual ? ' · semana actual' : ''}`,
@@ -1634,7 +1747,7 @@ function empDeriv(f) {
 }
 
 function nomDraw() {
-  const tabs = NTABS.filter(([k]) => k !== 'nomina' || nomAdmin());
+  const tabs = NTABS.filter(([k]) => !['nomina', 'ia'].includes(k) || nomAdmin()); // Nómina y Asistente IA: solo admin
   if (!tabs.some(([k]) => k === N.tab)) N.tab = tabs[0][0];
   const pend = nomEmps().filter(e => bonoStatus(e, N.bonoMes).st === 'si').length;
   $('#app').innerHTML = `<div id="nom" class="${WIDE ? 'max-w-6xl' : ''}">
@@ -1667,6 +1780,9 @@ async function nomClick(e) {
   else if (a === 'editemp') N.edit = { kind: 'emp', x: empById(id) };
   else if (a === 'newemp') N.edit = { kind: 'emp', x: null };
   else if (a === 'bfmot') { N.bf.motivo = b.dataset.m; $('#bonoForm [name=motivo]').value = b.dataset.m; return; }
+  else if (a === 'iaquitar') N.chat.file = null;
+  else if (a === 'iadescartar') N.chat.cambios = [];
+  else if (a === 'iaaplicar') return nomAplicar().catch(err => { N.chat.busy = false; showErr(err); });
   else if (a === 'delinc') { if (confirmed(b)) nomSave('/api/nomina/inc/delete', { id }); return; }
   else if (a === 'diferir') return nomSave('/api/nomina/inc/diferir', { id });
   else if (a === 'bono') return nomSave('/api/nomina/bono', { emps: [id], mes: N.bonoMes });
@@ -1690,8 +1806,18 @@ async function nomClick(e) {
   else return;
   nomDraw();
 }
+// Una propuesta del asistente editada a mano (data-ci = índice, data-k = campo).
+const iaSet = t => { const x = N.chat.cambios[+t.dataset.ci], k = t.dataset.k;
+  if (k === 'incluir') { x.incluir = t.checked; return nomDraw(); }
+  x[k] = k === 'empleadoId' ? (t.value ? Number(t.value) : null) : t.value;
+  if (k === 'empleadoId' && x.empleadoId) x.empleado = empById(x.empleadoId)?.nombre || x.empleado; };
 function nomChange(e) {
   const t = e.target;
+  if (t.dataset.ci) return iaSet(t);
+  if (t.dataset.iafile !== undefined && t.files[0]) {
+    const file = t.files[0];
+    return leerArchivo(file).then(texto => { N.chat.file = { nombre: file.name, texto: texto.length > 300_000 ? texto.slice(0, 300_000) + '\n(recortado)' : texto }; nomDraw(); }, showErr);
+  }
   if (t.name === 'cemp') { t.checked ? N.cap.emps.add(+t.value) : N.cap.emps.delete(+t.value); return nomDraw(); }
   if (t.name === 'efectivo') { N.cap.efectivo = t.checked; $('#cprev').textContent = capPreview(); }
   if (t.closest('#filtros')) { N.fil[t.name] = t.value; nomDraw(); }
@@ -1699,6 +1825,8 @@ function nomChange(e) {
 }
 function nomInput(e) {
   const t = e.target;
+  if (t.dataset.ci && t.type !== 'checkbox') return iaSet(t);
+  if (t.closest('#iaForm') && t.name === 'texto') N.chat.draft = t.value;
   if (t.closest('#capForm') && ['fecha', 'cant', 'nota'].includes(t.name)) { N.cap[t.name] = t.value; $('#cprev').textContent = capPreview(); }
   if (t.closest('#bonoForm')) N.bf[t.name] = t.value;
   if (t.id === 'calcSue') { N.calcSue = t.value; $('#calcOut').innerHTML = calcOut(t.value); }
@@ -1706,6 +1834,7 @@ function nomInput(e) {
 function nomSubmit(e) {
   e.preventDefault();
   const f = e.target, v = Object.fromEntries(new FormData(f));
+  if (f.id === 'iaForm') return nomEnviar();
   if (f.id === 'capForm') {
     const c = N.cap;
     if (!c.emps.size) return showErr(new Error('Elige al menos un empleado'));
@@ -1727,6 +1856,7 @@ function nomSubmit(e) {
 views.nomina = async tab => {
   if (!N || N.uid !== me.id) { const d = new Date(); d.setDate(1); d.setMonth(d.getMonth() - 1);
     N = { uid: me.id, payday: nextSat(ymd()), open: new Set(), confirm: '', edit: null, calcSue: 2200, bonoMes: ymd(d).slice(0, 7),
+      chat: { msgs: [], cambios: [], draft: '', file: null, busy: false },
       cap: { tipo: 'falta', emps: new Set(), fecha: ymd(), cant: '1', nota: '', efectivo: false }, fil: { emp: '', tipo: '', estado: 'pend' }, bf: { emp: '', monto: '', motivo: '', fecha: ymd() } }; }
   N.d = await api('/api/nomina');
   N.tab = tab || N.tab || (N.d.admin ? 'nomina' : 'capturar'); N.edit = null; N.confirm = '';

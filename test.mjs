@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
-import { createApp } from './app.mjs';
+import { createApp, cleanNomCambios } from './app.mjs';
 
 const sqlite = new DatabaseSync(':memory:');
 sqlite.exec(readFileSync(new URL('./schema.sql', import.meta.url), 'utf8'));
@@ -219,6 +219,21 @@ await ok('POST', '/api/nomina/reabrir', { payday: '2026-10-31' }, admin);
 await ok('POST', '/api/nomina/inc/delete', { id: ids[0] }, beto2);
 await ok('POST', '/api/users/nomina', { id: betoId, nomina: false }, admin);
 assert.equal((await call('GET', '/api/nomina', null, beto2)).status, 403); // se le quitó el acceso
+
+// Asistente de nómina con IA: solo admin; lo que propone la IA se limpia y se liga a los empleados por nombre.
+assert.equal((await call('POST', '/api/nomina/ai', { mensajes: [{ rol: 'admin', texto: 'hola' }] }, beto2)).status, 403);
+assert.equal((await call('POST', '/api/nomina/ai', { mensajes: [] }, admin)).status, 400);
+const prop = cleanNomCambios([
+  { tipo: 'incidencia', empleado: 'luis p.', clase: 'te', fecha: '2026-10-20', cantidad: 3 },
+  { tipo: 'incidencia', empleado: 'Nuevo Juan', clase: 'falta', fecha: '2026-10-20', cantidad: 1 },
+  { tipo: 'incidencia', empleado: 'Luis P.', clase: 'bono_puntualidad', fecha: '2026-10-20', cantidad: 500 }, // no se propone por chat
+  { tipo: 'incidencia', empleado: 'Luis P.', clase: 'falta', fecha: '20/10/2026', cantidad: 1 }, // fecha inválida
+  { tipo: 'empleado', id: null, nombre: 'Nuevo Juan', planta: 'Marte', sueldo: 2500, ingreso: 'ayer' },
+  { tipo: 'empleado', id: 1, nombre: 'Luis P.', sueldo: 2600 }, { tipo: 'otra cosa' }],
+  [{ id: 1, nombre: 'Luis P.', planta: 'Querétaro' }]);
+assert.deepEqual(prop.map(c => [c.tipo, c.tipo === 'incidencia' ? c.empleadoId : c.id, c.clase || c.planta]),
+  [['incidencia', 1, 'te'], ['incidencia', null, 'falta'], ['empleado', null, 'Querétaro'], ['empleado', 1, 'Querétaro']]);
+assert.equal(prop[2].ingreso, undefined);
 
 // ---------- Formatos semanales: check lists, plática y mantenimiento ----------
 const qf = async kind => (await ok('GET', `/api/calidad/form?tipo=${kind}`, null, beto2)).data;
