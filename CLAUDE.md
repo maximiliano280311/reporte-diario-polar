@@ -71,7 +71,8 @@ App web para **Retrabajos Industriales y Limpiezas Especializadas Polar**: los e
   de bonos/descuentos (`empOut` / `incOut`). Áreas: Querétaro, Silao y Administración. El cálculo de la semana lo hace el panel del admin.
   **Asistente IA** (pestaña solo admin, `POST /api/nomina/ai`): chat que acepta Excel .xlsx o CSV (se leen en el navegador sin librerías,
   `leerArchivo`) y **solo propone** altas/cambios de empleados e incidencias (`cleanNomCambios`); el admin edita o quita cada propuesta y
-  "Aplicar" las guarda con las rutas normales (`nomAplicar`). Las pestañas de captura manual siguen igual.
+  "Aplicar" las guarda con las rutas normales (`nomAplicar`). Las pestañas de captura manual siguen igual Botón "Limpiar historial" del chat.
+  **Borrar empleado**: solo la cuenta dueña (`ADMIN_EMAIL`, `isOwner`, `me.owner`); se borran también sus incidencias sin pagar.
 
 ## Cómo probar
 `node test.mjs` (base en memoria, sin IA) cubre cálculos, permisos, edición, fotos, login y el flujo de Calidad (REC → LIB → NC). Además: scripts de Node contra la API

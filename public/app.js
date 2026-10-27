@@ -1539,7 +1539,9 @@ const nomTabs = {
         ${L('Fecha de ingreso', inp(i, 'ingreso', x.ingreso, 'date'), true)}</div>
         ${extra(x).length ? `<p class="text-body-sm text-on-surface-variant">También: ${esc(extra(x).map(k => `${k}: ${x[k]}`).join(' · '))}</p>` : ''}`}</div>`;
     const n = c.cambios.filter(x => x.incluir).length;
-    return `<div class="card p-4 flex flex-col gap-3 min-h-[240px]">
+    return `${c.msgs.length && !c.busy ? `<div class="flex justify-end mb-2"><button type="button" data-act="ialimpiar" class="text-label-sm text-error font-semibold inline-flex items-center gap-1">
+        <span class="material-symbols-outlined text-[16px]">delete_sweep</span><span>Limpiar historial</span></button></div>` : ''}
+    <div class="card p-4 flex flex-col gap-3 min-h-[240px]">
       ${c.msgs.length ? c.msgs.map(bubble).join('') : `<div class="text-body-md text-on-surface-variant flex flex-col gap-1"><p class="font-semibold text-on-surface">Asistente de nómina</p>
         <p>Pídele cosas como "Luis faltó el lunes y María hizo 3 horas extra el martes", "da de alta a Pedro Gómez en Silao con 2,300 semanales" o adjunta el Excel de asistencias o de personal para que proponga todo.</p>
         <p class="text-body-sm">Nada se guarda hasta que revisas las propuestas y das "Aplicar". Puedes editarlas o quitar las que no quieras.</p></div>`}
@@ -1694,7 +1696,8 @@ const nomTabs = {
       ${td(`<b>${esc(e.nombre)}</b> ${e.menor ? nChip('menor', BAD) : ''} ${e.baja && e.baja <= today ? nChip('baja ' + fcy(e.baja)) : ''}${e.notas ? `<br><span class="text-[11px] text-on-surface-variant">${esc(e.notas)}</span>` : ''}`)}${td(esc(e.planta))}
       ${admin ? td(`${money(+e.sueldo || 0)}<br><span class="text-[11px] text-on-surface-variant">${e.pago === 'dia' ? 'por día' : 'semanal'}</span>`, 1) + td(money(salDiario(e)), 1)
         + td(`${money(teRate(e))}<br><span class="text-[11px] text-on-surface-variant">${teManual(e) ? 'tarifa propia' : 'por fórmula'}</span>`, 1) + td(+e.bono ? money(+e.bono) : '—', 1) : ''}
-      ${td(e.ingreso ? fcy(e.ingreso) : nChip('falta', WARN))}${td(`<button type="button" data-act="editemp" data-id="${e.id}" class="text-label-sm text-primary font-semibold">Editar</button>`)}</tr>`).join(''), 'Sin empleados.');
+      ${td(e.ingreso ? fcy(e.ingreso) : nChip('falta', WARN))}${td(`<span class="flex gap-3"><button type="button" data-act="editemp" data-id="${e.id}" class="text-label-sm text-primary font-semibold">Editar</button>
+        ${me.owner ? `<button type="button" data-act="delemp" data-id="${e.id}" class="text-label-sm text-error font-semibold" aria-label="Borrar a ${esc(e.nombre)}"><span>Borrar</span></button>` : ''}</span>`)}</tr>`).join(''), 'Sin empleados.');
     const num = (k, l, step = 0.5, v = cfg?.[k]) => labeled({ label: l }, `<input class="input" type="number" min="0" step="${step}" data-cfg="${k}" value="${esc(v)}">`);
     return `<div class="flex flex-wrap items-center gap-3 mb-3"><p class="text-body-md text-on-surface-variant flex-1">${L.filter(e => !e.baja || e.baja >= today).length} activos${admin ? '' : ` · planta ${esc(me.plant || '')}`}</p>
       <button type="button" data-act="newemp" class="btn btn-primary"><span class="material-symbols-outlined">person_add</span>Agregar empleado</button></div>${list}
@@ -1802,6 +1805,9 @@ async function nomClick(e) {
   else if (a === 'bfmot') { N.bf.motivo = b.dataset.m; $('#bonoForm [name=motivo]').value = b.dataset.m; return; }
   else if (a === 'iaquitar') N.chat.file = null;
   else if (a === 'iadescartar') N.chat.cambios = [];
+  else if (a === 'ialimpiar') { if (!confirmed(b)) return; N.chat = { msgs: [], cambios: [], draft: '', file: null, busy: false }; }
+  // Borrar empleado: solo la cuenta dueña; doble toque para confirmar.
+  else if (a === 'delemp') { if (confirmed(b)) nomSave('/api/nomina/emp/delete', { id }); return; }
   else if (a === 'iaaplicar') return nomAplicar().catch(err => { N.chat.busy = false; showErr(err); });
   else if (a === 'delinc') { if (confirmed(b)) nomSave('/api/nomina/inc/delete', { id }); return; }
   else if (a === 'diferir') return nomSave('/api/nomina/inc/diferir', { id });
