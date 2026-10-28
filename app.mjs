@@ -156,11 +156,13 @@ const NOM_AREAS = [...PLANTS, 'Administración'];
 const NOM_TIPOS = ['falta', 'retardo', 'permiso_sg', 'permiso_cg', 'incapacidad', 'vacacion', 'te', 'dia_extra', 'bono', 'bono_puntualidad', 'descuento'];
 const NOM_PESOS = ['bono', 'bono_puntualidad', 'descuento']; // su cantidad es dinero
 const NOM_MONEY = ['sueldo', 'te', 'teModo', 'bono']; // campos del empleado que solo ve el admin
+// Tipo de empleado: de planta (el de siempre), provisional (temporal: albañiles, apoyos) o de confianza (jefes: solo el admin los ve).
+const CONTRATOS = ['planta', 'provisional', 'confianza'];
 const NOM_CONFIG = { porcentaje: 4, diasDivisor: 6, horasJornada: 8, factorTE: 2, bonoDefault: 500, inicio: { Querétaro: 6, Silao: 0, Administración: 1 } };
 const isDate = s => /^\d{4}-\d{2}-\d{2}$/.test(String(s ?? ''));
 // Propuestas del asistente de nómina: solo empleados (alta / cambio) e incidencias válidas; los nombres se ligan a su empleado.
 // La IA solo PROPONE: el admin las revisa, las edita y las aplica con las rutas normales (que vuelven a validar).
-const NOM_EMP_KEYS = ['nombre', 'planta', 'pago', 'sueldo', 'bono', 'te', 'teModo', 'diasBase', 'ingreso', 'baja', 'vacAjuste', 'menor', 'notas'];
+const NOM_EMP_KEYS = ['nombre', 'planta', 'contrato', 'pago', 'sueldo', 'bono', 'te', 'teModo', 'diasBase', 'ingreso', 'baja', 'vacAjuste', 'menor', 'notas'];
 export function cleanNomCambios(cambios, emps) {
   const norm = v => String(v ?? '').trim().toLowerCase(), byName = n => emps.find(e => norm(e.nombre) === norm(n));
   return [].concat(cambios ?? []).slice(0, 200).flatMap(c => {
@@ -168,6 +170,7 @@ export function cleanNomCambios(cambios, emps) {
       const old = emps.find(e => e.id === Number(c.id)) || (c.id ? null : byName(c.nombre));
       const d = Object.fromEntries(NOM_EMP_KEYS.filter(k => c[k] !== undefined && c[k] !== null && c[k] !== '').map(k => [k, c[k]]));
       if (d.planta && !NOM_AREAS.includes(d.planta)) delete d.planta;
+      if (d.contrato && !CONTRATOS.includes(d.contrato)) delete d.contrato;
       for (const k of ['ingreso', 'baja']) if (d[k] && !isDate(d[k])) delete d[k];
       for (const k of ['sueldo', 'bono', 'te', 'diasBase', 'vacAjuste']) if (d[k] !== undefined && !(Number(d[k]) >= 0)) delete d[k];
       if (!old && !d.nombre) return [];
@@ -555,7 +558,7 @@ export function createApp({ db, files, env = {} }) {
     const src = { clientes, lotes };
     if (kind === 'CL21') src.unidades = (await db.all('SELECT name FROM trucks WHERE plant = ? ORDER BY horometro, name', plant)).map(t => t.name);
     if (kind === 'PLA') src.personal = (await db.all('SELECT data FROM nom_emps WHERE area = ?', plant)).map(r => JSON.parse(r.data))
-      .filter(e => !e.baja || e.baja >= ymd()).map(e => e.nombre).sort();
+      .filter(e => (!e.baja || e.baja >= ymd()) && e.contrato !== 'confianza').map(e => e.nombre).sort();
     if (kind === 'MT') src.pendientes = [...(await pendientesAbiertos(plant)).map(pendLabel), PEND_NUEVO];
     return { ...QFORMS[kind], sections: QFORMS[kind].sections.map(s => ({ ...s, fields: s.fields?.map(f => f.src ? { ...f, options: src[f.src] } : f) })) };
   }
@@ -732,8 +735,9 @@ export function createApp({ db, files, env = {} }) {
   // Empleado que el usuario puede ver (encargado: solo los de su planta).
   async function nomEmp(id, user) {
     const r = await db.get('SELECT * FROM nom_emps WHERE id = ?', Number(id));
-    if (!r || (user.role !== 'admin' && r.area !== user.plant)) throw httpError(404, 'Empleado no encontrado');
-    return { id: r.id, ...JSON.parse(r.data), planta: r.area };
+    const e = r && { id: r.id, ...JSON.parse(r.data), planta: r.area };
+    if (!e || (user.role !== 'admin' && (r.area !== user.plant || e.contrato === 'confianza'))) throw httpError(404, 'Empleado no encontrado');
+    return e;
   }
   const empOut = (e, user) => {
     if (user.role === 'admin') return e;
@@ -770,9 +774,10 @@ export function createApp({ db, files, env = {} }) {
     'GET /api/nomina': nomOnly(async (req, user) => {
       const admin = user.role === 'admin', areas = admin ? NOM_AREAS : [user.plant];
       const inA = areas.map(() => '?').join(', ');
-      const emps = (await db.all(`SELECT * FROM nom_emps WHERE area IN (${inA})`, ...areas)).map(r => empOut({ id: r.id, ...JSON.parse(r.data), planta: r.area }, user));
+      const emps = (await db.all(`SELECT * FROM nom_emps WHERE area IN (${inA})`, ...areas)).map(r => ({ id: r.id, ...JSON.parse(r.data), planta: r.area }))
+        .filter(e => admin || e.contrato !== 'confianza').map(e => empOut(e, user)), ver = new Set(emps.map(e => e.id)); // confianza: solo el admin
       const incs = (await db.all(`SELECT i.*, u.name AS creador FROM nom_incs i JOIN nom_emps a ON a.id = i.emp_id LEFT JOIN users u ON u.id = i.user_id
-        WHERE a.area IN (${inA}) AND (i.aplicado = 0 OR i.fecha >= ?) ORDER BY i.fecha DESC, i.id DESC`, ...areas, ymd(new Date(Date.now() - 400 * DAY)))).map(r => incOut(r, user));
+        WHERE a.area IN (${inA}) AND (i.aplicado = 0 OR i.fecha >= ?) ORDER BY i.fecha DESC, i.id DESC`, ...areas, ymd(new Date(Date.now() - 400 * DAY)))).filter(r => ver.has(r.emp_id)).map(r => incOut(r, user));
       const cierres = admin ? (await db.all('SELECT data FROM nom_cierres ORDER BY payday DESC LIMIT 120')).map(r => JSON.parse(r.data)) : [];
       return json(200, { emps, incs, cierres, config: admin ? await nomConfig() : null, areas, admin });
     }),
@@ -785,7 +790,9 @@ export function createApp({ db, files, env = {} }) {
       if (!NOM_AREAS.includes(area)) throw httpError(400, 'Elige planta: Querétaro, Silao o Administración');
       if (!s('nombre')) throw httpError(400, 'Escribe el nombre');
       for (const k of ['ingreso', 'baja']) if (b[k] && !isDate(b[k])) throw httpError(400, 'Revisa las fechas');
-      const d = { nombre: s('nombre'), pago: b.pago === 'dia' ? 'dia' : 'semana', diasBase: Math.min(7, Math.max(1, n('diasBase') || 1)), ingreso: s('ingreso', 10),
+      const contrato = old?.contrato === 'confianza' && !admin ? 'confianza' : CONTRATOS.includes(b.contrato) ? b.contrato : old?.contrato || 'planta';
+      if (contrato === 'confianza' && !admin) throw httpError(403, 'Solo el administrador da de alta empleados de confianza');
+      const d = { nombre: s('nombre'), contrato, pago: b.pago === 'dia' ? 'dia' : 'semana', diasBase: Math.min(7, Math.max(1, n('diasBase') || 1)), ingreso: s('ingreso', 10),
         baja: s('baja', 10), vacAjuste: Number(b.vacAjuste) || 0, menor: !!b.menor, notas: s('notas', 240) };
       Object.assign(d, admin ? { sueldo: n('sueldo'), te: n('te'), teModo: b.teModo === 'manual' ? 'manual' : 'auto', bono: n('bono') }
         : Object.fromEntries(NOM_MONEY.map(k => [k, old?.[k] ?? (k === 'teModo' ? 'auto' : 0)])));
@@ -809,6 +816,7 @@ export function createApp({ db, files, env = {} }) {
     'POST /api/nomina/inc/edit': nomOnly(async (req, user) => {
       const b = await body(req), r = await incRow(b.id), admin = user.role === 'admin';
       if (!admin && (r.area !== user.plant || r.aplicado)) throw httpError(403, 'Solo puedes cambiar incidencias de tu planta que aún no se pagan');
+      if (!admin) await nomEmp(r.emp_id, user);
       const emp = await nomEmp(b.empleadoId ?? r.emp_id, user), x = cleanInc(b, user, { tipo: r.tipo, ...JSON.parse(r.data) });
       delete x.data.tipo;
       const aplicado = admin ? !!b.aplicado : !!r.aplicado;
@@ -827,6 +835,7 @@ export function createApp({ db, files, env = {} }) {
     'POST /api/nomina/inc/delete': nomOnly(async (req, user) => {
       const r = await incRow((await body(req)).id);
       if (user.role !== 'admin' && (r.area !== user.plant || r.aplicado)) throw httpError(403, 'Solo puedes borrar incidencias de tu planta que aún no se pagan');
+      if (user.role !== 'admin') await nomEmp(r.emp_id, user);
       await db.run('DELETE FROM nom_incs WHERE id = ?', r.id);
       return json(200, { ok: true });
     }),
@@ -889,16 +898,16 @@ export function createApp({ db, files, env = {} }) {
         'Eres el asistente de nómina de POLAR (Retrabajos Industriales y Limpiezas Especializadas). Escribe en español de México. ' +
         'Ayudas al administrador a llenar la nómina: das de alta o cambias empleados y capturas incidencias a partir de lo que te dice o de un Excel/CSV. ' +
         'Responde SOLO un JSON con las claves "respuesta" (texto breve para el admin: qué entendiste, qué propones y qué dudas tienes) y "cambios" (lista). ' +
-        'Cada cambio es uno de: {"tipo":"empleado","id":<id si ya existe o null si es nuevo>,"nombre","planta","pago","sueldo","bono","te","teModo","diasBase","ingreso","baja","vacAjuste","menor","notas"} ' +
+        'Cada cambio es uno de: {"tipo":"empleado","id":<id si ya existe o null si es nuevo>,"nombre","planta","contrato","pago","sueldo","bono","te","teModo","diasBase","ingreso","baja","vacAjuste","menor","notas"} ' +
         '(en un cambio a un empleado existente pon id, nombre y SOLO los campos que cambian) o ' +
         '{"tipo":"incidencia","empleadoId":<id o null>,"empleado":"<nombre>","clase","fecha","cantidad","nota"}. ' +
-        'Plantas: Querétaro, Silao o Administración. pago: "semana" (sueldo semanal) o "dia" (pago por día). teModo: "auto" (hora extra por fórmula) o "manual" (te = pago por hora extra). ' +
+        'Plantas: Querétaro, Silao o Administración. contrato: "planta" (empleado normal), "provisional" (temporal: albañiles, apoyos por obra) o "confianza" (jefes). pago: "semana" (sueldo semanal) o "dia" (pago por día). teModo: "auto" (hora extra por fórmula) o "manual" (te = pago por hora extra). ' +
         'Clases de incidencia y su cantidad: falta (días), retardo (veces), permiso_sg = permiso sin goce (días), permiso_cg = permiso con goce (días), incapacidad (días), ' +
         'vacacion (días), te = tiempo extra (horas), dia_extra = día extra o domingo (días), bono (pesos, la nota con el motivo es obligatoria), descuento (pesos). ' +
         'Fechas en AAAA-MM-DD; si en el Excel vienen como número de serie, conviértelas (número de días desde 1899-12-30). ' +
         'Usa el id del empleado cuando el nombre coincida con uno existente (aunque varíen mayúsculas o acentos); si no existe, propón darlo de alta antes. ' +
         'No inventes datos ni dupliques lo que ya está capturado. Si algo no está claro, pregúntalo en "respuesta" y no lo propongas. Si solo te hacen una pregunta, responde con "cambios": [].',
-        JSON.stringify({ hoy: ymd(), empleados: emps.map(({ id, nombre, planta, pago, sueldo, bono, ingreso, baja }) => ({ id, nombre, planta, pago, sueldo, bono, ingreso, baja })),
+        JSON.stringify({ hoy: ymd(), empleados: emps.map(({ id, nombre, planta, contrato, pago, sueldo, bono, ingreso, baja }) => ({ id, nombre, planta, contrato, pago, sueldo, bono, ingreso, baja })),
           conversacion: msgs, archivo: b.archivo ? { nombre: String(b.archivo.nombre ?? '').slice(0, 120), contenido: String(b.archivo.texto ?? '').slice(0, 300_000) } : null }),
         true, 180_000));
       return json(200, { respuesta: String(out.respuesta ?? ''), cambios: cleanNomCambios(out.cambios, emps) });

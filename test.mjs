@@ -309,6 +309,23 @@ assert.equal(calP.registros.find(r => r.folio === recP.folio).porEntregar, 0);
 const movP = (await ok('GET', '/api/defaults', null, beto2)).data.mov['kh méxico|p-9'];
 assert.deepEqual([movP.recibido, movP.entregado], [10, 10]); // la sección 7 suma las dos entregas
 
+// ---------- Nómina: empleados provisionales y de confianza (estos solo los ve el admin) ----------
+await ok('POST', '/api/users/nomina', { id: betoId, nomina: true }, admin);
+await ok('POST', '/api/nomina/emp', { nombre: 'Jefe Q', planta: 'Querétaro', contrato: 'confianza', sueldo: 9000 }, admin);
+await ok('POST', '/api/nomina/emp', { nombre: 'Albañil Q', contrato: 'provisional' }, beto2);
+assert.equal((await call('POST', '/api/nomina/emp', { nombre: 'Otro jefe', contrato: 'confianza' }, beto2)).status, 403);
+const empsA = (await ok('GET', '/api/nomina', null, admin)).data.emps, jefe = empsA.find(e => e.nombre === 'Jefe Q');
+assert.deepEqual([jefe.contrato, empsA.find(e => e.nombre === 'Albañil Q').contrato], ['confianza', 'provisional']);
+await ok('POST', '/api/nomina/inc', { emps: [jefe.id], tipo: 'falta', fecha: hoy, cantidad: 1 }, admin);
+const nomB = (await ok('GET', '/api/nomina', null, beto2)).data;
+assert.ok(!nomB.emps.some(e => e.nombre === 'Jefe Q') && !nomB.incs.some(i => i.empleadoId === jefe.id)); // ni él ni sus incidencias
+const incJefe = (await ok('GET', '/api/nomina', null, admin)).data.incs.find(i => i.empleadoId === jefe.id);
+for (const [p, d] of [['/api/nomina/inc', { emps: [jefe.id], tipo: 'falta', fecha: hoy, cantidad: 1 }], ['/api/nomina/emp', { id: jefe.id, nombre: 'X' }],
+  ['/api/nomina/inc/edit', { id: incJefe.id, fecha: hoy, cantidad: 2 }], ['/api/nomina/inc/delete', { id: incJefe.id }]])
+  assert.equal((await call('POST', p, d, beto2)).status, 404, p);
+assert.ok(!(await ok('GET', '/api/calidad/form?tipo=PLA', null, beto2)).data.sections.flatMap(s => s.fields || []).some(f => (f.options || []).includes('Jefe Q')));
+await ok('POST', '/api/users/nomina', { id: betoId, nomina: false }, admin);
+
 // ---------- PL-FOR-43 Check list del líder de grupo (MOD-009) ----------
 assert.equal((await call('POST', '/api/users', { name: 'Lalo', email: 'lalo@polar.test', password: pass, role: 'lider' }, admin)).status, 400); // el líder lleva planta
 await ok('POST', '/api/users', { name: 'Lalo', email: 'lalo@polar.test', password: pass, role: 'lider', plant: 'Querétaro' }, admin);

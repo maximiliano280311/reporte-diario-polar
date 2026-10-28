@@ -1366,6 +1366,10 @@ const fc = s => s ? fdate(s, { weekday: 'short', day: 'numeric', month: 'short' 
 const fcy = s => s ? fdate(s, { day: 'numeric', month: 'short', year: 'numeric' }) : '—';
 const r2 = n => Math.round((+n || 0) * 100) / 100;
 const mesL = m => `${MESL[+m.slice(5) - 1]} ${m.slice(0, 4)}`;
+// Tipos de empleado (contrato). Los de confianza solo los ve el admin (el servidor no se los manda a nadie más).
+const CONTRATO = [['planta', 'Empleados de planta', 'El personal de siempre.'],
+  ['provisional', 'Empleados provisionales', 'Trabajadores temporales que no se quedan mucho tiempo (albañiles, apoyos por obra).'],
+  ['confianza', 'Empleados de confianza', 'Jefes y personal de confianza. Solo los ve el administrador.']];
 const NTABS = [['nomina', 'Nómina'], ['ia', 'Asistente IA'], ['capturar', 'Capturar'], ['incidencias', 'Incidencias'], ['bonos', 'Bonos'], ['vacaciones', 'Vacaciones'], ['empleados', 'Empleados']];
 let N = null; // estado de la pantalla (se conserva al cambiar de pestaña)
 
@@ -1620,7 +1624,7 @@ const nomTabs = {
     const c = N.cap, t = NT[c.tipo], menorSel = [...c.emps].some(id => empById(id)?.menor) && ['te', 'dia_extra'].includes(c.tipo);
     let last = null;
     const picker = nomEmps().map(e => (e.planta !== last ? `<p class="col-span-full text-[11px] uppercase tracking-wide text-on-surface-variant font-semibold mt-2">${esc(last = e.planta)}</p>` : '')
-      + `<label class="flex items-center gap-2 text-body-md py-1"><input type="checkbox" name="cemp" value="${e.id}" ${c.emps.has(e.id) ? 'checked' : ''} class="w-5 h-5 shrink-0 accent-[#2563eb]">${esc(e.nombre)}${e.menor ? ' ' + nChip('menor') : ''}</label>`).join('');
+      + `<label class="flex items-center gap-2 text-body-md py-1"><input type="checkbox" name="cemp" value="${e.id}" ${c.emps.has(e.id) ? 'checked' : ''} class="w-5 h-5 shrink-0 accent-[#2563eb]">${esc(e.nombre)}${e.menor ? ' ' + nChip('menor') : ''}${e.contrato && e.contrato !== 'planta' ? ' ' + nChip(e.contrato) : ''}</label>`).join('');
     return `<p class="text-body-md text-on-surface-variant mb-3">Lo que captures entra solo a la nómina de su semana. Si no se paga, se arrastra.</p>
     <form id="capForm" class="card p-4 flex flex-col gap-4">
       <div><p class="text-label-md text-on-surface-variant mb-2">Tipo</p><div class="flex flex-wrap gap-2">${CAP_TIPOS.map(k => `<button type="button" data-act="ctipo" data-t="${k}" aria-pressed="${c.tipo === k}" class="px-3 py-2 rounded-full text-label-md border-[1.5px] ${c.tipo === k ? 'bg-primary text-white border-primary' : 'border-[#cbd5e1]'}">${NT[k].l}</button>`).join('')}</div></div>
@@ -1702,16 +1706,19 @@ const nomTabs = {
   },
 
   empleados() {
-    const admin = nomAdmin(), L = nomEmps(true), cfg = N.d.config, today = ymd();
-    const list = tbl(['Nombre', 'Planta', ...(admin ? ['#Sueldo', '#Diario', '#Hora extra', '#Bono mes'] : []), 'Ingreso', ''], L.map(e => `<tr>
+    const admin = nomAdmin(), cfg = N.d.config, today = ymd();
+    const list = L => tbl(['Nombre', 'Planta', ...(admin ? ['#Sueldo', '#Diario', '#Hora extra', '#Bono mes'] : []), 'Ingreso', ''], L.map(e => `<tr>
       ${td(`<b>${esc(e.nombre)}</b> ${e.menor ? nChip('menor', BAD) : ''} ${e.baja && e.baja <= today ? nChip('baja ' + fcy(e.baja)) : ''}${e.notas ? `<br><span class="text-[11px] text-on-surface-variant">${esc(e.notas)}</span>` : ''}`)}${td(esc(e.planta))}
       ${admin ? td(`${money(+e.sueldo || 0)}<br><span class="text-[11px] text-on-surface-variant">${e.pago === 'dia' ? 'por día' : 'semanal'}</span>`, 1) + td(money(salDiario(e)), 1)
         + td(`${money(teRate(e))}<br><span class="text-[11px] text-on-surface-variant">${teManual(e) ? 'tarifa propia' : 'por fórmula'}</span>`, 1) + td(+e.bono ? money(+e.bono) : '—', 1) : ''}
       ${td(e.ingreso ? fcy(e.ingreso) : nChip('falta', WARN))}${td(`<span class="flex gap-3"><button type="button" data-act="editemp" data-id="${e.id}" class="text-label-sm text-primary font-semibold">Editar</button>
         ${me.owner ? `<button type="button" data-act="delemp" data-id="${e.id}" class="text-label-sm text-error font-semibold" aria-label="Borrar a ${esc(e.nombre)}"><span>Borrar</span></button>` : ''}</span>`)}</tr>`).join(''), 'Sin empleados.');
+    const grupos = CONTRATO.filter(([k]) => admin || k !== 'confianza').map(([k, l, txt]) => [k, l, txt, nomEmps(true).filter(e => (e.contrato || 'planta') === k)]);
     const num = (k, l, step = 0.5, v = cfg?.[k]) => labeled({ label: l }, `<input class="input" type="number" min="0" step="${step}" data-cfg="${k}" value="${esc(v)}">`);
-    return `<div class="flex flex-wrap items-center gap-3 mb-3"><p class="text-body-md text-on-surface-variant flex-1">${L.filter(e => !e.baja || e.baja >= today).length} activos${admin ? '' : ` · planta ${esc(me.plant || '')}`}</p>
-      <button type="button" data-act="newemp" class="btn btn-primary"><span class="material-symbols-outlined">person_add</span>Agregar empleado</button></div>${list}
+    return `<div class="flex flex-wrap items-center gap-3 mb-3"><p class="text-body-md text-on-surface-variant flex-1">${nomEmps(true).filter(e => !e.baja || e.baja >= today).length} activos${admin ? '' : ` · planta ${esc(me.plant || '')}`}</p>
+      <button type="button" data-act="newemp" class="btn btn-primary"><span class="material-symbols-outlined">person_add</span>Agregar empleado</button></div>
+    ${grupos.map(([k, l, txt, L]) => `<h2 class="font-semibold flex flex-wrap items-center gap-2 mt-5 mb-1">${l} <span class="chip bg-surface-container text-on-surface-variant">${L.length}</span>
+      ${k === 'confianza' ? '<span class="chip bg-surface-container-high text-primary">solo admin</span>' : ''}</h2><p class="text-body-sm text-on-surface-variant mb-2">${txt}</p>${list(L)}`).join('')}
     ${admin ? `<form id="cfgForm" class="card p-4 flex flex-col gap-3 mt-6">
       <h2 class="font-semibold flex items-center gap-2"><span class="material-symbols-outlined text-primary">tune</span>Parámetros de cálculo <span class="chip bg-surface-container-high text-primary">solo admin</span></h2>
       <p class="text-body-sm text-on-surface-variant">Aplican a quien tiene la hora extra "por fórmula"; quien tiene tarifa propia conserva la suya.</p>
@@ -1756,6 +1763,7 @@ function nomEditForm() {
   return `<form id="empForm" class="card p-4 grid grid-cols-2 lg:grid-cols-4 gap-3 items-end"><h2 class="col-span-2 lg:col-span-4 font-semibold">${x ? 'Editar empleado' : 'Nuevo empleado'}</h2>
     ${labeled({ label: 'Nombre completo', required: true, wide: true }, `<input class="input" name="nombre" required maxlength="80" value="${esc(e.nombre || '')}">`)}
     ${admin ? labeled({ label: 'Planta' }, sel('name="planta"', N.d.areas.map(a => [a, a]), e.planta)) : ''}
+    ${labeled({ label: 'Tipo de empleado' }, sel('name="contrato"', [['planta', 'De planta'], ['provisional', 'Provisional'], ...(admin ? [['confianza', 'De confianza']] : [])], e.contrato || 'planta'))}
     ${labeled({ label: 'Forma de pago' }, sel('name="pago"', [['semana', 'Sueldo semanal'], ['dia', 'Por día (sabatinos)']], e.pago))}
     ${admin ? labeled({ label: 'Sueldo (semanal o por día)' }, `<input class="input" type="number" name="sueldo" step="0.01" min="0" value="${esc(e.sueldo ?? 0)}">`)
       + labeled({ label: 'Hora extra' }, sel('name="teModo"', [['auto', 'Por fórmula'], ['manual', 'Tarifa propia']], e.teModo))
