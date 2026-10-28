@@ -1859,20 +1859,21 @@ function nomInput(e) {
 }
 function nomSubmit(e) {
   e.preventDefault();
-  const f = e.target, v = Object.fromEntries(new FormData(f));
-  if (f.id === 'iaForm') return nomEnviar();
-  if (f.id === 'capForm') {
+  const f = e.target, fid = f.getAttribute('id'), v = Object.fromEntries(new FormData(f));
+  // getAttribute: un campo name="id" dentro del formulario tapa f.id (pasaba al editar un empleado).
+  if (fid === 'iaForm') return nomEnviar();
+  if (fid === 'capForm') {
     const c = N.cap;
     if (!c.emps.size) return showErr(new Error('Elige al menos un empleado'));
     f.querySelector('.btn-primary').disabled = true;
     return nomSave('/api/nomina/inc', { emps: [...c.emps], tipo: c.tipo, fecha: c.fecha, cantidad: +c.cant, nota: c.nota.trim(), efectivo: c.efectivo },
       () => { N.cap = { ...N.cap, emps: new Set(), nota: '', efectivo: false }; });
   }
-  if (f.id === 'bonoForm') return nomSave('/api/nomina/inc', { emps: [+v.emp], tipo: 'bono', fecha: v.fecha, cantidad: +v.monto, nota: v.motivo.trim() },
+  if (fid === 'bonoForm') return nomSave('/api/nomina/inc', { emps: [+v.emp], tipo: 'bono', fecha: v.fecha, cantidad: +v.monto, nota: v.motivo.trim() },
     () => { N.bf = { emp: '', monto: '', motivo: '', fecha: ymd() }; });
-  if (f.id === 'incForm') return nomSave('/api/nomina/inc/edit', { ...v, id: N.edit.x.id, tipo: v.tipo || N.edit.x.tipo, cantidad: v.cantidad ?? N.edit.x.cantidad, aplicado: !!v.aplicado }, () => { N.edit = null; });
-  if (f.id === 'empForm') return nomSave('/api/nomina/emp', { ...v, menor: !!v.menor }, () => { N.edit = null; });
-  if (f.id === 'cfgForm') {
+  if (fid === 'incForm') return nomSave('/api/nomina/inc/edit', { ...v, id: N.edit.x.id, tipo: v.tipo || N.edit.x.tipo, cantidad: v.cantidad ?? N.edit.x.cantidad, aplicado: !!v.aplicado }, () => { N.edit = null; });
+  if (fid === 'empForm') return nomSave('/api/nomina/emp', { ...v, menor: !!v.menor }, () => { N.edit = null; });
+  if (fid === 'cfgForm') {
     const config = { inicio: {} };
     f.querySelectorAll('[data-cfg]').forEach(x => { config[x.dataset.cfg] = x.value; });
     f.querySelectorAll('[data-inicio]').forEach(x => { config.inicio[x.dataset.inicio] = Number(x.value); });
