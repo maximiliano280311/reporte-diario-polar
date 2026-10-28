@@ -74,6 +74,14 @@ App web para **Retrabajos Industriales y Limpiezas Especializadas Polar**: los e
   "Aplicar" las guarda con las rutas normales (`nomAplicar`). Las pestañas de captura manual siguen igual Botón "Limpiar historial" del chat.
   **Borrar empleado**: solo la cuenta dueña (`ADMIN_EMAIL`, `isOwner`, `me.owner`); se borran también sus incidencias sin pagar.
 
+- **Check list del líder de grupo PL-FOR-43 (MOD-009)**: rol `lider` (Cuentas, siempre con planta); el servidor solo le deja las rutas de
+  `LIDER_OK` (se valida en `handleApi`, no solo en la interfaz). Pantalla `#/cll` (SÍ / NO / N/A; NO pide observación y foto en los puntos 📷;
+  avance en `localStorage`). Uno por planta al día en `qrecords` (kind `CLL`, folio `CLL-QRO-AAAAMMDD-T1`, no se edita). Resultado automático
+  (`CLL_RES`; NO en punto crítico → URGENTE + alerta). Catálogo editable por el admin en `settings.cll` (`cleanCll`, inicial `CLL_INI`, horas de aviso).
+  Se ve arriba del reporte del encargado de esa planta y fecha (`cllPanel`), que marca cada NO / incidencia ATENDIDO o PENDIENTE (`/api/cll/atender`);
+  lo no atendido sale como pendiente del día siguiente (`pendientesCll`); NO en puntos `mant` abre pendiente de mantenimiento (`pendientesAbiertos`);
+  el PL-FOR-26 imprime el PL-FOR-43 como anexo. Avisos 19:00 / 20:00 y urgentes solo dentro de la app (`avisosCll`; sin notificaciones al celular).
+
 ## Cómo probar
 `node test.mjs` (base en memoria, sin IA) cubre cálculos, permisos, edición, fotos, login y el flujo de Calidad (REC → LIB → NC). Además: scripts de Node contra la API
 (`fetch`) usando cuentas temporales `tmp*@polar.test` que se borran al final, y el navegador. Nunca dejar datos de prueba en producción.

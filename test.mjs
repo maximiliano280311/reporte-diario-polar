@@ -309,6 +309,51 @@ assert.equal(calP.registros.find(r => r.folio === recP.folio).porEntregar, 0);
 const movP = (await ok('GET', '/api/defaults', null, beto2)).data.mov['kh méxico|p-9'];
 assert.deepEqual([movP.recibido, movP.entregado], [10, 10]); // la sección 7 suma las dos entregas
 
+// ---------- PL-FOR-43 Check list del líder de grupo (MOD-009) ----------
+assert.equal((await call('POST', '/api/users', { name: 'Lalo', email: 'lalo@polar.test', password: pass, role: 'lider' }, admin)).status, 400); // el líder lleva planta
+await ok('POST', '/api/users', { name: 'Lalo', email: 'lalo@polar.test', password: pass, role: 'lider', plant: 'Querétaro' }, admin);
+const lalo = await login('lalo@polar.test');
+assert.equal((await ok('GET', '/api/me', null, lalo)).data.role, 'lider');
+for (const [m, p] of [['GET', '/api/reports'], ['GET', '/api/nomina'], ['GET', '/api/calidad'], ['GET', '/api/semana'], ['POST', '/api/reports']])
+  assert.equal((await call(m, p, m === 'POST' ? { answers: base } : null, lalo)).status, 403, p); // solo ve su check list (se valida en el servidor)
+let cl = (await ok('GET', '/api/cll', null, lalo)).data;
+assert.deepEqual([cl.plant, cl.catalogo.length, cl.registro, cl.encargado.includes('Ana')], ['Querétaro', 28, null, true]);
+const resp = Object.fromEntries(cl.catalogo.map(p => [p.id, { r: 'SI' }]));
+assert.equal((await call('POST', '/api/cll', { puntos: { ...resp, 3: {} } }, lalo)).status, 400); // falta contestar un punto
+assert.equal((await call('POST', '/api/cll', { puntos: { ...resp, 3: { r: 'NO' } } }, lalo)).status, 400); // NO sin observación
+assert.equal((await call('POST', '/api/cll', { puntos: { ...resp, 6: { r: 'NO', obs: 'Sucios' } } }, lalo)).status, 400); // NO en punto con 📷 sin foto
+const enviado = (await ok('POST', '/api/cll', { planta: 'Silao', puntos: { ...resp, 6: { r: 'NO', obs: 'Sucios', fotos: [foto] }, 19: { r: 'NO', obs: 'Aceite bajo' }, 4: { r: 'NA' } },
+  incidencias: [{ desc: 'Se fue la luz', hora: '10:15', accion: 'Se avisó a CFE' }, { desc: '' }] }, lalo)).data;
+assert.deepEqual([enviado.folio, enviado.plant, enviado.resultado, enviado.incidencias.length], [`CLL-QRO-${dia}-T1`, 'Querétaro', 'CON OBSERVACIONES', 1]); // su planta, no la que pidió
+assert.equal((await call('POST', '/api/cll', { puntos: resp }, lalo)).status, 409); // uno por planta al día
+// El encargado lo ve en su reporte del día, marca ATENDIDO / PENDIENTE; el líder no puede marcar.
+cl = (await ok('GET', '/api/cll', null, beto2)).data;
+assert.deepEqual(cl.registro.puntos.filter(p => p.r === 'NO').map(p => p.id), [6, 19]);
+assert.equal((await call('POST', '/api/cll/atender', { folio: enviado.folio, tipo: 'punto', i: 6, estado: 'ATENDIDO' }, lalo)).status, 403);
+assert.equal((await call('POST', '/api/cll/atender', { folio: enviado.folio, tipo: 'punto', i: 6, estado: 'ATENDIDO' }, sara)).status, 404); // otra planta
+await ok('POST', '/api/cll/atender', { folio: enviado.folio, tipo: 'punto', i: 6, estado: 'ATENDIDO', comentario: 'Se lavaron' }, beto2);
+await ok('POST', '/api/cll/atender', { folio: enviado.folio, tipo: 'inc', i: 0, estado: 'PENDIENTE' }, beto2);
+assert.equal((await ok('GET', '/api/cll/registro?folio=' + enviado.folio, null, lalo)).data.puntos.find(p => p.id === 6).comentario, 'Se lavaron');
+// Lo no atendido pasa al día siguiente; el NO del punto de equipo (hidrolavadora) abre pendiente de mantenimiento.
+const manana = new Date(Date.now() + 86_400_000).toLocaleDateString('en-CA', { timeZone: 'America/Mexico_City' });
+assert.deepEqual((await ok('GET', '/api/cll?fecha=' + manana, null, lalo)).data.pendientes.map(x => [x.texto, x.estado]),
+  [['Nivel de aceite de hidrolavadora OK', 'SIN REVISAR'], ['Incidencia', 'PENDIENTE']]);
+assert.ok((await ok('GET', '/api/defaults', null, beto2)).data.pendientes.some(m => m.equipo === 'Nivel de aceite de hidrolavadora OK' && m.falla === 'Aceite bajo'));
+// Un NO en punto crítico (gas) → URGENTE y alerta a gerencia; el admin lo llena con ?planta.
+const urg = (await ok('POST', '/api/cll', { planta: 'Silao', puntos: { ...Object.fromEntries((await ok('GET', '/api/cll?planta=Silao', null, admin)).data.catalogo.map(p => [p.id, { r: 'SI' }])),
+  14: { r: 'NO', obs: 'Huele a gas en bodega' } } }, admin)).data;
+assert.deepEqual([urg.folio, urg.resultado], [`CLL-SIL-${dia}-T1`, 'REQUIERE ATENCIÓN URGENTE']);
+assert.ok((await ok('GET', '/api/calidad', null, admin)).data.alertas.some(a => a.text.startsWith('URGENTE · Check list del líder Silao')));
+assert.ok((await ok('GET', '/api/cll', null, sara)).data.avisos.some(a => a.nivel === 'red'));
+assert.ok(!(await ok('GET', '/api/calidad', null, admin)).data.registros.some(r => r.kind === 'CLL')); // no se mezclan con Calidad
+// Catálogo: solo gerencia; agrega un punto (toma id 29), desactiva otro.
+const cfg = (await ok('GET', '/api/cll?planta=Querétaro', null, admin)).data.config;
+assert.equal((await call('POST', '/api/cll/catalogo', cfg, beto2)).status, 403);
+await ok('POST', '/api/cll/catalogo', { ...cfg, hora_lider: '18:30', puntos: [...cfg.puntos.map(p => p.id === 11 ? { ...p, activo: false } : p), { seccion: 'equipos y material', texto: 'Tanque de decapado sin fugas', critico: true }] }, admin);
+cl = (await ok('GET', '/api/cll', null, lalo)).data;
+assert.deepEqual([cl.catalogo.length, cl.catalogo.at(-1).id, cl.catalogo.at(-1).seccion, cl.catalogo.some(p => p.id === 11)], [28, 29, 'EQUIPOS Y MATERIAL', false]);
+assert.equal((await call('POST', '/api/cll/catalogo', { puntos: [] }, admin)).status, 400);
+
 // Sesiones vencidas (más de 30 días) ya no sirven.
 sqlite.prepare('UPDATE sessions SET created = 0').run();
 assert.equal((await call('GET', '/api/me', null, admin)).status, 401);

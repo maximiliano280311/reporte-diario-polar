@@ -88,7 +88,7 @@ const plantSelect = (attrs, v = '') => `<select class="input" ${attrs}><option v
 const dmy = d => d ? d.split('-').reverse().join('/') : '';
 // Acciones destructivas: el primer toque pide confirmación en el mismo botón (sin diálogos del navegador).
 const confirmed = btn => btn.dataset.sure ? true : (btn.dataset.sure = 1, btn.lastChild.textContent = '¿Seguro? Toca otra vez', false);
-const showErr = err => { $('#err').textContent = err.message; $('#err').classList.remove('hidden'); };
+const showErr = err => { const e = $('#err'); e.textContent = err.message; e.classList.remove('hidden'); e.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); };
 const money = n => n.toLocaleString('es-MX', { style: 'currency', currency: 'MXN' });
 const sum = (rows, k) => (rows || []).reduce((t, x) => t + (Number(x[k]) || 0), 0);
 const nInc = r => r.answers.incidencias?.length || 0;
@@ -381,7 +381,9 @@ const views = {
   // Diseño: pantalla "Dashboard Principal" del proyecto Stitch "Remix of Daily Form Dashboard".
   async inicio() {
     let cal, sem; // panel de Calidad y formatos de la semana (si fallan, el resto del inicio se muestra igual)
-    [reports, cal, sem] = await Promise.all([api('/api/reports?desde=' + daysAgo(60)), api('/api/calidad').catch(() => null), api('/api/semana').catch(() => null)]); // racha, semana y mes
+    let cll;
+    [reports, cal, sem, cll] = await Promise.all([api('/api/reports?desde=' + daysAgo(60)), api('/api/calidad').catch(() => null), api('/api/semana').catch(() => null),
+      api('/api/cll').catch(() => null)]); // racha, semana y mes; check list del líder de hoy
     const nLot = st => cal ? cal.lotes.filter(l => l.status === st).length : 0;
     const today = ymd(), todayDone = reports.find(r => r.date === today);
     const monday = new Date(); monday.setDate(monday.getDate() - (monday.getDay() + 6) % 7);
@@ -404,6 +406,8 @@ const views = {
         <p class="text-label-md text-on-surface-variant flex items-center gap-1 mt-0.5">
           <span class="material-symbols-outlined text-[16px] text-primary">calendar_today</span><span>${fdate(today)}</span></p>
       </div>
+      ${cll ? `<div class="flex flex-col gap-2 lg:col-span-2">${cllAvisos(cll.avisos)}${cllPanel(cll.registro, true)}
+        ${cll.registro ? '' : '<a href="#/cll" class="text-label-md text-primary font-semibold">¿No vino el líder? Llenar el check list</a>'}</div>` : ''}
       <div class="relative overflow-hidden rounded-xl bg-gradient-to-br from-primary via-primary-container to-surface-tint p-space-lg text-on-primary shadow-xl">
         <div class="absolute -right-6 -bottom-6 w-32 h-32 bg-on-primary/10 rounded-full blur-xl pointer-events-none"></div>
         <div class="absolute top-3 right-3 opacity-15 pointer-events-none">
@@ -548,6 +552,7 @@ const views = {
     const rowsOf = t => t.fixed ? tableRows(t, pre) : pre ? pre[t.id] || [] : t.id === 'mantenimiento' ? d.pendientes
       : t.id === 'material' ? [...new Map([...d.porProcesar, ...Object.values(d.mov)].map(m => [k(m), { cliente: m.cliente, pieza: m.pieza }])).values()] : [];
     // Vehículo: solo los camiones registrados de la planta.
+    const cll = await api(`/api/cll?planta=${encodeURIComponent(edit?.plant || me.plant || '')}&fecha=${edit?.date || ymd()}`).catch(() => null);
     const veh = questions.find(s => s.table?.id === 'vehiculos')?.table.cols.find(c => c.id === 'vehiculo');
     if (veh) veh.options = d.trucks.map(t => t.name);
     $('#app').innerHTML = `
@@ -558,6 +563,7 @@ const views = {
     ${draft ? `<div class="rounded-xl p-3 mb-4 flex flex-wrap items-center justify-between gap-2 bg-tertiary-fixed/50">
       <span class="text-body-md flex items-center gap-2"><span class="material-symbols-outlined text-tertiary">history</span>Recuperamos lo que llevabas escrito.</span>
       <button type="button" id="discard" class="text-label-md text-primary font-semibold">Empezar de cero</button></div>` : ''}
+    ${cll ? `<div class="mb-4">${cllPanel(cll.registro, true)}</div>` : ''}
     ${Object.entries(d.lists).map(([k, xs]) => `<datalist id="dl-${k}">${xs.map(x => `<option value="${esc(x)}">`).join('')}</datalist>`).join('')}
     <form id="report" class="flex flex-col gap-4">
       ${sectionsHtml(questions, pre, rowsOf, (s, at) => at === 'top'
@@ -665,7 +671,9 @@ const views = {
   async admin() {
     let users, week;
     let sem, cal;
-    [week, users, sem, cal] = await Promise.all([api('/api/reports?desde=' + daysAgo(6)), api('/api/users'), api('/api/semana').catch(() => null), api('/api/calidad').catch(() => null)]);
+    let cll;
+    [week, users, sem, cal, cll] = await Promise.all([api('/api/reports?desde=' + daysAgo(6)), api('/api/users'), api('/api/semana').catch(() => null), api('/api/calidad').catch(() => null),
+      api('/api/cll?planta=' + encodeURIComponent(PLANTS[0])).catch(() => null)]);
     users = users.filter(u => u.role === 'colaborador' && u.status === 'activo');
     const today = week.filter(r => r.date === ymd());
     const team = users.map(u => {
@@ -684,6 +692,7 @@ const views = {
       ['Incidencias críticas de la semana', rows(week, 'incidencias', i => ['GA', 'EL', 'SE'].includes(i.tipo), (i, r) => `${r.date.split('-').reverse().join('/')} ${i.tipo}: ${i.que_paso || ''}`), 'red'],
       ['Químicos por pedir', rows(last, 'quimicos', q => ['PT', 'A'].includes(q.existencia), q => `${q.quimico} (${q.existencia})`), 'yellow'],
       ['Vehículos con check list vencido', rows(last, 'vehiculos', v => v.vehiculo && (!v.checklist || v.checklist < daysAgo(7)), v => `${v.vehiculo} (${v.checklist ? v.checklist.split('-').reverse().join('/') : 'sin registro'})`), 'red'],
+      ['Check list del líder', (cll?.avisos || []).map(a => a.text), (cll?.avisos || []).some(a => a.nivel === 'red') ? 'red' : 'yellow'],
       ['Piezas pendientes por entregar', (cal?.abiertas || []).map(r => `${r.plant} · ${r.folio} ${r.cliente}: ${r.total} pzas`), 'yellow'],
       ['Formatos de la semana pendientes', (sem?.formatos || []).flatMap(x => x.faltan.map(f => `${x.plant} · ${x.code} ${x.title}${x.kind === 'CL21' ? ': ' + f : ''}`)), 'red']];
     $('#app').innerHTML = `
@@ -813,8 +822,8 @@ const views = {
         ${labeled({ label: 'Nombre completo', required: true, wide: true }, '<input class="input" name="name" required autocomplete="off">')}
         ${labeled({ label: 'Correo', required: true, wide: true }, '<input class="input" name="email" type="email" required autocomplete="off">')}
         ${labeled({ label: 'Contraseña inicial', required: true, wide: true }, '<input class="input" name="password" type="text" required minlength="8" autocomplete="off">')}
-        ${labeled({ label: 'Planta (obligatoria para encargado)' }, plantSelect('name="plant"'))}
-        ${labeled({ label: 'Rol' }, '<select class="input" name="role"><option value="colaborador">Encargado</option><option value="admin">Admin</option></select>')}
+        ${labeled({ label: 'Planta (obligatoria para encargado y líder)' }, plantSelect('name="plant"'))}
+        ${labeled({ label: 'Rol' }, '<select class="input" name="role"><option value="colaborador">Encargado</option><option value="lider">Líder de grupo</option><option value="admin">Admin</option></select>')}
         <button class="btn btn-primary col-span-2"><span class="material-symbols-outlined">person_add</span>Crear cuenta</button>
       </form>
       <section id="act" class="card p-4">
@@ -825,7 +834,7 @@ const views = {
               <form data-pass="${u.id}" class="flex flex-wrap gap-2 mt-2"><input class="input !py-2 flex-1 min-w-[140px]" name="password" type="text" required minlength="8" autocomplete="off" placeholder="Nueva (mín. 8)" aria-label="Contraseña nueva de ${esc(u.name)}">
                 <button class="btn btn-primary !min-h-0 !py-2">Guardar</button></form></details></td>
           <td class="pr-2">${esc(u.plant || '—')}</td><td class="pr-2"><select data-role-user="${u.id}" class="input !py-2 !px-3 w-auto" aria-label="Rol de ${esc(u.name)}">
-            ${[['colaborador', 'Encargado'], ['admin', 'Admin']].map(([v, l]) => `<option value="${v}" ${u.role === v ? 'selected' : ''}>${l}</option>`).join('')}</select>
+            ${[['colaborador', 'Encargado'], ['lider', 'Líder de grupo'], ['admin', 'Admin']].map(([v, l]) => `<option value="${v}" ${u.role === v ? 'selected' : ''}>${l}</option>`).join('')}</select>
             ${u.role === 'colaborador' ? `<label class="flex items-center gap-2 mt-1 text-label-sm whitespace-nowrap" title="Puede capturar incidencias, bonos, vacaciones y empleados de su planta (sin ver sueldos)"><input type="checkbox" data-nom-user="${u.id}" ${u.nomina ? 'checked' : ''} class="w-4 h-4 accent-[#2563eb]">Nómina</label>` : ''}</td>
           <td class="text-right"><button data-del-user="${u.id}" class="text-label-sm text-error font-semibold inline-flex items-center gap-1 px-2 py-2 rounded-lg hover:bg-error-container whitespace-nowrap" aria-label="Eliminar a ${esc(u.name)}"><span class="material-symbols-outlined text-[18px]">delete</span>Eliminar</button></td></tr>`).join('')}</tbody></table>`
           : '<p class="text-sm text-on-surface-variant">Aún no hay otras cuentas.</p>'}
@@ -1039,7 +1048,7 @@ const views = {
     $('#app').innerHTML = `
     <div class="${WIDE ? 'max-w-xl' : ''} flex flex-col gap-4">
       <div><h1 class="${WIDE ? 'text-3xl font-bold' : 'text-2xl font-semibold'} tracking-tight">Mi cuenta</h1>
-        <p class="text-sm text-on-surface-variant">${esc(me.name)} · ${esc(me.email)} · ${me.role === 'admin' ? 'Admin' : 'Encargado'}${me.plant ? ' · Planta ' + esc(me.plant) : ''}</p></div>
+        <p class="text-sm text-on-surface-variant">${esc(me.name)} · ${esc(me.email)} · ${ROLE_L[me.role]}${me.plant ? ' · Planta ' + esc(me.plant) : ''}</p></div>
       <form id="mi-pass" class="card p-4 flex flex-col gap-3">
         <h2 class="font-semibold flex items-center gap-2"><span class="material-symbols-outlined text-primary">key</span>Cambiar mi contraseña</h2>
         ${labeled({ label: 'Contraseña actual', required: true }, '<input class="input" name="current" type="password" required autocomplete="current-password">')}
@@ -1296,12 +1305,14 @@ const views = {
   async pl(id) {
     const [r] = await api('/api/reports?id=' + Number(id));
     if (!r) throw new Error('Reporte no encontrado');
+    const cll = await api(`/api/cll?planta=${encodeURIComponent(r.plant || '')}&fecha=${r.date}`).catch(() => null);
     $('#app').innerHTML = `
     <div class="no-print flex items-center justify-between mb-4">
       <a href="#/admin" class="text-primary font-semibold flex items-center gap-1"><span class="material-symbols-outlined">arrow_back</span>Reportes</a>
       <button onclick="print()" class="btn btn-primary"><span class="material-symbols-outlined">print</span>Imprimir</button>
     </div>
-    ${plDoc(r)}`;
+    ${plDoc(r)}
+    ${cll?.registro ? `<div style="break-before:page" class="mt-6">${cllDoc({ ...cll.registro, plant: r.plant })}</div>` : ''}`;
   },
 };
 
@@ -1890,11 +1901,248 @@ views.nomina = async tab => {
   nomDraw();
 };
 
+// ---------- PL-FOR-43 Check list diario del líder de grupo (MOD-009) ----------
+// El líder lo llena desde el teléfono (SÍ / NO / N/A); se anexa al reporte diario de su planta y fecha, donde el encargado
+// marca cada NO ATENDIDO o PENDIENTE. Gerencia (admin) edita el catálogo de puntos.
+const ROLE_L = { admin: 'Admin', colaborador: 'Encargado', lider: 'Líder de grupo' };
+const CLL_RES = { 'TODO EN ORDEN': ['✅', 'bg-secondary-container text-on-secondary-container'], 'CON OBSERVACIONES': ['🟡', 'bg-tertiary-fixed text-on-tertiary-fixed'],
+  'REQUIERE ATENCIÓN URGENTE': ['🔴', 'bg-error text-white'] };
+const cllChip = (res, hora) => res ? `<span class="chip ${CLL_RES[res]?.[1] || ''}">${CLL_RES[res]?.[0] || ''} ${esc(res)}${hora ? ' · ' + esc(hora) : ''}</span>`
+  : '<span class="chip bg-surface-container text-on-surface-variant">⚪ Pendiente</span>';
+const cllResOf = (cat, P) => { const no = cat.filter(p => P[p.id]?.r === 'NO'); return no.some(p => p.critico) ? 'REQUIERE ATENCIÓN URGENTE' : no.length ? 'CON OBSERVACIONES' : 'TODO EN ORDEN'; };
+const thumbs = ks => ks?.length ? `<div class="flex flex-wrap gap-2">${ks.map(k => `<a href="/api/files/${esc(k)}" target="_blank"><img src="/api/files/${esc(k)}" alt="Foto" loading="lazy" class="w-14 h-14 object-cover rounded-lg"></a>`).join('')}</div>` : '';
+
+// Documento PL-FOR-43 armado (ver / imprimir; también va como anexo del PL-FOR-26).
+function cllDoc(r) {
+  const kv = pairs => `<table><tbody>${pairs.map(([k, v]) => `<tr><td class="k">${esc(k)}</td><td>${esc(v) || '&nbsp;'}</td></tr>`).join('')}</tbody></table>`;
+  const at = x => [x.estado, x.comentario].filter(Boolean).join(' — ');
+  const fotos = [...r.puntos.flatMap(p => p.fotos.map(k => [`${p.id}. ${p.texto}`, k])), ...r.incidencias.flatMap((i, n) => i.fotos.map(k => [`Incidencia ${n + 1}`, k]))];
+  return `<div class="pl">
+    <table class="head"><tr><td rowspan="3" class="logo">POLAR</td><td rowspan="2" class="t">RETRABAJOS INDUSTRIALES Y LIMPIEZAS ESPECIALIZADAS POLAR</td><td class="k">Número de control</td><td>PL-FOR-43</td></tr>
+      <tr><td class="k">Revisión</td><td>00</td></tr>
+      <tr><td class="bar">CHECK LIST DIARIO DEL LÍDER DE GRUPO</td><td class="k">Fecha emisión</td><td>OCT-2026</td></tr></table>
+    ${kv([['Folio', r.folio], ['Planta', r.plant], ['Fecha', dmy(r.fecha)], ['Hora', r.hora], ['Turno', r.turno], ['Líder de grupo', r.lider], ['Encargado de planta', r.encargado], ['Resultado', r.resultado]])}
+    ${[...new Set(r.puntos.map(p => p.seccion))].map(s => `<div class="bar">${esc(s)}</div>
+      <table><thead><tr><th>#</th><th>Punto</th><th>SÍ</th><th>NO</th><th>N/A</th><th>Observaciones</th><th>Encargado</th></tr></thead><tbody>
+      ${r.puntos.filter(p => p.seccion === s).map(p => `<tr><td class="c">${p.id}</td><td>${esc(p.texto)}${p.critico ? ' (crítico)' : ''}</td>
+        ${['SI', 'NO', 'NA'].map(x => `<td class="c">${p.r === x ? '☒' : '☐'}</td>`).join('')}<td>${esc(p.obs)}</td><td>${esc(at(p))}</td></tr>`).join('')}</tbody></table>`).join('')}
+    <div class="bar">INCIDENCIAS DEL DÍA</div>
+    <table><thead><tr><th>Hora</th><th>Descripción</th><th>Qué se hizo</th><th>Encargado</th></tr></thead><tbody>${r.incidencias.length
+      ? r.incidencias.map(i => `<tr><td class="c">${esc(i.hora)}</td><td>${esc(i.desc)}</td><td>${esc(i.accion)}</td><td>${esc(at(i))}</td></tr>`).join('')
+      : '<tr><td colspan="4" class="c">Sin incidencias</td></tr>'}</tbody></table>
+    <table class="firmas"><tr><td>${esc(r.lider)}<br><b>LÍDER DE GRUPO</b></td><td>${esc(r.encargado)}<br><b>ENCARGADO DE PLANTA</b></td></tr></table>
+    ${fotos.length ? `<div class="bar">ANEXOS — FOTOS</div><div class="fotos">${fotos.map(([l, k]) => `<figure><img src="/api/files/${esc(k)}" alt="${esc(l)}"><figcaption>${esc(l)}</figcaption></figure>`).join('')}</div>` : ''}
+    ${controlado('PL-FOR-43', '00')}
+  </div>`;
+}
+
+// Panel "CHECK LIST DEL LÍDER" (reporte diario, inicio y pantalla del check list): solo los NO y las incidencias del líder.
+// canMark: el encargado / gerencia los marca ATENDIDO o PENDIENTE con comentario (se guarda al momento).
+function cllPanel(reg, canMark) {
+  const items = reg ? [...reg.puntos.filter(p => p.r === 'NO').map(p => ({ ...p, tipo: 'punto', i: p.id, titulo: `${p.id}. ${p.texto}`, txt: p.obs })),
+    ...reg.incidencias.map((x, i) => ({ ...x, tipo: 'inc', i, titulo: `Incidencia${x.hora ? ' · ' + x.hora : ''}`, txt: [x.desc, x.accion && 'Se hizo: ' + x.accion].filter(Boolean).join(' · ') }))] : [];
+  return `<section data-cllp="${esc(reg?.folio || '')}" class="card p-4 flex flex-col gap-2 border-l-4 ${!reg ? 'border-[#cbd5e1]' : reg.resultado.startsWith('REQUIERE') ? 'border-error' : items.length ? 'border-tertiary-fixed-dim' : 'border-secondary'}">
+    <div class="flex flex-wrap items-center justify-between gap-2">
+      <h2 class="font-semibold flex items-center gap-2"><span class="material-symbols-outlined text-primary">fact_check</span>CHECK LIST DEL LÍDER</h2>${cllChip(reg?.resultado, reg?.hora)}</div>
+    ${!reg ? '<p class="text-body-sm text-on-surface-variant">El líder todavía no envía el check list de este día. Aparece aquí en cuanto lo envíe.</p>' : `
+    <p class="text-body-sm text-on-surface-variant">${esc(reg.lider)} · ${items.length ? `${items.length} ${items.length === 1 ? 'punto' : 'puntos'} por revisar` : 'Todos los puntos en orden y sin incidencias.'}</p>
+    ${items.map(x => `<div data-item="${x.tipo}:${x.i}" class="py-2 border-t border-[#f1f5f9] flex flex-col gap-1.5">
+      <p class="font-medium flex flex-wrap items-center gap-2">${esc(x.titulo)}${x.critico ? '<span class="chip bg-error text-white">Crítico</span>' : ''}
+        <span data-estado class="chip ${x.estado === 'ATENDIDO' ? 'bg-secondary-container text-on-secondary-container' : x.estado === 'PENDIENTE' ? 'bg-tertiary-fixed text-on-tertiary-fixed' : 'bg-surface-container text-on-surface-variant'}">${esc(x.estado || 'Sin revisar')}</span></p>
+      <p class="text-body-sm">${esc(x.txt)}</p>${thumbs(x.fotos)}
+      ${x.comentario ? `<p class="text-[12px] text-on-surface-variant">Comentario: ${esc(x.comentario)}${x.por ? ' · ' + esc(x.por) : ''}</p>` : ''}
+      ${canMark ? `<div class="grid grid-cols-2 gap-2"><input class="input !py-2 col-span-2" data-com placeholder="Comentario (qué se hizo / qué falta)" value="${esc(x.comentario || '')}" maxlength="500" aria-label="Comentario">
+        <button type="button" data-mark="ATENDIDO" class="btn !min-h-0 !py-2 bg-secondary-container text-on-secondary-container">Atendido</button>
+        <button type="button" data-mark="PENDIENTE" class="btn !min-h-0 !py-2 bg-tertiary-fixed text-on-tertiary-fixed">Pendiente</button></div>` : ''}
+    </div>`).join('')}
+    <a href="#/cllver/${esc(reg.folio)}" class="text-label-md text-primary font-semibold flex items-center gap-1"><span class="material-symbols-outlined text-[18px]">description</span>Ver check list completo</a>`}
+  </section>`;
+}
+// Botones Atendido / Pendiente de los paneles dentro de root.
+function wireCll() {
+  document.addEventListener('click', async e => {
+    const b = e.target.closest('[data-mark]'), row = b?.closest('[data-item]'), panel = b?.closest('[data-cllp]');
+    if (!row) return;
+    const [tipo, i] = row.dataset.item.split(':'), chip = row.querySelector('[data-estado]');
+    b.disabled = true;
+    try {
+      await api('/api/cll/atender', { folio: panel.dataset.cllp, tipo, i, estado: b.dataset.mark, comentario: row.querySelector('[data-com]').value });
+      chip.textContent = b.dataset.mark;
+      chip.className = `chip ${b.dataset.mark === 'ATENDIDO' ? 'bg-secondary-container text-on-secondary-container' : 'bg-tertiary-fixed text-on-tertiary-fixed'}`;
+    } catch (err) { alert(err.message); }
+    b.disabled = false;
+  });
+}
+const cllAvisos = avisos => (avisos || []).map(a => `<div class="rounded-xl p-3 flex items-start gap-2 ${a.nivel === 'red' ? 'bg-error text-white' : 'bg-tertiary-fixed text-on-tertiary-fixed'}">
+  <span class="material-symbols-outlined">${a.nivel === 'red' ? 'emergency' : 'schedule'}</span><span class="text-body-md">${esc(a.text)}</span></div>`).join('');
+
+// Pantalla del check list: el líder lo llena (también el encargado si falta el líder, o gerencia); si ya se envió, el resumen.
+// El avance se guarda en el teléfono (uno por planta y día) y se recupera si se cierra la app o no hay señal.
+const CLL_BTN = { SI: ['SÍ', 'bg-secondary-container text-on-secondary-container border-secondary'], NO: ['NO', 'bg-error text-white border-error'], NA: ['N/A', 'bg-surface-container-high text-on-surface border-[#64748b]'] };
+views.cll = async arg => {
+  const plant = me.role === 'admin' ? (PLANTS.includes(decodeURIComponent(arg || '')) ? decodeURIComponent(arg) : PLANTS[0]) : me.plant;
+  const d = await api('/api/cll?planta=' + encodeURIComponent(plant)), cat = d.catalogo, reg = d.registro;
+  const key = `cll:${me.id}:${plant}:${d.hoy}`;
+  let S = null;
+  try {
+    for (const k of Object.keys(localStorage)) if (k.startsWith('cll:') && !k.endsWith(':' + d.hoy)) localStorage.removeItem(k);
+    S = JSON.parse(localStorage.getItem(key));
+  } catch {}
+  const draft = !!S;
+  S ||= { puntos: {}, incidencias: [] };
+  const save = () => { try { localStorage.setItem(key, JSON.stringify(S)); } catch {} };
+  const card = p => { const x = S.puntos[p.id] || {};
+    return `<div data-p="${p.id}" class="card p-3 flex flex-col gap-2 ${x.r === 'NO' ? 'ring-2 ring-error' : ''}">
+      <p class="font-medium flex flex-wrap items-center gap-2"><span>${p.id}. ${esc(p.texto)}</span>${p.critico ? '<span class="chip bg-error text-white">Crítico</span>' : ''}${p.foto ? '<span class="chip bg-surface-container text-on-surface-variant" title="Si es NO hay que tomar foto">📷 foto si es NO</span>' : ''}</p>
+      <div class="grid grid-cols-3 gap-2">${Object.entries(CLL_BTN).map(([v, [l, on]]) => `<button type="button" data-r="${v}" aria-pressed="${x.r === v}"
+        class="h-14 rounded-xl text-lg font-bold border-2 ${x.r === v ? on : 'border-[#cbd5e1] text-on-surface-variant bg-surface-container-lowest'}">${l}</button>`).join('')}</div>
+      ${x.r === 'NO' ? `<label class="flex flex-col gap-1 text-label-md text-on-surface-variant"><span>Observaciones: qué pasó y qué se hizo <span class="text-error">*</span></span>
+        <textarea class="input" rows="2" data-obs maxlength="1000">${esc(x.obs || '')}</textarea></label>
+        <div class="text-label-md text-on-surface-variant"><span>Foto ${p.foto ? '<span class="text-error">* obligatoria</span>' : '(opcional)'}</span>${input({ type: 'photos' }, `p.${p.id}`, x.fotos)}</div>` : ''}
+    </div>`; };
+  const incRow = (x = {}, i) => `<div data-inc class="grid grid-cols-2 gap-2 p-3 rounded-xl bg-surface-container-low">
+    ${labeled({ label: 'Qué pasó', required: true, wide: true }, `<textarea class="input" rows="2" data-k="desc" maxlength="1000">${esc(x.desc || '')}</textarea>`)}
+    ${labeled({ label: 'Hora' }, `<input class="input" type="time" data-k="hora" value="${esc(x.hora || '')}">`)}
+    ${labeled({ label: 'Qué se hizo', wide: true }, `<textarea class="input" rows="2" data-k="accion" maxlength="1000">${esc(x.accion || '')}</textarea>`)}
+    <div class="col-span-2 text-label-md text-on-surface-variant">Foto (opcional)${input({ type: 'photos' }, `inc.${i}`, x.fotos)}</div>
+    <button type="button" data-del-inc class="col-span-2 justify-self-end text-label-sm text-error flex items-center gap-1"><span class="material-symbols-outlined text-[16px]">delete</span>Quitar</button></div>`;
+  const resNow = () => `<span class="text-label-sm text-on-surface-variant mr-1">${cat.filter(p => S.puntos[p.id]?.r).length}/${cat.length} contestados</span>${cllChip(cllResOf(cat, S.puntos))}`;
+  const historial = d.historial.length ? d.historial.map(h => `<a href="#/cllver/${esc(h.folio)}" class="flex flex-wrap items-center justify-between gap-2 py-2 border-t border-[#f1f5f9]">
+      <span class="text-body-md">${fdate(h.date, { weekday: 'short', day: 'numeric', month: 'short' })}${me.role !== 'lider' ? ` · ${esc(h.lider || '')}` : ''}</span>${cllChip(h.status, h.hora)}</a>`).join('')
+    : '<p class="text-body-sm text-on-surface-variant">Aún no hay check list en los últimos 30 días.</p>';
+  $('#app').innerHTML = `
+    <p class="text-label-sm font-semibold text-primary">PL-FOR-43 · REV. 00</p>
+    <h1 class="text-headline-lg-mobile tracking-tight">Check list del líder de grupo</h1>
+    <p class="text-body-md text-on-surface-variant mb-3">${fdate(d.hoy)} · Planta ${esc(plant)}</p>
+    ${me.role === 'admin' ? `<div class="flex gap-2 mb-3">${PLANTS.map(p => `<a href="#/cll/${encodeURIComponent(p)}" class="chip !px-3 !py-1.5 ${p === plant ? 'bg-primary text-white' : 'bg-surface-container text-on-surface-variant'}">${esc(p)}</a>`).join('')}</div>` : ''}
+    <div class="flex flex-col gap-2 mb-3">${cllAvisos(d.avisos)}</div>
+    <div class="${WIDE ? 'grid grid-cols-[minmax(0,1fr)_340px] gap-6 items-start' : 'flex flex-col gap-4'}">
+    <div class="flex flex-col gap-4">
+    ${reg ? `${cllPanel(reg, me.role !== 'lider')}<div class="card p-4 flex flex-col gap-1">
+        <p class="font-semibold flex items-center gap-2"><span class="material-symbols-outlined text-secondary">task_alt</span>Check list de hoy enviado</p>
+        <p class="text-body-sm text-on-surface-variant">${esc(reg.folio)} · ${esc(reg.lider)} · ${esc(reg.hora)}. Una vez enviado ya no se edita.</p></div>` : `
+    ${draft ? '<div class="rounded-xl p-3 flex items-center gap-2 bg-tertiary-fixed/50 text-body-md"><span class="material-symbols-outlined text-tertiary">history</span>Recuperamos lo que llevabas capturado.</div>' : ''}
+    <section class="card p-4 grid grid-cols-2 lg:grid-cols-3 gap-2 text-body-sm">
+      ${[['Folio', `CLL-${{ Querétaro: 'QRO', Silao: 'SIL' }[plant]}-${d.hoy.replaceAll('-', '')}-T1`], ['Planta', plant], ['Fecha', dmy(d.hoy)], ['Líder de grupo', me.name], ['Encargado', d.encargado || '—'], ['Turno', '1']]
+        .map(([k, v]) => `<div><p class="text-label-sm text-on-surface-variant">${k}</p><p class="font-medium">${esc(v)}</p></div>`).join('')}
+    </section>
+    ${d.pendientes.length ? `<section class="card p-4 flex flex-col gap-1 border-l-4 border-tertiary-fixed-dim"><h2 class="font-semibold">Pendientes del check list anterior (${dmy(d.pendientes[0].fecha)})</h2>
+      <p class="text-body-sm text-on-surface-variant">Revísalos para contestar "Incidencias del día anterior atendidas".</p>
+      ${d.pendientes.map(x => `<p class="text-body-sm">• <b>${esc(x.texto)}</b>: ${esc(x.obs)} <span class="chip bg-surface-container text-on-surface-variant">${esc(x.estado)}</span></p>`).join('')}</section>` : ''}
+    <form id="cllf" class="flex flex-col gap-3" novalidate>
+      ${[...new Set(cat.map(p => p.seccion))].map(s => `<h2 class="rounded-xl bg-primary text-white px-4 py-2 font-semibold text-label-lg mt-2">${esc(s)}</h2>
+        ${cat.filter(p => p.seccion === s).map(card).join('')}`).join('')}
+      <h2 class="rounded-xl bg-primary text-white px-4 py-2 font-semibold text-label-lg mt-2">INCIDENCIAS DEL DÍA</h2>
+      <div id="incs" class="flex flex-col gap-2">${S.incidencias.map(incRow).join('')}</div>
+      <button type="button" data-add-inc class="btn border-[1.5px] border-dashed border-[#cbd5e1] text-primary"><span class="material-symbols-outlined">add</span>Agregar incidencia</button>
+      <div class="card px-3 py-2 flex flex-wrap items-center justify-between gap-2 sticky bottom-24 lg:bottom-4 z-10"><span class="text-label-sm text-on-surface-variant">Resultado</span><span id="cllres">${resNow()}</span></div>
+      <p id="err" class="text-sm text-error hidden" role="alert"></p>
+      <button class="btn btn-primary w-full"><span class="material-symbols-outlined">send</span>Enviar check list</button>
+    </form>`}
+    </div>
+    <div class="flex flex-col gap-4">
+      <section class="card p-4"><h2 class="font-semibold mb-1">${me.role === 'lider' ? 'Mis check list' : 'Historial'} (30 días)</h2>${historial}</section>
+      ${d.config ? cllCatalogo(d.config) : ''}
+    </div></div>`;
+  if (d.config) wireCatalogo();
+  const form = $('#cllf');
+  if (!form) return;
+  // Lo capturado en pantalla → S (y al teléfono).
+  const collect = () => {
+    form.querySelectorAll('[data-p]').forEach(c => { const x = S.puntos[c.dataset.p]; if (!x) return;
+      const o = c.querySelector('[data-obs]'); if (o) x.obs = o.value;
+      x.fotos = [...c.querySelectorAll('[data-photo] input')].map(i => i.value); });
+    S.incidencias = [...form.querySelectorAll('[data-inc]')].map(r => ({ desc: r.querySelector('[data-k=desc]').value, hora: r.querySelector('[data-k=hora]').value,
+      accion: r.querySelector('[data-k=accion]').value, fotos: [...r.querySelectorAll('[data-photo] input')].map(i => i.value) }));
+    $('#cllres').innerHTML = resNow();
+    save();
+  };
+  form.onclick = e => {
+    const r = e.target.closest('[data-r]'), c = r?.closest('[data-p]');
+    if (r) { collect(); const id = c.dataset.p; S.puntos[id] = { ...(S.puntos[id] || {}), r: r.dataset.r }; c.outerHTML = card(cat.find(p => String(p.id) === id)); collect(); return; }
+    if (e.target.closest('[data-add-inc]')) { collect(); $('#incs').insertAdjacentHTML('beforeend', incRow({}, Date.now())); collect(); return; }
+    const del = e.target.closest('[data-del-inc], [data-del-photo]');
+    if (del) { del.closest(del.matches('[data-del-inc]') ? '[data-inc]' : '[data-photo]').remove(); collect(); }
+  };
+  form.oninput = collect;
+  form.onchange = e => { if (!handleUpload(e, collect)) collect(); };
+  form.onsubmit = async e => {
+    e.preventDefault(); collect();
+    const falla = (p, msg) => { const c = form.querySelector(`[data-p="${p.id}"]`); c.scrollIntoView({ block: 'center' }); c.classList.add('ring-2', 'ring-error'); showErr(new Error(msg)); };
+    if (uploading) return showErr(new Error('Espera a que terminen de subir las fotos'));
+    for (const p of cat) {
+      const x = S.puntos[p.id];
+      if (!x?.r) return falla(p, `Falta contestar: ${p.texto}`);
+      if (x.r === 'NO' && !x.obs?.trim()) return falla(p, `Escribe qué pasó y qué se hizo en: ${p.texto}`);
+      if (x.r === 'NO' && p.foto && !x.fotos?.length) return falla(p, `Toma una foto de: ${p.texto}`);
+    }
+    if (S.incidencias.some(i => !i.desc.trim() && (i.accion.trim() || i.fotos.length))) return showErr(new Error('Escribe qué pasó en cada incidencia (o quítala)'));
+    const btn = form.querySelector('.btn-primary'), label = btn.innerHTML;
+    btn.disabled = true; btn.innerHTML = '<span class="material-symbols-outlined animate-spin">progress_activity</span>Enviando…';
+    try {
+      await api('/api/cll', { planta: plant, puntos: S.puntos, incidencias: S.incidencias });
+      try { localStorage.removeItem(key); } catch {}
+      views.cll(arg);
+    } catch (err) {
+      btn.disabled = false; btn.innerHTML = label;
+      showErr(err instanceof TypeError ? new Error('Sin conexión: lo capturado sigue guardado en este teléfono. Vuelve a enviar cuando tengas señal.') : err);
+    }
+  };
+};
+views.cllver = async folio => {
+  const r = await api('/api/cll/registro?folio=' + encodeURIComponent(decodeURIComponent(folio)));
+  $('#app').innerHTML = `
+    <div class="no-print flex items-center justify-between mb-4">
+      <a href="#/cll${me.role === 'admin' ? '/' + encodeURIComponent(r.plant) : ''}" class="text-primary font-semibold flex items-center gap-1"><span class="material-symbols-outlined">arrow_back</span>Check list</a>
+      <button onclick="print()" class="btn btn-primary"><span class="material-symbols-outlined">print</span>Imprimir</button></div>
+    ${me.role !== 'lider' ? `<div class="no-print mb-4">${cllPanel(r, true)}</div>` : ''}
+    ${cllDoc(r)}`;
+};
+
+// Catálogo de puntos (gerencia): agregar, renombrar, foto obligatoria, crítico, abre mantenimiento, plantas y activo.
+const catRow = (p = {}) => `<div data-cat class="grid grid-cols-2 lg:grid-cols-6 gap-2 p-3 rounded-xl bg-surface-container-low items-end">
+  <input type="hidden" data-c="id" value="${esc(p.id ?? '')}">
+  ${labeled({ label: 'Sección' }, `<input class="input" data-c="seccion" value="${esc(p.seccion || '')}" list="dl-cllsec" maxlength="40">`)}
+  ${labeled({ label: `Punto${p.id ? ' #' + p.id : ' nuevo'}`, wide: true }, `<input class="input" data-c="texto" value="${esc(p.texto || '')}" maxlength="160">`)}
+  <div class="col-span-2 lg:col-span-3 flex flex-wrap gap-x-4 gap-y-1 text-label-sm">
+    ${[['foto', '📷 Foto si es NO'], ['critico', 'Crítico (urgente)'], ['mant', 'Abre mantenimiento'], ['activo', 'Activo']].map(([k, l]) =>
+      `<label class="flex items-center gap-1.5"><input type="checkbox" data-c="${k}" ${(k === 'activo' ? p.activo !== false : p[k]) ? 'checked' : ''} class="w-4 h-4 accent-[#2563eb]">${l}</label>`).join('')}
+    ${PLANTS.map(pl => `<label class="flex items-center gap-1.5"><input type="checkbox" data-pl="${esc(pl)}" ${(p.plantas || PLANTS).includes(pl) ? 'checked' : ''} class="w-4 h-4 accent-[#2563eb]">${esc(pl)}</label>`).join('')}
+  </div></div>`;
+const cllCatalogo = c => `<details class="card p-4"><summary class="font-semibold flex items-center gap-2 cursor-pointer"><span class="material-symbols-outlined text-primary">tune</span>Puntos del check list (gerencia)</summary>
+  <form id="cllcat" class="flex flex-col gap-2 mt-3">
+    <p class="text-body-sm text-on-surface-variant">Los puntos no se borran: desactívalos para que dejen de pedirse (el historial los conserva).</p>
+    <datalist id="dl-cllsec">${[...new Set(c.puntos.map(p => p.seccion))].map(s => `<option value="${esc(s)}">`).join('')}</datalist>
+    <div class="grid grid-cols-2 gap-2">
+      ${labeled({ label: 'Recordatorio al líder' }, `<input class="input" type="time" data-h="hora_lider" value="${esc(c.hora_lider)}">`)}
+      ${labeled({ label: 'Aviso al encargado' }, `<input class="input" type="time" data-h="hora_encargado" value="${esc(c.hora_encargado)}">`)}</div>
+    <div id="catrows" class="flex flex-col gap-2">${c.puntos.map(catRow).join('')}</div>
+    <button type="button" data-add-cat class="btn border-[1.5px] border-dashed border-[#cbd5e1] text-primary"><span class="material-symbols-outlined">add</span>Agregar punto</button>
+    <p id="caterr" class="text-sm text-error hidden" role="alert"></p>
+    <button class="btn btn-primary"><span class="material-symbols-outlined">save</span>Guardar puntos</button>
+  </form></details>`;
+function wireCatalogo() {
+  const f = $('#cllcat');
+  f.onclick = e => { if (e.target.closest('[data-add-cat]')) $('#catrows').insertAdjacentHTML('beforeend', catRow()); };
+  f.onsubmit = async e => {
+    e.preventDefault();
+    const v = (r, k) => r.querySelector(`[data-c="${k}"]`), puntos = [...f.querySelectorAll('[data-cat]')].map(r => ({ id: v(r, 'id').value || null,
+      seccion: v(r, 'seccion').value, texto: v(r, 'texto').value, foto: v(r, 'foto').checked, critico: v(r, 'critico').checked, mant: v(r, 'mant').checked,
+      activo: v(r, 'activo').checked, plantas: [...r.querySelectorAll('[data-pl]:checked')].map(x => x.dataset.pl) })).filter(p => p.texto.trim());
+    const btn = f.querySelector('.btn-primary'); btn.disabled = true;
+    try {
+      await api('/api/cll/catalogo', { puntos, ...Object.fromEntries([...f.querySelectorAll('[data-h]')].map(x => [x.dataset.h, x.value])) });
+      views.cll(location.hash.split('/')[2]);
+    } catch (err) { $('#caterr').textContent = err.message; $('#caterr').classList.remove('hidden'); btn.disabled = false; }
+  };
+}
+
 // ---------- Navegación ----------
 const NAV = {
+  lider: [['cll', 'fact_check', 'Check list']],
   colaborador: [['inicio', 'dashboard', 'Inicio'], ['nuevo', 'add_task', ''], ['historial', 'history', 'Historial'], ['calidad', 'verified', 'Calidad']],
   admin: [['admin', 'groups', 'Reportes'], ['semanal', 'auto_awesome', 'Semanal'], ['calidad', 'verified', 'Calidad'], ['cuentas', 'manage_accounts', 'Cuentas'],
-    ['camiones', 'local_shipping', 'Camiones'], ['formulario', 'edit_note', 'Formulario']],
+    ['camiones', 'local_shipping', 'Camiones'], ['formulario', 'edit_note', 'Formulario'], ['cll', 'fact_check', 'Check list líder']],
 };
 // Nómina: el admin siempre; el encargado solo si el admin le dio acceso (Cuentas → Nómina).
 const navItems = () => [...NAV[me.role], ...(me.role === 'admin' || me.nomina ? [['nomina', 'badge', 'Nómina']] : [])];
@@ -1903,7 +2151,7 @@ function renderNav(name) {
   const items = navItems().map(([p, icon, label]) => [p, icon, p === 'calidad' && alertN ? `${label} <span class="chip bg-error text-white !px-1.5">${alertN}</span>` : label]);
   // Computadora: menú lateral (panel admin y app en pantalla grande). Teléfono: barra inferior con botón central.
   $('#nav').innerHTML = WIDE ? `<div class="flex flex-col h-full">
-    <div class="flex items-center gap-2 px-2 mb-8">${logo(30)}<div class="flex flex-col items-start gap-1"><span class="text-lg font-semibold tracking-tight leading-tight">Reporte Diario Polar</span><span class="chip bg-surface-container-high text-primary">${me.role === 'admin' ? 'Admin' : 'Encargado'}</span></div></div>
+    <div class="flex items-center gap-2 px-2 mb-8">${logo(30)}<div class="flex flex-col items-start gap-1"><span class="text-lg font-semibold tracking-tight leading-tight">Reporte Diario Polar</span><span class="chip bg-surface-container-high text-primary">${ROLE_L[me.role]}</span></div></div>
     <div class="flex flex-col gap-1">${items.map(([p, icon, label]) => `
       <a href="#/${p}" class="flex items-center gap-3 px-3 py-2.5 rounded-xl ${p === name ? 'bg-surface-container-high text-primary font-semibold' : 'text-on-surface-variant hover:bg-surface-container-low'}">
         <span class="material-symbols-outlined">${icon}</span>${{ Semanal: 'Resumen semanal', '': 'Nuevo reporte' }[label] ?? label}</a>`).join('')}</div>
@@ -1918,13 +2166,13 @@ function renderNav(name) {
 
 // Opción del menú que se marca en pantallas que no están en el menú.
 const QVIEWS = ['rec', 'lib', 'nc', 'ncedit', 'q', 'fmt', 'fmtedit', 'docs']; // pantallas de Calidad que no están en el menú
-const navOf = name => ({ pl: 'admin', editar: me.role === 'admin' ? 'admin' : 'historial' })[name] ?? (QVIEWS.includes(name) ? 'calidad' : name);
+const navOf = name => ({ pl: 'admin', editar: me.role === 'admin' ? 'admin' : 'historial', cllver: 'cll' })[name] ?? (QVIEWS.includes(name) ? 'calidad' : name);
 async function route() {
   const [name, arg] = location.hash.slice(2).split('/');
   if (!me) return views.login();
   if (WEB && me.role !== 'admin') return views.soloAdmin();
   // pl/ID: PL-FOR-26, solo admin; editar/ID: corregir un reporte; cuenta: mi contraseña (ambos roles).
-  const allowed = [...navItems().map(n => n[0]), 'editar', 'cuenta', ...QVIEWS, ...(me.role === 'admin' ? ['pl'] : [])];
+  const allowed = [...navItems().map(n => n[0]), 'cuenta', 'cllver', ...(me.role === 'lider' ? [] : ['editar', 'cll', ...QVIEWS]), ...(me.role === 'admin' ? ['pl'] : [])];
   if (!allowed.includes(name)) return location.hash = '#/' + allowed[0];
   renderNav(navOf(name));
   try { await views[name](arg); } catch (e) { $('#app').innerHTML = `<p class="text-error text-sm">${esc(e.message)}</p>`; }
@@ -1936,7 +2184,7 @@ async function boot() {
   const showChrome = me && (!WEB || me.role === 'admin');
   document.querySelectorAll('[data-chrome]').forEach(el => el.classList.toggle('hidden', !showChrome));
   document.body.classList.toggle('chrome', !!showChrome);
-  if (me && $('#role-chip')) $('#role-chip').textContent = me.role === 'admin' ? 'Admin' : 'Encargado';
+  if (me && $('#role-chip')) $('#role-chip').textContent = ROLE_L[me.role];
   route();
   // Gerencia: número de alertas de Calidad en el menú (nuevo no conforme, lotes detenidos…).
   if (me?.role === 'admin') api('/api/calidad').then(c => { alertN = c.alertas.length; renderNav(navOf(location.hash.slice(2).split('/')[0])); }).catch(() => {});
@@ -1952,5 +2200,6 @@ addEventListener('DOMContentLoaded', () => {
     if (me && !(WEB && me.role !== 'admin')) renderNav(navOf(name));
   });
   document.addEventListener('click', e => { if (e.target.closest('[data-logout]')) logout(); });
+  wireCll(); // botones Atendido / Pendiente de los paneles del check list del líder
   boot();
 });

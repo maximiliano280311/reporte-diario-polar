@@ -285,6 +285,35 @@ function entregaDe(a, libera) {
 // ---------- Personalización del formulario (admin) ----------
 // Sobre el PL-FOR-26 base el admin puede: renombrar secciones y preguntas, ocultar secciones (menos la 1) y preguntas
 // no protegidas, y agregar preguntas propias. Las que usan los cálculos automáticos solo se pueden renombrar.
+// ---------- PL-FOR-43 Check list diario del líder de grupo (MOD-009) ----------
+// Catálogo inicial (versión 0). Gerencia lo edita en la app (settings.cll): foto = obligatoria si es NO; critico = un NO da URGENTE;
+// mant = un NO abre pendiente de mantenimiento. El id nunca cambia (lo usan los pendientes del día siguiente).
+const CLL_INI = [
+  ['PERSONAL', 'Asistencia completa'], ['PERSONAL', 'Personal con EPP completo', 1, 1], ['PERSONAL', 'Plática de 5 minutos al inicio del turno'],
+  ['PERSONAL', 'Personal en condiciones de trabajar'], ['ORDEN Y LIMPIEZA', 'Rejillas de desagüe limpias y sin tapones', 1],
+  ['ORDEN Y LIMPIEZA', 'Baños limpios', 1], ['ORDEN Y LIMPIEZA', 'Baños con papel, jabón y agua'], ['ORDEN Y LIMPIEZA', 'Pisos sin derrames de aceite, agua o químico', 1],
+  ['ORDEN Y LIMPIEZA', 'Pasillos y salidas de emergencia libres', 1], ['ORDEN Y LIMPIEZA', 'Basura en su contenedor correcto'], ['ORDEN Y LIMPIEZA', 'Comedor limpio'],
+  ['ORDEN Y LIMPIEZA', 'Herramienta ordenada en su lugar'], ['SEGURIDAD', 'Extintores en su lugar y sin obstrucción', 1, 1],
+  ['SEGURIDAD', 'Sin olor a gas en hornos, tanques y bodega', 0, 1], ['SEGURIDAD', 'Químicos tapados y etiquetados', 1], ['SEGURIDAD', 'Botiquín completo'],
+  ['SEGURIDAD', 'Sin accidentes ni casi accidentes', 0, 1], ['EQUIPOS Y MATERIAL', 'Hornos operando sin alarmas', 1, 1, 1],
+  ['EQUIPOS Y MATERIAL', 'Nivel de aceite de hidrolavadora OK', 0, 0, 1], ['EQUIPOS Y MATERIAL', 'Montacargas revisado antes de usarse', 0, 0, 1],
+  ['EQUIPOS Y MATERIAL', 'Material recibido identificado por cliente', 1], ['EQUIPOS Y MATERIAL', 'Material terminado separado y etiquetado', 1],
+  ['EQUIPOS Y MATERIAL', 'Racks, carritos y pallets ordenados'], ['INCIDENCIAS', 'Incidencias del día anterior atendidas'], ['INCIDENCIAS', 'Incidencias de hoy reportadas'],
+  ['CIERRE DE TURNO', 'Equipos apagados y gas cerrado', 0, 1], ['CIERRE DE TURNO', 'Área limpia para el siguiente turno', 1], ['CIERRE DE TURNO', 'Puertas cerradas y luces apagadas'],
+].map(([seccion, texto, foto, critico, mant], i) => ({ id: i + 1, seccion, texto, foto: !!foto, critico: !!critico, mant: !!mant, activo: true, plantas: [...PLANTS] }));
+const CLL_RES = ['TODO EN ORDEN', 'CON OBSERVACIONES', 'REQUIERE ATENCIÓN URGENTE'];
+const isHora = s => /^([01]\d|2[0-3]):[0-5]\d$/.test(String(s ?? ''));
+// Valida el catálogo que guarda gerencia: ids únicos (los nuevos toman el siguiente), texto y sección obligatorios.
+export function cleanCll(c = {}) {
+  const str = (v, n) => String(v ?? '').trim().slice(0, n), seen = new Set();
+  let next = Math.max(0, ...[].concat(c.puntos ?? []).map(p => Number(p?.id) || 0)) + 1;
+  const puntos = [].concat(c.puntos ?? []).slice(0, 100).map(p => ({ id: Number(p?.id) > 0 && !seen.has(Number(p.id)) ? Number(p.id) : next++,
+    seccion: str(p?.seccion, 40).toUpperCase(), texto: str(p?.texto, 160), foto: !!p?.foto, critico: !!p?.critico, mant: !!p?.mant, activo: p?.activo !== false,
+    plantas: [].concat(p?.plantas ?? PLANTS).filter(x => PLANTS.includes(x)) })).filter(p => p.seccion && p.texto && seen.add(p.id));
+  if (!puntos.some(p => p.activo)) throw Object.assign(new Error('El check list necesita al menos un punto activo'), { code: 400 });
+  return { puntos, hora_lider: isHora(c.hora_lider) ? c.hora_lider : '19:00', hora_encargado: isHora(c.hora_encargado) ? c.hora_encargado : '20:00' };
+}
+
 const PROTECTED = new Set(['turno', 'presentes', 'hubo_reportes', 'reportes_n', 'manana', 'vehiculos.vehiculo', 'vehiculos.km_ini', 'vehiculos.km_fin',
   'gas.tanque', 'gas.na', 'gas.sin_carga', 'gas.litros', 'gas.importe', 'hornos.ciclos', 'quimicos.quimico', 'quimicos.existencia',
   'material.cliente', 'material.pieza', 'material.cantidad', 'material.procesado', 'material.entregado', 'mantenimiento.estatus', 'gastos.importe']);
@@ -412,6 +441,13 @@ export function createApp({ db, files, env = {} }) {
       const p = { detectado: m.fecha, equipo: m.equipo, falla: m.falla, responsable: m.nombre, estatus: 'Abierto' };
       if (!enReporte.has(pendKey(p)) && !cerrados.has(pendKey(p)) && !out.some(x => pendKey(x) === pendKey(p))) out.push(p);
     }
+    const visto = (await db.get('SELECT MAX(created_at) t FROM reports WHERE plant = ?', plant))?.t || '';
+    // ponytail: created_at va al segundo; si el reporte y el check list caen en el mismo segundo, enReporte evita repetirlo.
+    for (const r of await db.all("SELECT date, data FROM qrecords WHERE kind = 'CLL' AND plant = ? AND created_at >= ?", plant, visto))
+      for (const x of JSON.parse(r.data).puntos.filter(x => x.mant && x.r === 'NO')) {
+        const p = { detectado: r.date, equipo: x.texto, falla: x.obs, responsable: 'Check list del líder', estatus: 'Abierto' };
+        if (!enReporte.has(pendKey(p)) && !cerrados.has(pendKey(p)) && !out.some(y => pendKey(y) === pendKey(p))) out.push(p);
+      }
     return out;
   }
   const getConfig = async () => cleanConfig(JSON.parse((await db.get("SELECT value FROM settings WHERE key = 'form'"))?.value || '{}'));
@@ -653,6 +689,33 @@ export function createApp({ db, files, env = {} }) {
       }
     }
     return { desde, formatos: out };
+  }
+
+  // ---------- Check list del líder (PL-FOR-43): uno por planta al día, se liga al reporte diario de esa planta y fecha ----------
+  const getCll = async () => JSON.parse((await db.get("SELECT value FROM settings WHERE key = 'cll'"))?.value || 'null') || { puntos: CLL_INI, hora_lider: '19:00', hora_encargado: '20:00' };
+  const cllFolio = (plant, fecha) => `CLL-${PLANT_CODE[plant]}-${fecha.replaceAll('-', '')}-T1`;
+  const horaMx = () => new Date().toLocaleTimeString('en-GB', { timeZone: TZ, hour: '2-digit', minute: '2-digit' });
+  const encargadoDe = async plant => (await db.all("SELECT name FROM users WHERE role = 'colaborador' AND plant = ? AND status = 'activo' ORDER BY id", plant)).map(u => u.name).join(', ');
+  const cllDe = async (plant, fecha) => { const r = await db.get("SELECT folio, status, data FROM qrecords WHERE kind = 'CLL' AND plant = ? AND date = ?", plant, fecha);
+    return r ? { folio: r.folio, status: r.status, ...JSON.parse(r.data) } : null; };
+  // Lo que el encargado no marcó ATENDIDO en el último check list anterior: el líder lo revisa en el punto "Incidencias del día anterior".
+  async function pendientesCll(plant, fecha) {
+    const r = await db.get("SELECT data FROM qrecords WHERE kind = 'CLL' AND plant = ? AND date < ? ORDER BY date DESC LIMIT 1", plant, fecha);
+    if (!r) return [];
+    const d = JSON.parse(r.data);
+    return [...d.puntos.filter(p => p.r === 'NO'), ...d.incidencias.map(i => ({ texto: 'Incidencia', obs: i.desc, estado: i.estado }))]
+      .filter(x => x.estado !== 'ATENDIDO').map(x => ({ texto: x.texto, obs: x.obs, estado: x.estado || 'SIN REVISAR', fecha: d.fecha }));
+  }
+  // Avisos dentro de la app: líder sin check list a la hora del recordatorio, al encargado una hora después, y URGENTE de hoy.
+  async function avisosCll(plants, role) {
+    const c = await getCll(), hoy = ymd(), hora = horaMx(), out = [];
+    for (const plant of plants) {
+      const r = await cllDe(plant, hoy);
+      if (r?.resultado === CLL_RES[2]) out.push({ plant, nivel: 'red', text: `URGENTE · Check list del líder de ${plant}: ${r.puntos.filter(p => p.critico && p.r === 'NO').map(p => p.texto).join('; ')}` });
+      else if (!r && hora >= (role === 'lider' ? c.hora_lider : c.hora_encargado))
+        out.push({ plant, nivel: 'yellow', text: role === 'lider' ? `Ya son más de las ${c.hora_lider}: envía el check list de hoy` : `${plant}: el líder no ha enviado el check list de hoy. Pídeselo antes de cerrar tu reporte.` });
+    }
+    return out;
   }
 
   const userOf = req => {
@@ -1018,7 +1081,7 @@ export function createApp({ db, files, env = {} }) {
       const lotes = await db.all(`SELECT * FROM lots WHERE ${inP('plant')} AND (status != 'ENTREGADO' OR delivered >= ?) ORDER BY received DESC, code DESC`,
         ...plants, ymd(new Date(Date.now() - 30 * DAY)));
       const registros = (await db.all(`SELECT q.folio, q.kind, q.plant, q.date, q.status, q.data, u.name FROM qrecords q JOIN users u ON u.id = q.user_id
-        WHERE ${inP('q.plant')} ORDER BY q.created_at DESC, q.folio DESC LIMIT 100`, ...plants)).map(r => ({ ...r, data: JSON.parse(r.data) }));
+        WHERE ${inP('q.plant')} AND q.kind != 'CLL' ORDER BY q.created_at DESC, q.folio DESC LIMIT 100`, ...plants)).map(r => ({ ...r, data: JSON.parse(r.data) }));
       // Alertas: las guardadas (solo gerencia las ve y las marca) + las que se calculan de los lotes.
       const alertas = user.role === 'admin' ? await db.all(`SELECT id, folio, text, created_at FROM alerts WHERE seen = 0 AND ${inP('plant')} ORDER BY id DESC`, ...plants) : [];
       const openNC = registros.filter(r => r.kind === 'NC' && r.status === 'ABIERTO').flatMap(r => r.data.lotes || []), old = ymd(new Date(Date.now() - LOT_DAYS * DAY));
@@ -1127,6 +1190,62 @@ export function createApp({ db, files, env = {} }) {
       return json(200, await saveFormato(r.kind, user, b, r));
     }),
 
+    // ---- PL-FOR-43 Check list del líder de grupo ----
+    // Pantalla: puntos activos de la planta, el check list del día (?fecha=, hoy por omisión), pendientes del anterior,
+    // historial de 30 días (el líder: solo los suyos) y avisos. El admin además recibe el catálogo completo para editarlo.
+    'GET /api/cll': async (req, user) => {
+      const q = new URL(req.url).searchParams, plant = plantFor(user, q.get('planta')), fecha = isDate(q.get('fecha')) ? q.get('fecha') : ymd(), c = await getCll();
+      const historial = await db.all(`SELECT folio, date, status, json_extract(data, '$.hora') hora, json_extract(data, '$.lider') lider FROM qrecords
+        WHERE kind = 'CLL' AND plant = ? AND date >= ? ${user.role === 'lider' ? 'AND user_id = ?' : ''} ORDER BY date DESC`,
+        plant, ymd(new Date(Date.now() - 30 * DAY)), ...(user.role === 'lider' ? [user.id] : []));
+      return json(200, { plant, fecha, hoy: ymd(), catalogo: c.puntos.filter(p => p.activo && p.plantas.includes(plant)), registro: await cllDe(plant, fecha),
+        pendientes: await pendientesCll(plant, fecha), historial, encargado: await encargadoDe(plant),
+        avisos: await avisosCll(user.role === 'admin' ? PLANTS : [plant], user.role), ...(user.role === 'admin' ? { config: c } : {}) });
+    },
+    'GET /api/cll/registro': async (req, user) => {
+      const r = await getRecord(new URL(req.url).searchParams.get('folio'), user);
+      if (r.kind !== 'CLL' || (user.role === 'lider' && r.user_id !== user.id)) throw httpError(404, 'Registro no encontrado');
+      return json(200, { folio: r.folio, plant: r.plant, status: r.status, name: r.name, ...r.data });
+    },
+    // Enviar (líder de su planta; el encargado si falta el líder; el admin con ?planta). Una vez enviado no se edita.
+    'POST /api/cll': async (req, user) => {
+      const b = await body(req, 200_000), plant = plantFor(user, b.planta), fecha = ymd(), folio = cllFolio(plant, fecha);
+      if (await db.get('SELECT 1 FROM qrecords WHERE folio = ?', folio)) throw httpError(409, `El check list de hoy de ${plant} ya se envió`);
+      const str = (v, n = 1000) => String(v ?? '').trim().slice(0, n), fotos = v => [].concat(v ?? []).filter(k => PHOTO.test(k)).slice(0, 10), resp = b.puntos || {};
+      const puntos = (await getCll()).puntos.filter(p => p.activo && p.plantas.includes(plant)).map(p => {
+        const x = resp[p.id] || {}, r = ['SI', 'NO', 'NA'].includes(x.r) ? x.r : '';
+        if (!r) throw httpError(400, `Falta contestar: ${p.texto}`);
+        const o = { id: p.id, seccion: p.seccion, texto: p.texto, critico: p.critico, mant: p.mant, r, obs: r === 'NO' ? str(x.obs) : '', fotos: r === 'NO' ? fotos(x.fotos) : [], estado: '', comentario: '' };
+        if (r === 'NO' && !o.obs) throw httpError(400, `Escribe qué pasó y qué se hizo en: ${p.texto}`);
+        if (r === 'NO' && p.foto && !o.fotos.length) throw httpError(400, `Toma una foto de: ${p.texto}`);
+        return o;
+      });
+      const incidencias = [].concat(b.incidencias ?? []).slice(0, 30).map(i => ({ desc: str(i?.desc), hora: isHora(i?.hora) ? i.hora : '', accion: str(i?.accion),
+        fotos: fotos(i?.fotos), estado: '', comentario: '' })).filter(i => i.desc);
+      const no = puntos.filter(p => p.r === 'NO'), resultado = no.some(p => p.critico) ? CLL_RES[2] : no.length ? CLL_RES[1] : CLL_RES[0];
+      const a = { fecha, hora: horaMx(), turno: '1', lider: user.name, encargado: await encargadoDe(plant), resultado, puntos, incidencias };
+      await saveRecord(folio, 'CLL', plant, fecha, user, resultado, a);
+      if (resultado === CLL_RES[2]) await db.run('INSERT INTO alerts(plant, folio, text) VALUES (?, ?, ?)', plant, folio,
+        `URGENTE · Check list del líder ${plant}: ${no.filter(p => p.critico).map(p => `${p.texto} (${p.obs})`).join('; ')}`.slice(0, 1000));
+      return json(200, { folio, plant, ...a });
+    },
+    // El encargado (o gerencia) marca cada NO / incidencia del líder ATENDIDO o PENDIENTE con un comentario.
+    'POST /api/cll/atender': async (req, user) => {
+      const b = await body(req), r = await getRecord(b.folio, user);
+      if (r.kind !== 'CLL' || user.role === 'lider') throw httpError(403, 'Solo el encargado o gerencia marcan los puntos');
+      const x = b.tipo === 'inc' ? r.data.incidencias[Number(b.i)] : r.data.puntos.find(p => p.id === Number(b.i) && p.r === 'NO');
+      if (!x || !['ATENDIDO', 'PENDIENTE'].includes(b.estado)) throw httpError(400, 'Punto no encontrado');
+      Object.assign(x, { estado: b.estado, comentario: String(b.comentario ?? '').trim().slice(0, 500), por: user.name });
+      await db.run('UPDATE qrecords SET data = ? WHERE folio = ?', JSON.stringify(r.data), r.folio);
+      return json(200, { ok: true });
+    },
+    // Catálogo de puntos y horas de recordatorio (gerencia = admin). Agregar, editar o desactivar sin programar.
+    'POST /api/cll/catalogo': adminOnly(async req => {
+      const c = cleanCll(await body(req));
+      await db.run("INSERT INTO settings(key, value) VALUES ('cll', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value", JSON.stringify(c));
+      return json(200, c);
+    }),
+
     // Catálogo de clientes (con su especificación para el criterio 7) y teléfono de gerencia (solo admin).
     'POST /api/calidad/config': adminOnly(async req => {
       const b = await body(req), str = (v, n) => String(v ?? '').trim().slice(0, n), seen = new Set();
@@ -1199,7 +1318,8 @@ export function createApp({ db, files, env = {} }) {
     'POST /api/users/role': adminOnly(async (req, user) => {
       const { id, role } = await body(req);
       if (Number(id) === user.id) return json(400, { error: 'No puedes cambiar tu propio rol' });
-      if (!['admin', 'colaborador'].includes(role)) return json(400, { error: 'Rol inválido' });
+      if (!['admin', 'colaborador', 'lider'].includes(role)) return json(400, { error: 'Rol inválido' });
+      if (role !== 'admin' && !(await db.get('SELECT plant FROM users WHERE id = ?', Number(id)))?.plant) throw badPlant();
       await db.run("UPDATE users SET role = ? WHERE id = ? AND status = 'activo'", role, Number(id));
       return json(200, { ok: true });
     }),
@@ -1215,8 +1335,8 @@ export function createApp({ db, files, env = {} }) {
 
     'POST /api/users': adminOnly(async req => {
       const b = await body(req);
-      const role = b.role === 'admin' ? 'admin' : 'colaborador', plant = String(b.plant ?? '').trim() || null;
-      if (role === 'colaborador' && !plant) throw badPlant(); // el encargado siempre tiene planta
+      const role = ['admin', 'lider'].includes(b.role) ? b.role : 'colaborador', plant = String(b.plant ?? '').trim() || null;
+      if (role !== 'admin' && !plant) throw badPlant(); // el encargado y el líder siempre tienen planta
       await createUser(b, role, 'activo', plant);
       return json(200, { ok: true });
     }),
@@ -1252,26 +1372,33 @@ export function createApp({ db, files, env = {} }) {
       const start = ymd(new Date(Date.now() - 6 * DAY)), form = await currentForm();
       const rows = (await db.all('SELECT r.*, u.name FROM reports r JOIN users u ON u.id = r.user_id WHERE r.date >= ? ORDER BY u.name, r.date', start)).map(parseReport);
       if (!rows.length) return json(400, { error: 'No hay reportes en los últimos 7 días' });
+      const cll = (await db.all("SELECT plant, data FROM qrecords WHERE kind = 'CLL' AND date >= ?", start)).map(r => ({ plant: r.plant, ...JSON.parse(r.data) }));
+      const cllTxt = PLANTS.map(p => { const mine = cll.filter(c => c.plant === p), n = {};
+        for (const c of mine) for (const x of c.puntos) if (x.r === 'NO') n[x.texto] = (n[x.texto] || 0) + 1;
+        return `${p}: check list del líder enviado ${mine.length} de 7 días; puntos en NO: ${Object.entries(n).sort((a, b) => b[1] - a[1]).slice(0, 5).map(([t, k]) => `${t} (${k})`).join(', ') || 'ninguno'}`; }).join('\n');
       const text = await ai(
         'Eres un analista que prepara el resumen semanal de los reportes diarios de operación e incidencias (PL-FOR-26) de las plantas para gerencia. ' +
         'Escribe en español, texto plano (sin markdown), con estas secciones: Panorama general, Personal (faltas, permisos, reportes), ' +
         'Material por cliente y producción, Gas y gastos (con totales), Químicos por pedir, Incidencias y mantenimiento pendiente, ' +
-        'Desempeño por encargado (incluye su calidad promedio de reporte), Recomendaciones.',
-        rows.map(r => `### ${r.name} — planta ${r.plant ?? '—'} — ${r.date} (calidad: ${r.score ?? 'sin evaluar'})\n${formatAnswers(r.answers, form)}`).join('\n\n'),
+        'Desempeño por encargado (incluye su calidad promedio de reporte), Check list del líder (días enviados y puntos que más salieron en NO), Recomendaciones.',
+        rows.map(r => `### ${r.name} — planta ${r.plant ?? '—'} — ${r.date} (calidad: ${r.score ?? 'sin evaluar'})\n${formatAnswers(r.answers, form)}`).join('\n\n') + '\n\n### Check list del líder de grupo\n' + cllTxt,
         false, 300_000);
       await db.run('INSERT INTO weekly(start, end, text) VALUES (?, ?, ?)', start, ymd(), text);
       return json(200, { ok: true });
     }),
   };
 
+  const LIDER_OK = new Set(['GET /api/questions', 'GET /api/me', 'POST /api/logout', 'POST /api/me/password', 'POST /api/upload', 'GET /api/files/', 'GET /api/cll', 'GET /api/cll/registro', 'POST /api/cll']);
   // Atiende /api/*: Request → Response (Fetch API, igual en Node y en Workers).
   return async function handleApi(req) {
     try {
-      const path = new URL(req.url).pathname, route = routes[`${req.method} ${path.startsWith('/api/files/') ? '/api/files/' : path}`];
+      const path = new URL(req.url).pathname, key = `${req.method} ${path.startsWith('/api/files/') ? '/api/files/' : path}`, route = routes[key];
       if (!route) return json(404, { error: 'No encontrado' });
       const open = ['/api/questions', '/api/register', '/api/login'].includes(path);
       const user = await userOf(req);
       if (!open && !user) return json(401, { error: 'Inicia sesión' });
+      // El líder de grupo solo llena su check list (se valida aquí, no solo ocultando botones).
+      if (user?.role === 'lider' && !LIDER_OK.has(key)) return json(403, { error: 'Tu cuenta de líder de grupo solo puede llenar el check list' });
       const out = { cookie: null }, res = await route(req, user, out);
       if (out.cookie) res.headers.set('Set-Cookie', out.cookie);
       return res;
