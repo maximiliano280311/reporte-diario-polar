@@ -322,25 +322,33 @@ const PROTECTED = new Set(['turno', 'presentes', 'hubo_reportes', 'reportes_n', 
   'material.cliente', 'material.pieza', 'material.cantidad', 'material.procesado', 'material.entregado', 'mantenimiento.estatus', 'gastos.importe']);
 const EXTRA_TYPES = ['text', 'textarea', 'number', 'sino', 'select', 'date', 'time'];
 const keysOf = s => [...(s.fields || []).map(f => [f.id, f]), ...(s.table ? s.table.cols.map(c => [`${s.table.id}.${c.id}`, c]) : [])];
-const canHide = (key, f) => !PROTECTED.has(key) && !f.required && !f.auto;
+// El admin decide todo: puede ocultar cualquier pregunta (si la usa un cálculo, ese cálculo queda vacío). Solo la primera
+// columna de una tabla fija (la lista de renglones, p. ej. los tanques de gas) no se oculta: es lo que identifica cada renglón.
+const canHide = (key, s) => !(s.table?.fixed && key === `${s.table.id}.${s.table.cols[0].id}`);
 
 // Valida una configuración (del admin o de la IA): todo lo desconocido o no permitido se descarta.
 function cleanConfig(c = {}) {
   const str = (v, n = 120) => String(v ?? '').trim().slice(0, n), out = { sections: {}, fields: {}, extra: {} }, ids = new Set();
   for (const s of FORM) {
     // Un texto igual al original no es un cambio (la IA suele copiar todo tal cual).
-    const sc = c.sections?.[s.n] || {}, title = str(sc.title) === s.title ? '' : str(sc.title), hidden = s.n !== 1 && !!sc.hidden;
+    const sc = c.sections?.[s.n] || {}, title = str(sc.title) === s.title ? '' : str(sc.title), hidden = !!sc.hidden;
     if (title || hidden) out.sections[s.n] = { ...(title && { title }), ...(hidden && { hidden }) };
     for (const [key, f] of keysOf(s)) {
-      const fc = c.fields?.[key] || {}, label = str(fc.label) === f.label ? '' : str(fc.label), hide = canHide(key, f) && !!fc.hidden;
-      if (label || hide) out.fields[key] = { ...(label && { label }), ...(hide && { hidden: true }) };
+      const fc = c.fields?.[key] || {}, label = str(fc.label) === f.label ? '' : str(fc.label), hide = canHide(key, s) && !!fc.hidden;
+      const req = !f.auto && typeof fc.required === 'boolean' && fc.required !== !!f.required; // obligatoria sí / no (si cambia)
+      if (label || hide || req) out.fields[key] = { ...(label && { label }), ...(hide && { hidden: true }), ...(req && { required: fc.required }) };
     }
-    const extra = (Array.isArray(c.extra?.[s.n]) ? c.extra[s.n] : []).slice(0, 20).map(x => {
+    // Subpreguntas: una pregunta propia puede ir "adentro" de otra de la misma sección (padre) y, si se pide, solo
+    // aparecer cuando la respuesta del padre es una en particular (cuando, p. ej. "Sí").
+    const padres = new Set((s.fields || []).map(f => f.id));
+    const extra = (Array.isArray(c.extra?.[s.n]) ? c.extra[s.n] : []).slice(0, 40).map(x => {
       let id = str(x?.id, 40);
       if (!/^x_[a-z0-9_]{1,36}$/.test(id) || ids.has(id)) id = 'x_' + crypto.randomBytes(4).toString('hex');
       ids.add(id);
-      const type = EXTRA_TYPES.includes(x?.type) ? x.type : 'text';
-      return { id, label: str(x?.label), type, required: !!x?.required,
+      const type = EXTRA_TYPES.includes(x?.type) ? x.type : 'text', padre = padres.has(str(x?.padre, 40)) ? str(x.padre, 40) : '';
+      const label = str(x?.label);
+      if (label) padres.add(id); // las siguientes pueden ir adentro de esta
+      return { id, label, type, required: !!x?.required, ...(padre && { padre, ...(str(x?.cuando, 60) && { cuando: str(x.cuando, 60) }) }),
         ...(type === 'select' && { options: [].concat(x?.options ?? []).map(o => str(o, 60)).filter(Boolean).slice(0, 20) }) };
     }).filter(x => x.label && (x.type !== 'select' || x.options.length));
     if (extra.length) out.extra[s.n] = extra;
@@ -350,10 +358,16 @@ function cleanConfig(c = {}) {
 
 // Formulario efectivo = PL-FOR-26 base + configuración del admin. Es el que llenan los encargados y el que se valida.
 function formFor(c) {
-  const lab = (key, f) => ({ ...f, label: c.fields[key]?.label || f.label });
+  const lab = (key, f) => ({ ...f, label: c.fields[key]?.label || f.label, ...(c.fields[key]?.required !== undefined && { required: c.fields[key].required }) });
   return FORM.filter(s => !c.sections[s.n]?.hidden).map(s => {
-    const fields = [...(s.fields || []).filter(f => !c.fields[f.id]?.hidden).map(f => lab(f.id, f)),
-      ...(c.extra[s.n] || []).map(x => x.type === 'sino' ? { ...x, type: 'select', options: SN } : x)];
+    const fields = (s.fields || []).filter(f => !c.fields[f.id]?.hidden).map(f => lab(f.id, f));
+    // Cada subpregunta va justo después de su pregunta padre (y de las otras subpreguntas que ya tenga).
+    for (const x of (c.extra[s.n] || []).map(x => x.type === 'sino' ? { ...x, type: 'select', options: SN } : x)) {
+      let i = x.padre ? fields.findIndex(f => f.id === x.padre) : -1;
+      if (i < 0) { fields.push(x.padre ? { ...x, padre: undefined, cuando: undefined } : x); continue; }
+      while (i + 1 < fields.length && fields[i + 1].padre) i++; // las subpreguntas de un padre quedan juntas después de él
+      fields.splice(i + 1, 0, { ...x, nivel: (fields.find(f => f.id === x.padre)?.nivel || 0) + 1 });
+    }
     return { ...s, title: c.sections[s.n]?.title || s.title, fields: fields.length ? fields : undefined,
       ...(s.table && { table: { ...s.table, cols: s.table.cols.filter(col => !c.fields[`${s.table.id}.${col.id}`]?.hidden).map(col => lab(`${s.table.id}.${col.id}`, col)) } }) };
   });
@@ -367,6 +381,7 @@ function clean(answers, form) {
   const pick = (s, f, v) => { if (v && f.type === 'select' && f.options.length && !f.options.includes(v)) throw missing(s, `${f.label} (opción no válida)`); return v; };
   for (const s of form) {
     for (const f of s.fields || []) {
+      if (f.padre && (!out[f.padre] || (f.cuando && out[f.padre] !== f.cuando))) { out[f.id] = ''; continue; }
       if (f.type === 'checks') out[f.id] = [].concat(answers[f.id] ?? []).map(str).filter(v => f.options.includes(v));
       else if (f.type === 'photos') out[f.id] = [].concat(answers[f.id] ?? []).map(str).filter(k => PHOTO.test(k)).slice(0, 10);
       else out[f.id] = pick(s, f, str(answers[f.id]));
@@ -524,7 +539,7 @@ export function createApp({ db, files, env = {} }) {
     for (const r of await db.all("SELECT date, data FROM qrecords WHERE kind = 'CL21' AND plant = ?", plant)) { const u = JSON.parse(r.data).unidad; if (!(chk[u] >= r.date)) chk[u] = r.date; }
     for (const v of a.vehiculos || []) {
       if (chk[v.vehiculo] && !(v.checklist >= chk[v.vehiculo])) v.checklist = chk[v.vehiculo];
-      if (!trucks.has(v.vehiculo)) throw httpError(400, `El vehículo "${v.vehiculo || '(vacío)'}" no está registrado en la planta ${plant}`);
+      if ('vehiculo' in v && !trucks.has(v.vehiculo)) throw httpError(400, `El vehículo "${v.vehiculo || '(vacío)'}" no está registrado en la planta ${plant}`);
       v.recorrido = v.km_ini && v.km_fin ? String(num(v.km_fin) - num(v.km_ini)) : '';
     }
     saldar(a, saldos);
@@ -1308,10 +1323,11 @@ export function createApp({ db, files, env = {} }) {
         'Modificas la configuración del formulario PL-FOR-26 de una app de reportes diarios. Escribe en español. ' +
         'Responde SOLO un JSON con las claves "config" (la configuración COMPLETA nueva) y "resumen" (1-3 oraciones de lo que cambiaste). ' +
         'Formato de config: {"sections":{"<n>":{"title":"...","hidden":true}},"fields":{"<clave>":{"label":"...","hidden":true}},' +
-        '"extra":{"<n>":[{"id":"x_...","label":"...","type":"text|textarea|number|sino|select|date|time","options":["..."],"required":false}]}}. ' +
+        '"extra":{"<n>":[{"id":"x_...","label":"...","type":"text|textarea|number|sino|select|date|time","options":["..."],"required":false,"padre":"<clave de otra pregunta de la sección (opcional)>","cuando":"<respuesta del padre que la muestra (opcional)>"}]}}. ' +
+        'En "fields" también puede ir "required": true/false para hacer obligatoria o no una pregunta del formato. ' +
         'Reglas: conserva todo lo que no se pidió cambiar; para preguntas nuevas usa id "x_" + palabras en minúsculas con guion bajo; ' +
-        'type "select" requiere options; no ocultes campos con protegido=true ni la sección 1.',
-        JSON.stringify({ secciones: FORM.map(s => ({ n: s.n, titulo: s.title, campos: keysOf(s).map(([k, f]) => ({ clave: k, etiqueta: f.label, protegido: !canHide(k, f) })) })),
+        'type "select" requiere options; una subpregunta usa "padre" (y "cuando" si solo aplica con cierta respuesta). Si ocultas una pregunta con calculo=true avisa en el resumen que ese cálculo quedará vacío.',
+        JSON.stringify({ secciones: FORM.map(s => ({ n: s.n, titulo: s.title, campos: keysOf(s).map(([k, f]) => ({ clave: k, etiqueta: f.label, calculo: PROTECTED.has(k) })) })),
           config_actual: await getConfig(), instruccion: instruction }), true));
       return json(200, { config: cleanConfig(out.config), resumen: String(out.resumen ?? '') });
     }),

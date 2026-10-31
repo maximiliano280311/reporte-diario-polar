@@ -179,12 +179,24 @@ const sectionsHtml = (secs, pre, rows, extra = () => '') => secs.map(s => { cons
     <h2 class="text-label-lg text-primary">${s.n}. ${esc(s.title)}</h2>
     ${s.hint ? `<p class="text-body-sm text-on-surface-variant">${esc(s.hint)}</p>` : ''}
     ${extra(s, 'top')}
-    ${top.length ? `<div class="grid grid-cols-2 lg:grid-cols-4 gap-3">${top.map(f => labeled(f, input(f, f.id, pre?.[f.id]))).join('')}</div>` : ''}
+    ${top.length ? `<div class="grid grid-cols-2 lg:grid-cols-4 gap-3">${top.map(f => f.padre
+      ? `<div data-padre="${esc(f.padre)}" data-cuando="${esc(f.cuando || '')}" class="col-span-2 lg:col-span-4 grid grid-cols-2 lg:grid-cols-4 gap-3 border-l-4 border-primary-container/40" style="padding-left:${12 * (f.nivel || 1)}px">${labeled({ ...f, wide: true }, input(f, f.id, pre?.[f.id]))}</div>`
+      : labeled(f, input(f, f.id, pre?.[f.id]))).join('')}</div>` : ''}
     ${s.table ? `<div data-table="${s.table.id}" class="flex flex-col gap-2">${rows(s.table).map(r => rowHtml(s.table, r)).join('')}</div>
       ${s.table.fixed ? '' : `<button type="button" data-add="${s.table.id}" class="btn border-[1.5px] border-[#cbd5e1] text-primary"><span class="material-symbols-outlined">add</span>Agregar ${esc(s.table.item)}</button>`}` : ''}
     ${extra(s, 'bottom')}
     ${(s.fields || []).filter(f => f.after).map(f => `<div class="grid grid-cols-2">${labeled(f, input(f, f.id, pre?.[f.id]))}</div>`).join('')}
   </section>`; }).join('');
+// Subpreguntas: se ven solo si su pregunta padre tiene respuesta (y es la de "cuando", si la hay). Las ocultas se desactivan:
+// no se envían ni se exigen (el servidor hace lo mismo).
+function syncSubs(root) {
+  for (const box of root.querySelectorAll('[data-padre]')) {
+    const p = root.querySelector(`[name="${CSS.escape(box.dataset.padre)}"]`), v = p && !p.disabled ? p.value : '';
+    const show = !!v && (!box.dataset.cuando || v === box.dataset.cuando);
+    box.classList.toggle('hidden', !show);
+    box.querySelectorAll('input, select, textarea').forEach(x => { x.disabled = !show; });
+  }
+}
 // Renglones de una tabla con valores previos; las fijas (gas, criterios) siempre llevan sus renglones.
 const tableRows = (t, pre) => {
   if (!t.fixed) return pre?.[t.id] || [];
@@ -588,13 +600,14 @@ const views = {
     // Sección 5: total de hornos y de ciclos, en vivo.
     const totalHornos = () => {
       const rows = [...form.querySelectorAll('[data-table="hornos"] [data-row]')], p = form.querySelector('[data-total-hornos]');
-      if (p) p.textContent = `Total de hornos: ${rows.length} · Total de ciclos: ${sum(rows.map(r => ({ c: r.querySelector('[name$=".ciclos"]').value })), 'c')}`;
+      if (p) p.textContent = `Total de hornos: ${rows.length} · Total de ciclos: ${sum(rows.map(r => ({ c: r.querySelector('[name$=".ciclos"]')?.value })), 'c')}`;
     };
     // Sección 7: recibido / entregado de hoy vienen de Calidad (PL-FOR-28 / 29); pendientes = anteriores + recibido − procesado. El servidor lo recalcula al guardar.
     const pendientes = () => form.querySelectorAll('[data-table="material"] [data-row]').forEach(r => {
-      const v = id => r.querySelector(`[name$=".${id}"]`).value, key = `${v('cliente')}|${v('pieza')}`.trim().toLowerCase();
+      const v = id => r.querySelector(`[name$=".${id}"]`)?.value ?? '', key = `${v('cliente')}|${v('pieza')}`.trim().toLowerCase(), info = r.querySelector('[data-pend]');
+      if (!info) return;
       const prev = d.pend[key] || 0, m = d.mov[key] || { recibido: 0, entregado: 0, folios: [] };
-      r.querySelector('[data-pend]').textContent = `Recibido hoy: ${m.recibido} · Entregado hoy: ${m.entregado}${m.folios.length ? ` (${m.folios.join(', ')})` : ''} · `
+      info.textContent = `Recibido hoy: ${m.recibido} · Entregado hoy: ${m.entregado}${m.folios.length ? ` (${m.folios.join(', ')})` : ''} · `
         + `Pendientes por procesar: ${prev + m.recibido - (Number(v('procesado')) || 0)}` + (prev ? ` (incluye ${prev} de días anteriores)` : '');
     });
     form.oninput = () => { totalHornos(); pendientes(); save(); };
@@ -606,8 +619,7 @@ const views = {
       // Sección 2: sin reportes de personal → "¿Cuántos?" = N/A; con reportes → obligatorio.
       if (n === 'hubo_reportes') {
         const c = form.elements.reportes_n, no = e.target.value === 'No';
-        Object.assign(c, { disabled: no, required: e.target.value === 'Sí', placeholder: no ? 'N/A' : '' });
-        if (no) c.value = '';
+        if (c) { Object.assign(c, { disabled: no, required: e.target.value === 'Sí', placeholder: no ? 'N/A' : '' }); if (no) c.value = ''; }
       }
       // Casillas N/A (gas): desactivan los campos de su lista "disables"; se recalcula todo el renglón.
       const row = e.target.closest('[data-row]'), t = questions.find(s => s.table?.id === n.split('.')[0])?.table;
@@ -622,7 +634,7 @@ const views = {
     };
     // Con respuestas previas (borrador o corrección): dejar desactivado lo que corresponde, como si se hubiera elegido a mano.
     form.querySelectorAll('[name=hubo_reportes], [data-row] input[type=checkbox]:checked').forEach(x => x.dispatchEvent(new Event('change', { bubbles: true })));
-    totalHornos(); pendientes(); ready = true;
+    syncSubs(form); totalHornos(); pendientes(); ready = true;
     form.onsubmit = async e => {
       e.preventDefault();
       if (uploading) return showErr(new Error('Espera a que terminen de subir las fotos'));
@@ -920,13 +932,18 @@ const views = {
     const { base, config, protected: prot } = await api('/api/form-config'), P = new Set(prot);
     const keys = s => [...(s.fields || []).map(f => [f.id, f]), ...(s.table ? s.table.cols.map(c => [`${s.table.id}.${c.id}`, c]) : [])];
     const TYPES = { text: 'Texto', textarea: 'Texto largo', number: 'Número', sino: 'Sí / No', select: 'Lista de opciones', date: 'Fecha', time: 'Hora' };
-    const extraRow = (x = {}) => `
-      <div data-extra class="grid grid-cols-2 lg:grid-cols-4 gap-2 p-3 rounded-xl bg-surface-container-low items-end">
+    // Preguntas que pueden ser "padre" de una subpregunta: las del formato (no las de tabla) y las propias ya guardadas.
+    const padres = (s, x) => [...(s.fields || []).map(f => [f.id, config.fields[f.id]?.label || f.label]),
+      ...(config.extra[s.n] || []).filter(e => e.id && e.id !== x.id).map(e => [e.id, e.label])];
+    const extraRow = (x = {}, s) => `
+      <div data-extra class="grid grid-cols-2 lg:grid-cols-4 gap-2 p-3 rounded-xl bg-surface-container-low items-end ${x.padre ? 'border-l-4 border-primary-container/60' : ''}">
         <input type="hidden" name="id" value="${esc(x.id || '')}">
-        ${labeled({ label: 'Pregunta nueva', required: true, wide: true }, `<input class="input" name="label" value="${esc(x.label || '')}" required maxlength="120">`)}
+        ${labeled({ label: x.padre ? 'Subpregunta' : 'Pregunta nueva', required: true, wide: true }, `<input class="input" name="label" value="${esc(x.label || '')}" required maxlength="120">`)}
         ${labeled({ label: 'Tipo' }, `<select class="input" name="type">${Object.entries(TYPES).map(([v, l]) => `<option value="${v}" ${x.type === v ? 'selected' : ''}>${l}</option>`).join('')}</select>`)}
         ${labeled({ label: 'Obligatoria', type: 'check' }, `<input type="checkbox" name="required" ${x.required ? 'checked' : ''} class="w-6 h-6 accent-[#2563eb]">`)}
         ${labeled({ label: 'Opciones (solo para "Lista de opciones", separadas por coma)', wide: true }, `<input class="input" name="options" value="${esc((x.options || []).join(', '))}">`)}
+        ${labeled({ label: 'Va adentro de la pregunta', wide: true }, `<select class="input" name="padre"><option value="">— Ninguna (pregunta suelta) —</option>${padres(s, x).map(([v, l]) => `<option value="${esc(v)}" ${x.padre === v ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select>`)}
+        ${labeled({ label: 'Solo si la respuesta es (vacío = con cualquier respuesta)', wide: true }, `<input class="input" name="cuando" value="${esc(x.cuando || '')}" maxlength="60" placeholder="Ej. Sí">`)}
         <button type="button" data-del-extra class="col-span-2 justify-self-end text-label-sm text-error flex items-center gap-1"><span class="material-symbols-outlined text-[16px]">delete</span>Quitar</button>
       </div>`;
     // Lista legible de lo que cambia entre dos configuraciones (para revisar la propuesta de la IA).
@@ -938,9 +955,10 @@ const views = {
         const p = a.fields[k] || {}, q = b.fields[k] || {};
         if ((p.label || '') !== (q.label || '')) out.push(`Sección ${s.n}: "${p.label || f.label}" → "${q.label || f.label}"`);
         if (!!p.hidden !== !!q.hidden) out.push(`Sección ${s.n}: "${f.label}" ${q.hidden ? 'se oculta' : 'se vuelve a mostrar'}`);
+        if ((p.required ?? !!f.required) !== (q.required ?? !!f.required)) out.push(`Sección ${s.n}: "${f.label}" ${q.required ?? f.required ? 'pasa a ser obligatoria' : 'deja de ser obligatoria'}`);
       }
       for (const e of eb) { const o = ea.find(z => z.id === e.id);
-        if (!o) out.push(`Sección ${s.n}: nueva pregunta "${e.label}" (${TYPES[e.type]}${e.required ? ', obligatoria' : ''})`);
+        if (!o) out.push(`Sección ${s.n}: nueva ${e.padre ? 'subpregunta' : 'pregunta'} "${e.label}" (${TYPES[e.type]}${e.required ? ', obligatoria' : ''})`);
         else if (JSON.stringify(o) !== JSON.stringify(e)) out.push(`Sección ${s.n}: cambia la pregunta "${e.label}"`); }
       for (const e of ea) if (!eb.some(z => z.id === e.id)) out.push(`Sección ${s.n}: se quita la pregunta "${e.label}"`);
       return out;
@@ -949,7 +967,9 @@ const views = {
     $('#app').innerHTML = `
     <div class="${WIDE ? 'max-w-4xl' : ''} flex flex-col gap-4">
       <div><h1 class="${WIDE ? 'text-3xl font-bold' : 'text-2xl font-semibold'} tracking-tight">Formulario</h1>
-        <p class="text-sm text-on-surface-variant">Personaliza el PL-FOR-26 para las dos plantas. Las preguntas con <span class="material-symbols-outlined text-[14px] align-middle">lock</span> las usan los cálculos automáticos: se pueden renombrar pero no ocultar.</p></div>
+        <p class="text-sm text-on-surface-variant">Personaliza el PL-FOR-26 para las dos plantas: cambia el texto, haz obligatoria o no cada pregunta, quita (oculta) las que no quieras
+          y agrega preguntas o subpreguntas (van adentro de otra pregunta). Las preguntas con <span class="material-symbols-outlined text-[14px] align-middle text-tertiary">calculate</span>
+          las usa un cálculo automático: si las quitas, ese cálculo queda vacío. Lo que se quita no se borra de los reportes ya enviados.</p></div>
       <p id="err" class="text-sm text-error hidden" role="alert"></p>
       <section class="card p-4 flex flex-col gap-3">
         <h2 class="font-semibold flex items-center gap-2"><span class="material-symbols-outlined text-primary">auto_awesome</span>Modificar con IA</h2>
@@ -963,16 +983,18 @@ const views = {
           <div class="flex flex-wrap items-end gap-3">
             <label class="flex-1 min-w-[200px] flex flex-col gap-1 text-label-md text-on-surface-variant"><span>Sección ${s.n} — título</span>
               <input class="input" name="stitle" value="${esc(sc.title || '')}" placeholder="${esc(s.title)}"></label>
-            ${s.n === 1 ? '' : `<label class="flex items-center gap-2 h-12 text-label-md"><input type="checkbox" name="shidden" ${sc.hidden ? 'checked' : ''} class="w-5 h-5 accent-[#2563eb]">Ocultar sección</label>`}
+            <label class="flex items-center gap-2 h-12 text-label-md"><input type="checkbox" name="shidden" ${sc.hidden ? 'checked' : ''} class="w-5 h-5 accent-[#2563eb]">Quitar sección</label>
           </div>
           <details><summary class="text-label-lg text-primary flex items-center gap-1"><span class="material-symbols-outlined text-[18px]">expand_more</span>Preguntas del formato (${keys(s).length})</summary>
-            <div class="flex flex-col gap-2 mt-2">${keys(s).map(([k, f]) => { const fc = config.fields[k] || {}, locked = P.has(k) || f.required || f.auto; return `
-              <div data-field="${k}" class="flex flex-wrap items-center gap-2">
+            <div class="flex flex-col gap-2 mt-2">${keys(s).map(([k, f]) => { const fc = config.fields[k] || {}, fija = s.table?.fixed && k === `${s.table.id}.${s.table.cols[0].id}`; return `
+              <div data-field="${k}" class="flex flex-wrap items-center gap-x-3 gap-y-1 py-1 border-b border-[#f1f5f9]">
                 <input class="input flex-1 min-w-[200px]" name="label" value="${esc(fc.label || '')}" placeholder="${esc(f.label)}" aria-label="Nuevo texto para ${esc(f.label)}">
-                ${locked ? '<span class="text-label-sm text-on-surface-variant flex items-center gap-1 w-24" title="La usan los cálculos automáticos"><span class="material-symbols-outlined text-[16px]">lock</span>Protegida</span>'
-                  : `<label class="flex items-center gap-2 text-label-md w-24"><input type="checkbox" name="hidden" ${fc.hidden ? 'checked' : ''} class="w-5 h-5 accent-[#2563eb]">Ocultar</label>`}
+                ${P.has(k) ? '<span class="material-symbols-outlined text-[18px] text-tertiary" title="La usa un cálculo automático: si la quitas, ese cálculo queda vacío">calculate</span>' : ''}
+                ${f.auto ? '<span class="text-label-sm text-on-surface-variant">Se calcula sola</span>' : `<label class="flex items-center gap-1.5 text-label-md"><input type="checkbox" name="required" ${(fc.required ?? !!f.required) ? 'checked' : ''} class="w-5 h-5 accent-[#2563eb]">Obligatoria</label>`}
+                ${fija ? '<span class="text-label-sm text-on-surface-variant">Renglones fijos</span>' : `<label class="flex items-center gap-1.5 text-label-md text-error"><input type="checkbox" name="hidden" ${fc.hidden ? 'checked' : ''} class="w-5 h-5 accent-[#ba1a1a]">Quitar</label>`}
+                ${s.table && k.includes('.') ? '' : `<button type="button" data-add-sub="${esc(k)}" class="text-label-sm text-primary font-semibold flex items-center gap-0.5"><span class="material-symbols-outlined text-[16px]">subdirectory_arrow_right</span>Subpregunta</button>`}
               </div>`; }).join('')}</div></details>
-          <div data-extras class="flex flex-col gap-2">${(config.extra[s.n] || []).map(extraRow).join('')}</div>
+          <div data-extras class="flex flex-col gap-2">${(config.extra[s.n] || []).map(x => extraRow(x, s)).join('')}</div>
           <button type="button" data-add-extra class="btn border-[1.5px] border-[#cbd5e1] text-primary ${WIDE ? 'self-start' : ''}"><span class="material-symbols-outlined">add</span>Agregar pregunta</button>
         </section>`; }).join('')}
         <div class="sticky bottom-24 lg:bottom-4 grid grid-cols-2 gap-2">
@@ -988,10 +1010,11 @@ const views = {
       for (const sec of form.querySelectorAll('[data-sec]')) {
         const n = sec.dataset.sec;
         c.sections[n] = { title: sec.querySelector('[name=stitle]').value, hidden: !!sec.querySelector('[name=shidden]')?.checked };
-        for (const f of sec.querySelectorAll('[data-field]')) c.fields[f.dataset.field] = { label: f.querySelector('[name=label]').value, hidden: !!f.querySelector('[name=hidden]')?.checked };
+        for (const f of sec.querySelectorAll('[data-field]')) c.fields[f.dataset.field] = { label: f.querySelector('[name=label]').value, hidden: !!f.querySelector('[name=hidden]')?.checked,
+          ...(f.querySelector('[name=required]') && { required: f.querySelector('[name=required]').checked }) };
         c.extra[n] = [...sec.querySelectorAll('[data-extra]')].map(x => { const v = k => x.querySelector(`[name=${k}]`);
           return { id: v('id').value, label: v('label').value, type: v('type').value, required: v('required').checked,
-            options: v('options').value.split(',').map(o => o.trim()).filter(Boolean) }; });
+            options: v('options').value.split(',').map(o => o.trim()).filter(Boolean), padre: v('padre').value, cuando: v('cuando').value }; });
       }
       return c;
     };
@@ -1011,8 +1034,11 @@ const views = {
     };
     form.onclick = e => {
       if (e.target.closest('[data-preview]')) return preview(read(), 'con los cambios de esta pantalla, aunque no estén guardados').catch(showErr);
-      const add = e.target.closest('[data-add-extra]'), del = e.target.closest('[data-del-extra]');
-      if (add) add.previousElementSibling.insertAdjacentHTML('beforeend', extraRow());
+      const add = e.target.closest('[data-add-extra]'), del = e.target.closest('[data-del-extra]'), sub = e.target.closest('[data-add-sub]');
+      const sec = e.target.closest('[data-sec]'), s = sec && base.find(x => String(x.n) === sec.dataset.sec);
+      if (add) add.previousElementSibling.insertAdjacentHTML('beforeend', extraRow({}, s));
+      if (sub) { sec.querySelector('[data-extras]').insertAdjacentHTML('beforeend', extraRow({ padre: sub.dataset.addSub }, s));
+        sec.querySelector('[data-extras]').lastElementChild.querySelector('[name=label]').focus(); }
       if (del) del.closest('[data-extra]').remove();
     };
     form.onsubmit = async e => {
@@ -1709,12 +1735,16 @@ const nomTabs = {
     const admin = nomAdmin(), cfg = N.d.config, today = ymd();
     const list = L => tbl(['Nombre', 'Planta', ...(admin ? ['#Sueldo', '#Diario', '#Hora extra', '#Bono mes'] : []), 'Ingreso'], L.map(e => `<tr>
       ${td(`<b>${esc(e.nombre)}</b> ${e.menor ? nChip('menor', BAD) : ''} ${e.baja && e.baja <= today ? nChip('baja ' + fcy(e.baja)) : ''}${e.notas ? `<br><span class="text-[11px] text-on-surface-variant">${esc(e.notas)}</span>` : ''}
-        <span class="flex gap-4 mt-1"><button type="button" data-act="editemp" data-id="${e.id}" class="text-label-sm text-primary font-semibold py-1">Editar</button>
+        <span class="flex flex-wrap gap-x-4 mt-1 whitespace-nowrap"><button type="button" data-act="editemp" data-id="${e.id}" class="text-label-sm text-primary font-semibold py-1">Editar</button>
+        ${e.baja && e.baja <= today ? `<button type="button" data-act="altaemp" data-id="${e.id}" class="text-label-sm text-secondary font-semibold py-1"><span>Reactivar</span></button>`
+          : `<button type="button" data-act="bajaemp" data-id="${e.id}" class="text-label-sm text-tertiary font-semibold py-1" aria-label="Dar de baja a ${esc(e.nombre)}"><span>Dar de baja</span></button>`}
         ${me.role === 'admin' ? `<button type="button" data-act="delemp" data-id="${e.id}" class="text-label-sm text-error font-semibold py-1" aria-label="Borrar a ${esc(e.nombre)}"><span>Borrar</span></button>` : ''}</span>`)}${td(esc(e.planta))}
       ${admin ? td(`${money(+e.sueldo || 0)}<br><span class="text-[11px] text-on-surface-variant">${e.pago === 'dia' ? 'por día' : 'semanal'}</span>`, 1) + td(money(salDiario(e)), 1)
         + td(`${money(teRate(e))}<br><span class="text-[11px] text-on-surface-variant">${teManual(e) ? 'tarifa propia' : 'por fórmula'}</span>`, 1) + td(+e.bono ? money(+e.bono) : '—', 1) : ''}
       ${td(e.ingreso ? fcy(e.ingreso) : nChip('falta', WARN))}</tr>`).join(''), 'Sin empleados.');
-    const grupos = CONTRATO.filter(([k]) => admin || k !== 'confianza').map(([k, l, txt]) => [k, l, txt, nomEmps(true).filter(e => (e.contrato || 'planta') === k)]);
+    const activo = e => !e.baja || e.baja > today;
+    const grupos = [...CONTRATO.filter(([k]) => admin || k !== 'confianza').map(([k, l, txt]) => [k, l, txt, nomEmps(true).filter(e => activo(e) && (e.contrato || 'planta') === k)]),
+      ['baja', 'Dados de baja', 'Ya no trabajan aquí. Se conserva su historial; "Reactivar" los regresa.', nomEmps(true).filter(e => !activo(e))]].filter(g => g[0] !== 'baja' || g[3].length);
     const num = (k, l, step = 0.5, v = cfg?.[k]) => labeled({ label: l }, `<input class="input" type="number" min="0" step="${step}" data-cfg="${k}" value="${esc(v)}">`);
     return `<div class="flex flex-wrap items-center gap-3 mb-3"><p class="text-body-md text-on-surface-variant flex-1">${nomEmps(true).filter(e => !e.baja || e.baja >= today).length} activos${admin ? '' : ` · planta ${esc(me.plant || '')}`}</p>
       <button type="button" data-act="newemp" class="btn btn-primary"><span class="material-symbols-outlined">person_add</span>Agregar empleado</button></div>
@@ -1828,6 +1858,9 @@ async function nomClick(e) {
   else if (a === 'ialimpiar') { if (!confirmed(b)) return; N.chat = { msgs: [], cambios: [], draft: '', file: null, busy: false }; }
   // Borrar empleado: solo la cuenta dueña; doble toque para confirmar.
   else if (a === 'delemp') { if (confirmed(b)) nomSave('/api/nomina/emp/delete', { id }); return; }
+  // Dar de baja (hoy) o reactivar: se guarda como cualquier cambio del empleado; doble toque para la baja.
+  else if (a === 'bajaemp') { if (confirmed(b)) nomSave('/api/nomina/emp', { ...empById(id), baja: ymd() }); return; }
+  else if (a === 'altaemp') return nomSave('/api/nomina/emp', { ...empById(id), baja: '' });
   else if (a === 'iaaplicar') return nomAplicar().catch(err => { N.chat.busy = false; showErr(err); });
   else if (a === 'delinc') { if (confirmed(b)) nomSave('/api/nomina/inc/delete', { id }); return; }
   else if (a === 'diferir') return nomSave('/api/nomina/inc/diferir', { id });
@@ -2210,5 +2243,6 @@ addEventListener('DOMContentLoaded', () => {
   });
   document.addEventListener('click', e => { if (e.target.closest('[data-logout]')) logout(); });
   wireCll(); // botones Atendido / Pendiente de los paneles del check list del líder
+  for (const ev of ['change', 'input']) document.addEventListener(ev, e => { if (e.target.form?.id === 'report') syncSubs(e.target.form); });
   boot();
 });

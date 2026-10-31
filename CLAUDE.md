@@ -51,8 +51,10 @@ App web para **Retrabajos Industriales y Limpiezas Especializadas Polar**: los e
   el admin los corrige desde el registro (`#/fmtedit/FOLIO`, `POST /api/calidad/formato/editar`, mismo folio). REC y LIB no se
   corrigen (mueven lotes); el NC se actualiza mientras está abierto.
 - **Reportes del admin**: filtros por planta y fechas (`GET /api/reports?planta=&desde=&hasta=&id=`) y exportar a CSV para Excel.
-- **Personalización del formulario** (pestaña Formulario, solo admin): renombrar secciones/preguntas, ocultar las no protegidas,
-  agregar preguntas propias (`x_...`). Los campos en `PROTECTED` los usan los cálculos: se renombran pero no se ocultan. La config va en
+- **Personalización del formulario** (pestaña Formulario, solo admin, **control total**): renombrar, quitar (ocultar) cualquier sección o pregunta,
+  hacerla obligatoria o no (`fields[k].required`), agregar preguntas propias (`x_...`) y **subpreguntas** (`padre` + `cuando` opcional: van
+  adentro de otra pregunta de la sección y solo se ven/exigen con esa respuesta; `syncSubs` en la app, `clean` en el servidor). Los campos de
+  `PROTECTED` los usa un cálculo: si se quitan, ese cálculo queda vacío. Solo la 1ª columna de una tabla fija no se quita (`canHide`). La config va en
   `settings.form` y se valida con `cleanConfig`. **Con IA**: la IA solo *propone* y el admin aplica o descarta.
 - **IA** (proveedor compatible con OpenAI, `AI_BASE_URL`): califica cada reporte (resumen, calidad 0-100, retroalimentación), resumen semanal,
   propuestas del formulario. Modelo **deepseek-v4-flash** (rápido y barato; gpt-oss-120b tardaba ~1 min). Al reporte solo se le mandan las respuestas con valor (`formatAnswers`) para gastar menos tokens. Si la IA falla, el reporte se guarda
@@ -74,6 +76,7 @@ App web para **Retrabajos Industriales y Limpiezas Especializadas Polar**: los e
   "Aplicar" las guarda con las rutas normales (`nomAplicar`). Las pestañas de captura manual siguen igual Botón "Limpiar historial" del chat.
   **Tipo de empleado** (`contrato`, `CONTRATOS`): de planta, provisional (temporales: albañiles…) o de confianza (jefes). Los de confianza y sus
   incidencias solo los ve el admin: `nomEmp` / `GET /api/nomina` no se los dan a nadie más (tampoco salen en la plática PL-FOR-25).
+  **Dar de baja / Reactivar** (todos los que capturan nómina): pone o quita la fecha de baja; los dados de baja van en su propia lista.
   **Borrar empleado**: cualquier admin; se borran también sus incidencias sin pagar.
 
 - **Check list del líder de grupo PL-FOR-43 (MOD-009)**: rol `lider` (Cuentas, siempre con planta); el servidor solo le deja las rutas de

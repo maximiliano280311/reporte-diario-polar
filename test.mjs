@@ -172,6 +172,18 @@ assert.ok(!prev.some(s => s.n === 9) && prev.find(s => s.n === 2).title === 'Gen
 assert.ok((await ok('GET', '/api/questions')).data.some(s => s.n === 9)); // no se guardó
 assert.equal((await call('POST', '/api/form-config/preview', { config: {} }, beto)).status, 403);
 
+// Control total del admin: quitar cualquier pregunta (aunque la use un cálculo), cambiar si es obligatoria y subpreguntas.
+const pv = (await ok('POST', '/api/form-config/preview', { config: {
+  fields: { turno: { hidden: true }, manana: { required: false }, 'vehiculos.vehiculo': { hidden: true }, 'gas.tanque': { hidden: true } },
+  extra: { 9: [{ id: 'x_visita', label: '¿Hubo visita?', type: 'sino' }, { id: 'x_quien', label: '¿Quién?', type: 'text', required: true, padre: 'x_visita', cuando: 'Sí' },
+    { id: 'x_hora', label: 'Hora', type: 'time', padre: 'x_quien' }, { id: 'x_mal', label: 'Mal padre', padre: 'no_existe' }] } } }, admin)).data;
+assert.ok(!pv[0].fields?.some(f => f.id === 'turno'));
+assert.equal(pv.find(s => s.n === 13).fields[0].required, false);
+assert.ok(!pv.find(s => s.n === 3).table.cols.some(c => c.id === 'vehiculo'));
+assert.ok(pv.find(s => s.n === 4).table.cols.some(c => c.id === 'tanque')); // la primera columna de una tabla fija no se quita
+assert.deepEqual(pv.find(s => s.n === 9).fields.filter(f => f.id.startsWith('x_')).map(f => [f.id, f.padre || '', f.nivel || 0]),
+  [['x_visita', '', 0], ['x_quien', 'x_visita', 1], ['x_hora', 'x_quien', 2], ['x_mal', '', 0]]);
+
 // ---------- Nómina: solo admin y encargados con acceso; el encargado ve su planta y nunca montos ----------
 const beto2 = await login('beto@polar.test');
 const betoId = (await ok('GET', '/api/users', null, admin)).data.find(u => u.email === 'beto@polar.test').id;
@@ -368,6 +380,16 @@ await ok('POST', '/api/cll/catalogo', { ...cfg, hora_lider: '18:30', puntos: [..
 cl = (await ok('GET', '/api/cll', null, lalo)).data;
 assert.deepEqual([cl.catalogo.length, cl.catalogo.at(-1).id, cl.catalogo.at(-1).seccion, cl.catalogo.some(p => p.id === 11)], [28, 29, 'EQUIPOS Y MATERIAL', false]);
 assert.equal((await call('POST', '/api/cll/catalogo', { puntos: [] }, admin)).status, 400);
+
+// Formulario guardado con preguntas quitadas y una subpregunta condicional: el reporte se envía sin ellas.
+await ok('POST', '/api/form-config', { config: { fields: { turno: { hidden: true }, 'vehiculos.vehiculo': { hidden: true } },
+  extra: { 9: [{ id: 'x_visita', label: '¿Hubo visita?', type: 'sino', required: true }, { id: 'x_quien', label: '¿Quién?', type: 'text', required: true, padre: 'x_visita', cuando: 'Sí' }] } } }, admin);
+await ok('POST', '/api/users', { name: 'Zoe', email: 'zoe@polar.test', password: pass, plant: 'Silao' }, admin);
+const zoe = await login('zoe@polar.test'), rep0 = { presentes: '3', hubo_reportes: 'No', manana: 'Nada', vehiculos: [{ km_ini: '10', km_fin: '20' }] };
+assert.equal((await call('POST', '/api/reports', { answers: { ...rep0, x_visita: 'Sí' } }, zoe)).status, 400); // con "Sí" pide ¿Quién?
+const rz = (await ok('POST', '/api/reports', { answers: { ...rep0, x_visita: 'No', x_quien: 'se ignora' } }, zoe)).data;
+assert.deepEqual([rz.answers.turno, rz.answers.x_quien, rz.answers.vehiculos[0].recorrido], [undefined, '', '10']);
+await ok('POST', '/api/form-config', { config: {} }, admin);
 
 // Sesiones vencidas (más de 30 días) ya no sirven.
 sqlite.prepare('UPDATE sessions SET created = 0').run();
