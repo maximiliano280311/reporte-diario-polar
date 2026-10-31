@@ -932,20 +932,56 @@ const views = {
     const { base, config, protected: prot } = await api('/api/form-config'), P = new Set(prot);
     const keys = s => [...(s.fields || []).map(f => [f.id, f]), ...(s.table ? s.table.cols.map(c => [`${s.table.id}.${c.id}`, c]) : [])];
     const TYPES = { text: 'Texto', textarea: 'Texto largo', number: 'Número', sino: 'Sí / No', select: 'Lista de opciones', date: 'Fecha', time: 'Hora' };
-    // Preguntas que pueden ser "padre" de una subpregunta: las del formato (no las de tabla) y las propias ya guardadas.
-    const padres = (s, x) => [...(s.fields || []).map(f => [f.id, config.fields[f.id]?.label || f.label]),
-      ...(config.extra[s.n] || []).filter(e => e.id && e.id !== x.id).map(e => [e.id, e.label])];
-    const extraRow = (x = {}, s) => `
-      <div data-extra class="grid grid-cols-2 lg:grid-cols-4 gap-2 p-3 rounded-xl bg-surface-container-low items-end ${x.padre ? 'border-l-4 border-primary-container/60' : ''}">
-        <input type="hidden" name="id" value="${esc(x.id || '')}">
-        ${labeled({ label: x.padre ? 'Subpregunta' : 'Pregunta nueva', required: true, wide: true }, `<input class="input" name="label" value="${esc(x.label || '')}" required maxlength="120">`)}
-        ${labeled({ label: 'Tipo' }, `<select class="input" name="type">${Object.entries(TYPES).map(([v, l]) => `<option value="${v}" ${x.type === v ? 'selected' : ''}>${l}</option>`).join('')}</select>`)}
-        ${labeled({ label: 'Obligatoria', type: 'check' }, `<input type="checkbox" name="required" ${x.required ? 'checked' : ''} class="w-6 h-6 accent-[#2563eb]">`)}
-        ${labeled({ label: 'Opciones (solo para "Lista de opciones", separadas por coma)', wide: true }, `<input class="input" name="options" value="${esc((x.options || []).join(', '))}">`)}
-        ${labeled({ label: 'Va adentro de la pregunta', wide: true }, `<select class="input" name="padre"><option value="">— Ninguna (pregunta suelta) —</option>${padres(s, x).map(([v, l]) => `<option value="${esc(v)}" ${x.padre === v ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select>`)}
-        ${labeled({ label: 'Solo si la respuesta es (vacío = con cualquier respuesta)', wide: true }, `<input class="input" name="cuando" value="${esc(x.cuando || '')}" maxlength="60" placeholder="Ej. Sí">`)}
-        <button type="button" data-del-extra class="col-span-2 justify-self-end text-label-sm text-error flex items-center gap-1"><span class="material-symbols-outlined text-[16px]">delete</span>Quitar</button>
-      </div>`;
+    // Editor tipo Google Forms: una tarjeta por pregunta (texto, tipo, opciones, Obligatoria, Quitar, Subpregunta).
+    const TBASE = { text: 'Respuesta corta', textarea: 'Párrafo', number: 'Número', select: 'Lista de opciones', date: 'Fecha', time: 'Hora', checks: 'Casillas', photos: 'Fotos', check: 'Casilla' };
+    const sw = (name, on, label) => `<label class="flex items-center gap-2 text-label-md cursor-pointer select-none">${label}<span class="relative inline-flex shrink-0">
+      <input type="checkbox" name="${name}" ${on ? 'checked' : ''} class="sr-only peer"><span class="w-10 h-6 rounded-full bg-[#cbd5e1] peer-checked:bg-primary-container transition-colors"></span>
+      <span class="absolute top-1 left-1 w-4 h-4 rounded-full bg-white shadow transition-transform peer-checked:translate-x-4"></span></span></label>`;
+    const quitar = on => `<label class="cursor-pointer text-label-md font-semibold flex items-center gap-1 select-none"><input type="checkbox" name="hidden" ${on ? 'checked' : ''} class="sr-only peer">
+      <span class="material-symbols-outlined text-[20px] text-error peer-checked:hidden">delete</span><span class="text-error peer-checked:hidden">Quitar</span>
+      <span class="material-symbols-outlined text-[20px] text-primary hidden peer-checked:inline">undo</span><span class="text-primary hidden peer-checked:inline">Volver a poner</span></label>`;
+    const subBtn = '<button type="button" data-add-sub class="text-label-md font-semibold text-primary flex items-center gap-1"><span class="material-symbols-outlined text-[20px]">subdirectory_arrow_right</span>Subpregunta</button>';
+    const calc = k => P.has(k) ? '<span class="material-symbols-outlined text-[20px] text-tertiary" title="La usa un cálculo automático: si la quitas, ese cálculo queda vacío">calculate</span>' : '';
+    const card = (attrs, depth, body, foot) => `<div ${attrs} data-depth="${depth}" style="margin-left:${depth * 20}px"
+      class="rounded-xl border border-[#e2e8f0] border-l-4 ${depth ? 'border-l-primary-container/50' : 'border-l-primary-container'} bg-surface-container-lowest p-4 flex flex-col gap-3 transition-opacity">
+      ${body}<div class="flex flex-wrap items-center justify-end gap-x-5 gap-y-2 pt-3 border-t border-[#f1f5f9]">${foot}</div></div>`;
+    const optRow = (o = '') => `<div class="flex items-center gap-2"><span class="material-symbols-outlined text-[18px] text-on-surface-variant">radio_button_unchecked</span>
+      <input class="input !py-2 flex-1" data-opt value="${esc(o)}" maxlength="60" placeholder="Opción"><button type="button" data-del-opt class="w-9 h-9 flex items-center justify-center rounded-full text-on-surface-variant hover:bg-surface-container-high" aria-label="Quitar opción"><span class="material-symbols-outlined text-[18px]">close</span></button></div>`;
+    // Pregunta del formato (no se borra del todo: se quita y se puede volver a poner).
+    const baseCard = (k, f, depth = 0) => { const fc = config.fields[k] || {};
+      return card(`data-field="${esc(k)}" data-q="${esc(k)}"`, depth, `
+        <div class="flex flex-wrap items-center gap-2 ${fc.hidden ? 'opacity-50' : ''}" data-dim>
+          <input class="input flex-1 min-w-[180px] !text-base font-medium" name="label" value="${esc(fc.label || f.label)}" maxlength="120" aria-label="Texto de la pregunta">
+          <span class="chip bg-surface-container text-on-surface-variant">${TBASE[f.type || 'text'] || 'Respuesta corta'}</span></div>
+        ${f.options?.length && !k.includes('.') ? `<p class="text-body-sm text-on-surface-variant">${f.options.map(o => '○ ' + esc(o)).join(' &nbsp; ')}</p>` : ''}`,
+        `${calc(k)}${k.includes('.') ? '' : subBtn}${s0(k) ? '<span class="text-label-sm text-on-surface-variant">Renglones fijos</span>' : quitar(fc.hidden)}
+         ${f.auto ? '<span class="text-label-sm text-on-surface-variant">Se calcula sola</span>' : sw('required', fc.required ?? !!f.required, 'Obligatoria')}`); };
+    let s0 = () => false; // primera columna de una tabla fija (no se quita); se define por sección
+    // Pregunta propia (se borra con el bote). Subpregunta: va adentro de otra y puede mostrarse solo con cierta respuesta.
+    const extraCard = (x, depth, padreTxt = '') => card(`data-extra data-q="${esc(x.id)}" data-padre="${esc(x.padre || '')}"`, depth, `
+        ${x.padre ? `<p class="text-label-sm text-primary flex items-center gap-1"><span class="material-symbols-outlined text-[16px]">subdirectory_arrow_right</span>Subpregunta de «${esc(padreTxt)}»</p>` : ''}
+        <div class="flex flex-wrap items-center gap-2">
+          <input class="input flex-1 min-w-[180px] !text-base font-medium" name="label" value="${esc(x.label || '')}" maxlength="120" placeholder="Pregunta" aria-label="Texto de la pregunta">
+          <select class="input !w-auto" name="type" aria-label="Tipo de respuesta">${Object.entries(TYPES).map(([v, l]) => `<option value="${v}" ${(x.type || 'text') === v ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
+        <div data-opts class="${x.type === 'select' ? '' : 'hidden'} flex flex-col gap-2">${(x.options?.length ? x.options : ['']).map(optRow).join('')}
+          <button type="button" data-add-opt class="self-start text-label-md text-primary font-semibold flex items-center gap-1"><span class="material-symbols-outlined text-[18px]">add</span>Agregar opción</button></div>
+        <p data-sino class="${x.type === 'sino' ? '' : 'hidden'} text-body-sm text-on-surface-variant">○ Sí &nbsp; ○ No</p>
+        ${x.padre ? `<label class="flex flex-wrap items-center gap-2 text-label-md text-on-surface-variant">Mostrar solo si la respuesta es
+          <input class="input !py-2 !w-40" name="cuando" value="${esc(x.cuando || '')}" maxlength="60" placeholder="cualquiera"></label>` : ''}`,
+      `${subBtn}<button type="button" data-del-extra class="text-label-md font-semibold text-error flex items-center gap-1"><span class="material-symbols-outlined text-[20px]">delete</span>Borrar</button>
+       ${sw('required', !!x.required, 'Obligatoria')}`);
+    // Orden en pantalla: preguntas del formato y, justo después de cada una, sus subpreguntas (como las ve el encargado).
+    const cardsOf = s => {
+      const L = (s.fields || []).map(f => ({ id: f.id, depth: 0, html: d => baseCard(f.id, f, d), label: config.fields[f.id]?.label || f.label }));
+      for (const x of config.extra[s.n] || []) {
+        let i = x.padre ? L.findIndex(y => y.id === x.padre) : -1;
+        if (i < 0) { L.push({ id: x.id, depth: 0, html: d => extraCard({ ...x, padre: '' }, d), label: x.label }); continue; }
+        const d = L[i].depth, padreTxt = L[i].label;
+        while (i + 1 < L.length && L[i + 1].depth > d) i++;
+        L.splice(i + 1, 0, { id: x.id, depth: d + 1, html: dd => extraCard(x, dd, padreTxt), label: x.label });
+      }
+      return L.map(y => y.html(y.depth)).join('');
+    };
     // Lista legible de lo que cambia entre dos configuraciones (para revisar la propuesta de la IA).
     const diff = (a, b) => base.flatMap(s => {
       const out = [], x = a.sections[s.n] || {}, y = b.sections[s.n] || {}, ea = a.extra[s.n] || [], eb = b.extra[s.n] || [];
@@ -977,25 +1013,22 @@ const views = {
         <button id="ai-go" class="btn btn-primary ${WIDE ? 'self-start' : ''}"><span class="material-symbols-outlined">auto_awesome</span>Proponer cambios</button>
         <div id="ai-out"></div>
       </section>
-      <form id="cfg" class="flex flex-col gap-4">
-        ${base.map(s => { const sc = config.sections[s.n] || {}; return `
-        <section data-sec="${s.n}" class="card p-4 flex flex-col gap-3">
-          <div class="flex flex-wrap items-end gap-3">
-            <label class="flex-1 min-w-[200px] flex flex-col gap-1 text-label-md text-on-surface-variant"><span>Sección ${s.n} — título</span>
-              <input class="input" name="stitle" value="${esc(sc.title || '')}" placeholder="${esc(s.title)}"></label>
-            <label class="flex items-center gap-2 h-12 text-label-md"><input type="checkbox" name="shidden" ${sc.hidden ? 'checked' : ''} class="w-5 h-5 accent-[#2563eb]">Quitar sección</label>
+      <form id="cfg" class="flex flex-col gap-5">
+        ${base.map(s => { const sc = config.sections[s.n] || {}; s0 = k => !!s.table?.fixed && k === `${s.table.id}.${s.table.cols[0].id}`; return `
+        <section data-sec="${s.n}" class="card overflow-hidden ${sc.hidden ? 'opacity-60' : ''}">
+          <div class="bg-primary-container text-white px-4 py-2 text-label-md flex items-center justify-between gap-2"><span>Sección ${s.n} de ${base.length}</span>
+            <label class="cursor-pointer flex items-center gap-1 select-none"><input type="checkbox" name="shidden" ${sc.hidden ? 'checked' : ''} class="sr-only peer">
+              <span class="material-symbols-outlined text-[18px] peer-checked:hidden">delete</span><span class="peer-checked:hidden">Quitar sección</span>
+              <span class="material-symbols-outlined text-[18px] hidden peer-checked:inline">undo</span><span class="hidden peer-checked:inline">Volver a poner la sección</span></label></div>
+          <div class="p-4 flex flex-col gap-3">
+            <input class="input !text-xl font-semibold" name="stitle" value="${esc(sc.title || s.title)}" maxlength="120" aria-label="Título de la sección ${s.n}">
+            ${s.hint ? `<p class="text-body-sm text-on-surface-variant">${esc(s.hint)}</p>` : ''}
+            <div data-qs class="flex flex-col gap-3">${cardsOf(s)}</div>
+            ${s.table ? `<div class="rounded-xl border border-[#e2e8f0] p-4 flex flex-col gap-3 bg-surface-container-low">
+              <p class="font-medium flex items-center gap-2"><span class="material-symbols-outlined text-primary">table_rows</span>Tabla — el encargado llena una fila por ${esc(s.table.item || 'renglón')}</p>
+              ${s.table.cols.map(c => baseCard(`${s.table.id}.${c.id}`, c)).join('')}</div>` : ''}
+            <button type="button" data-add-extra class="btn border-[1.5px] border-dashed border-[#94a3b8] text-primary"><span class="material-symbols-outlined">add_circle</span>Agregar pregunta</button>
           </div>
-          <details><summary class="text-label-lg text-primary flex items-center gap-1"><span class="material-symbols-outlined text-[18px]">expand_more</span>Preguntas del formato (${keys(s).length})</summary>
-            <div class="flex flex-col gap-2 mt-2">${keys(s).map(([k, f]) => { const fc = config.fields[k] || {}, fija = s.table?.fixed && k === `${s.table.id}.${s.table.cols[0].id}`; return `
-              <div data-field="${k}" class="flex flex-wrap items-center gap-x-3 gap-y-1 py-1 border-b border-[#f1f5f9]">
-                <input class="input flex-1 min-w-[200px]" name="label" value="${esc(fc.label || '')}" placeholder="${esc(f.label)}" aria-label="Nuevo texto para ${esc(f.label)}">
-                ${P.has(k) ? '<span class="material-symbols-outlined text-[18px] text-tertiary" title="La usa un cálculo automático: si la quitas, ese cálculo queda vacío">calculate</span>' : ''}
-                ${f.auto ? '<span class="text-label-sm text-on-surface-variant">Se calcula sola</span>' : `<label class="flex items-center gap-1.5 text-label-md"><input type="checkbox" name="required" ${(fc.required ?? !!f.required) ? 'checked' : ''} class="w-5 h-5 accent-[#2563eb]">Obligatoria</label>`}
-                ${fija ? '<span class="text-label-sm text-on-surface-variant">Renglones fijos</span>' : `<label class="flex items-center gap-1.5 text-label-md text-error"><input type="checkbox" name="hidden" ${fc.hidden ? 'checked' : ''} class="w-5 h-5 accent-[#ba1a1a]">Quitar</label>`}
-                ${s.table && k.includes('.') ? '' : `<button type="button" data-add-sub="${esc(k)}" class="text-label-sm text-primary font-semibold flex items-center gap-0.5"><span class="material-symbols-outlined text-[16px]">subdirectory_arrow_right</span>Subpregunta</button>`}
-              </div>`; }).join('')}</div></details>
-          <div data-extras class="flex flex-col gap-2">${(config.extra[s.n] || []).map(x => extraRow(x, s)).join('')}</div>
-          <button type="button" data-add-extra class="btn border-[1.5px] border-[#cbd5e1] text-primary ${WIDE ? 'self-start' : ''}"><span class="material-symbols-outlined">add</span>Agregar pregunta</button>
         </section>`; }).join('')}
         <div class="sticky bottom-24 lg:bottom-4 grid grid-cols-2 gap-2">
           <button type="button" data-preview class="btn bg-surface-container-lowest border-[1.5px] border-[#cbd5e1] text-primary shadow-lg"><span class="material-symbols-outlined">visibility</span>Vista previa</button>
@@ -1009,12 +1042,12 @@ const views = {
       const c = { sections: {}, fields: {}, extra: {} };
       for (const sec of form.querySelectorAll('[data-sec]')) {
         const n = sec.dataset.sec;
-        c.sections[n] = { title: sec.querySelector('[name=stitle]').value, hidden: !!sec.querySelector('[name=shidden]')?.checked };
+        c.sections[n] = { title: sec.querySelector('[name=stitle]').value, hidden: sec.querySelector('[name=shidden]').checked };
         for (const f of sec.querySelectorAll('[data-field]')) c.fields[f.dataset.field] = { label: f.querySelector('[name=label]').value, hidden: !!f.querySelector('[name=hidden]')?.checked,
           ...(f.querySelector('[name=required]') && { required: f.querySelector('[name=required]').checked }) };
         c.extra[n] = [...sec.querySelectorAll('[data-extra]')].map(x => { const v = k => x.querySelector(`[name=${k}]`);
-          return { id: v('id').value, label: v('label').value, type: v('type').value, required: v('required').checked,
-            options: v('options').value.split(',').map(o => o.trim()).filter(Boolean), padre: v('padre').value, cuando: v('cuando').value }; });
+          return { id: x.dataset.q, label: v('label').value, type: v('type').value, required: v('required').checked, padre: x.dataset.padre, cuando: v('cuando')?.value || '',
+            options: [...x.querySelectorAll('[data-opt]')].map(o => o.value.trim()).filter(Boolean) }; });
       }
       return c;
     };
@@ -1034,17 +1067,33 @@ const views = {
     };
     form.onclick = e => {
       if (e.target.closest('[data-preview]')) return preview(read(), 'con los cambios de esta pantalla, aunque no estén guardados').catch(showErr);
-      const add = e.target.closest('[data-add-extra]'), del = e.target.closest('[data-del-extra]'), sub = e.target.closest('[data-add-sub]');
-      const sec = e.target.closest('[data-sec]'), s = sec && base.find(x => String(x.n) === sec.dataset.sec);
-      if (add) add.previousElementSibling.insertAdjacentHTML('beforeend', extraRow({}, s));
-      if (sub) { sec.querySelector('[data-extras]').insertAdjacentHTML('beforeend', extraRow({ padre: sub.dataset.addSub }, s));
-        sec.querySelector('[data-extras]').lastElementChild.querySelector('[name=label]').focus(); }
-      if (del) del.closest('[data-extra]').remove();
+      const t = e.target, sec = t.closest('[data-sec]'), qs = sec?.querySelector('[data-qs]');
+      const nuevo = () => 'x_' + Math.random().toString(36).slice(2, 10); // id propio desde ya: así se le pueden poner subpreguntas antes de guardar
+      // Una tarjeta y todas sus subpreguntas (van juntas, justo después de ella).
+      const bloque = c => { const out = [c]; let n = c.nextElementSibling;
+        while (n && +n.dataset.depth > +c.dataset.depth) { out.push(n); n = n.nextElementSibling; } return out; };
+      if (t.closest('[data-add-extra]')) { qs.insertAdjacentHTML('beforeend', extraCard({ id: nuevo() }, 0)); qs.lastElementChild.querySelector('[name=label]').focus(); }
+      const sub = t.closest('[data-add-sub]');
+      if (sub) {
+        const c = sub.closest('[data-q]'), last = bloque(c).at(-1);
+        if (c.closest('.bg-surface-container-low')) return; // columnas de tabla: sin subpreguntas
+        last.insertAdjacentHTML('afterend', extraCard({ id: nuevo(), padre: c.dataset.q }, +c.dataset.depth + 1, c.querySelector('[name=label]').value));
+        last.nextElementSibling.querySelector('[name=label]').focus();
+      }
+      if (t.closest('[data-del-extra]')) bloque(t.closest('[data-extra]')).forEach(x => x.remove());
+      if (t.closest('[data-add-opt]')) { t.closest('[data-add-opt]').insertAdjacentHTML('beforebegin', optRow()); t.closest('[data-opts]').querySelectorAll('[data-opt]').forEach((o, i, all) => i === all.length - 1 && o.focus()); }
+      if (t.closest('[data-del-opt]')) t.closest('[data-del-opt]').parentElement.remove();
+    };
+    form.onchange = e => {
+      const t = e.target, c = t.closest('[data-extra]');
+      if (t.name === 'type' && c) { c.querySelector('[data-opts]').classList.toggle('hidden', t.value !== 'select'); c.querySelector('[data-sino]').classList.toggle('hidden', t.value !== 'sino'); }
+      if (t.name === 'hidden') t.closest('[data-field]').querySelector('[data-dim]').classList.toggle('opacity-50', t.checked);
+      if (t.name === 'shidden') t.closest('[data-sec]').classList.toggle('opacity-60', t.checked);
     };
     form.onsubmit = async e => {
       e.preventDefault();
       const c = read(), bad = Object.values(c.extra).flat().find(x => x.type === 'select' && !x.options.length);
-      if (bad) return showErr(new Error(`La pregunta "${bad.label}" es una lista: escribe sus opciones separadas por coma`));
+      if (bad) return showErr(new Error(`La pregunta "${bad.label}" es una lista de opciones: agrégale al menos una opción`));
       const btn = form.querySelector('.btn-primary'); btn.disabled = true;
       try { await save(c); } catch (err) { showErr(err); btn.disabled = false; }
     };

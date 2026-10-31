@@ -51,7 +51,8 @@ App web para **Retrabajos Industriales y Limpiezas Especializadas Polar**: los e
   el admin los corrige desde el registro (`#/fmtedit/FOLIO`, `POST /api/calidad/formato/editar`, mismo folio). REC y LIB no se
   corrigen (mueven lotes); el NC se actualiza mientras está abierto.
 - **Reportes del admin**: filtros por planta y fechas (`GET /api/reports?planta=&desde=&hasta=&id=`) y exportar a CSV para Excel.
-- **Personalización del formulario** (pestaña Formulario, solo admin, **control total**): renombrar, quitar (ocultar) cualquier sección o pregunta,
+- **Personalización del formulario** (pestaña Formulario, solo admin, **control total**, editor estilo Google Forms: una tarjeta por pregunta con
+  texto, tipo, opciones, interruptor Obligatoria, Quitar/Borrar y Subpregunta): renombrar, quitar (ocultar) cualquier sección o pregunta,
   hacerla obligatoria o no (`fields[k].required`), agregar preguntas propias (`x_...`) y **subpreguntas** (`padre` + `cuando` opcional: van
   adentro de otra pregunta de la sección y solo se ven/exigen con esa respuesta; `syncSubs` en la app, `clean` en el servidor). Los campos de
   `PROTECTED` los usa un cálculo: si se quitan, ese cálculo queda vacío. Solo la 1ª columna de una tabla fija no se quita (`canHide`). La config va en
