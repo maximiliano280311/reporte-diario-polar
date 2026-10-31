@@ -71,6 +71,8 @@ App web para **Retrabajos Industriales y Limpiezas Especializadas Polar**: los e
   El admin ve todo (pestaña Nómina con totales, cierres, sueldos y parámetros). Todo encargado nuevo trae acceso; el admin lo quita o lo da con la casilla "Nómina" en Cuentas
   (`users.nomina`) y ve Capturar, Incidencias, Bonos, Vacaciones y Empleados **de su planta y sin montos**: el servidor quita sueldos y la cantidad
   de bonos/descuentos (`empOut` / `incOut`). Áreas: Querétaro, Silao y Administración. El cálculo de la semana lo hace el panel del admin.
+  **Periodo de pago por planta** (Parámetros, `settings.nomina`): día de inicio de la semana (`inicio`) y `desfase` (−1 = semana en curso,
+  0 = última completa, 1-2 = semanas de atraso; p. ej. Querétaro paga del 26 al 1 y Silao del 19 al 25 el mismo sábado) — `periodo()`.
   **Asistente IA** (pestaña solo admin, `POST /api/nomina/ai`): chat que acepta Excel .xlsx o CSV (se leen en el navegador sin librerías,
   `leerArchivo`) y **solo propone** altas/cambios de empleados e incidencias (`cleanNomCambios`); el admin edita o quita cada propuesta y
   "Aplicar" las guarda con las rutas normales (`nomAplicar`). Las pestañas de captura manual siguen igual Botón "Limpiar historial" del chat.

@@ -319,6 +319,11 @@ assert.equal(calP.registros.find(r => r.folio === recP.folio).porEntregar, 0);
 const movP = (await ok('GET', '/api/defaults', null, beto2)).data.mov['kh méxico|p-9'];
 assert.deepEqual([movP.recibido, movP.entregado], [10, 10]); // la sección 7 suma las dos entregas
 
+// Periodo de pago por planta: día de inicio y desfase (Silao paga una semana atrás); solo admin.
+const cfgN = (await ok('POST', '/api/nomina/config', { config: { inicio: { Querétaro: 1, Silao: 1 }, desfase: { Querétaro: -1, Silao: 1, Administración: 9 } } }, admin)).data;
+assert.deepEqual([cfgN.inicio.Silao, cfgN.desfase.Silao, cfgN.desfase.Querétaro, cfgN.desfase.Administración], [1, 1, -1, undefined]);
+assert.equal((await call('POST', '/api/nomina/config', { config: {} }, beto)).status, 403);
+
 // ---------- Nómina: empleados provisionales y de confianza (estos solo los ve el admin) ----------
 await ok('POST', '/api/users/nomina', { id: betoId, nomina: true }, admin);
 await ok('POST', '/api/nomina/emp', { nombre: 'Jefe Q', planta: 'Querétaro', contrato: 'confianza', sueldo: 9000 }, admin);

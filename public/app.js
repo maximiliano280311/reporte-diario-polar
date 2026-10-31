@@ -1418,10 +1418,11 @@ const amountOf = (i, e) => {
   return r2(t.s * (+i.cantidad || 0) * (t.b === 'dia' ? salDiario(e) : t.b === 'hora' ? teRate(e) : 1));
 };
 // Periodo pagado: la semana del área que termina antes del sábado de pago.
+// Periodo que se paga en ese día de pago: la semana de la planta (según su día de inicio), menos su desfase en semanas.
 function periodo(area, payday) {
-  const end = (+(N.d.config.inicio?.[area] ?? 6) + 6) % 7, d = pdate(payday);
+  const end = (+(N.d.config?.inicio?.[area] ?? 6) + 6) % 7, d = pdate(payday), lag = 7 * (+(N.d.config?.desfase?.[area]) || 0);
   while (d.getDay() !== end) d.setDate(d.getDate() - 1);
-  return { ini: addD(ymd(d), -6), fin: ymd(d) };
+  return { ini: addD(ymd(d), -6 - lag), fin: addD(ymd(d), -lag) };
 }
 // Renglones de la semana: sueldo base (proporcional si entró o salió a media semana) + incidencias sin pagar (las atrasadas se arrastran).
 function calcSemana(payday) {
@@ -1757,7 +1758,11 @@ const nomTabs = {
         ${num('diasDivisor', 'Días para sacar el sueldo diario')}${num('horasJornada', 'Horas por jornada')}
         ${labeled({ label: 'Factor de hora extra' }, sel('data-cfg="factorTE"', [[1, 'Sencilla (×1)'], [1.5, '×1.5'], [2, 'Doble (×2, LFT primeras 9 h)'], [3, 'Triple (×3, después de 9 h)']], cfg.factorTE))}
         ${num('bonoDefault', 'Bono de puntualidad por defecto', 1)}${num('porcentaje', 'Comisión del depósito al contador (%)', 0.1)}
-        ${N.d.areas.map(a => labeled({ label: `${a} · la semana empieza en` }, sel(`data-inicio="${esc(a)}"`, DOWL.map((d, k) => [k, d]), cfg.inicio?.[a] ?? 6))).join('')}
+        ${N.d.areas.map(a => `<div class="col-span-2 lg:col-span-4 grid grid-cols-2 lg:grid-cols-3 gap-3 p-3 rounded-xl bg-surface-container-low items-end">
+          <p class="col-span-2 lg:col-span-3 font-semibold">${esc(a)} · periodo de pago</p>`
+          + labeled({ label: 'La semana empieza en' }, sel(`data-inicio="${esc(a)}"`, DOWL.map((d, k) => [k, d]), cfg.inicio?.[a] ?? 6))
+          + labeled({ label: 'Qué semana se paga' }, sel(`data-desfase="${esc(a)}"`, [[-1, 'La semana en curso (termina después del pago)'], [0, 'La última semana completa'], [1, 'Con 1 semana de desfase'], [2, 'Con 2 semanas de desfase']], cfg.desfase?.[a] ?? 0))
+          + `<p class="col-span-2 lg:col-span-1 self-center text-body-sm">El pago del ${fc(N.payday)} cubre del <b>${fc(periodo(a, N.payday).ini)}</b> al <b>${fc(periodo(a, N.payday).fin)}</b></p></div>`).join('')}
       </div>
       <div class="p-3 rounded-xl bg-surface-container-low grid grid-cols-1 sm:grid-cols-2 gap-3 items-center">
         ${labeled({ label: 'Calculadora: sueldo semanal' }, `<input class="input" type="number" min="0" step="50" id="calcSue" value="${esc(N.calcSue)}">`)}<div id="calcOut" class="text-body-md">${calcOut(N.calcSue)}</div></div>
@@ -1930,6 +1935,7 @@ function nomSubmit(e) {
     const config = { inicio: {} };
     f.querySelectorAll('[data-cfg]').forEach(x => { config[x.dataset.cfg] = x.value; });
     f.querySelectorAll('[data-inicio]').forEach(x => { config.inicio[x.dataset.inicio] = Number(x.value); });
+    config.desfase = {}; f.querySelectorAll('[data-desfase]').forEach(x => { config.desfase[x.dataset.desfase] = Number(x.value); });
     return nomSave('/api/nomina/config', { config });
   }
 }

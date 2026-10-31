@@ -932,6 +932,8 @@ export function createApp({ db, files, env = {} }) {
       for (const k of ['diasDivisor', 'horasJornada', 'factorTE']) c[k] = pos(b[k]) ?? c[k];
       for (const k of ['porcentaje', 'bonoDefault']) if (Number(b[k]) >= 0) c[k] = Number(b[k]);
       for (const a of NOM_AREAS) { const d = Number(b.inicio?.[a]); if (Number.isInteger(d) && d >= 0 && d <= 6) c.inicio = { ...c.inicio, [a]: d }; }
+      // Desfase: qué semana paga cada planta: -1 = la semana en curso, 0 = la última completa, 1-2 = semanas de atraso.
+      for (const a of NOM_AREAS) { const w = Number(b.desfase?.[a]); if ([-1, 0, 1, 2].includes(w)) c.desfase = { ...c.desfase, [a]: w }; }
       await db.run("INSERT INTO settings(key, value) VALUES ('nomina', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value", JSON.stringify(c));
       return json(200, c);
     }),
