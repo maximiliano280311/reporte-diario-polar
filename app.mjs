@@ -726,7 +726,6 @@ export function createApp({ db, files, env = {} }) {
     return t ? db.get("SELECT u.id, u.name, u.email, u.role, u.plant, u.nomina FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token = ? AND s.created > ? AND u.status = 'activo'",
       t, Date.now() - SESSION_MS) : null;
   };
-  const isOwner = user => !!ADMIN_EMAIL && user.role === 'admin' && user.email === ADMIN_EMAIL.trim().toLowerCase();
   const adminOnly = fn => (req, user, out) => user.role !== 'admin' ? json(403, { error: 'Solo admin' }) : fn(req, user, out);
 
   // ---------- Nómina ----------
@@ -824,14 +823,13 @@ export function createApp({ db, files, env = {} }) {
       await db.run('UPDATE nom_incs SET emp_id = ?, tipo = ?, fecha = ?, aplicado = ?, data = ? WHERE id = ?', emp.id, x.tipo, x.fecha, aplicado ? 1 : 0, JSON.stringify(x.data), r.id);
       return json(200, { ok: true });
     }),
-    // Borrar un empleado (solo la cuenta dueña). Se van sus incidencias sin pagar; las pagadas se quedan en el historial de cierres.
-    'POST /api/nomina/emp/delete': async (req, user) => {
-      if (!isOwner(user)) return json(403, { error: 'Solo el dueño de la cuenta puede borrar empleados' });
+    // Borrar un empleado (cualquier admin). Se van sus incidencias sin pagar; las pagadas se quedan en el historial de cierres.
+    'POST /api/nomina/emp/delete': adminOnly(async (req, user) => {
       const e = await nomEmp((await body(req)).id, user);
       await db.run('DELETE FROM nom_incs WHERE emp_id = ? AND aplicado = 0', e.id);
       await db.run('DELETE FROM nom_emps WHERE id = ?', e.id);
       return json(200, { ok: true });
-    },
+    }),
     'POST /api/nomina/inc/delete': nomOnly(async (req, user) => {
       const r = await incRow((await body(req)).id);
       if (user.role !== 'admin' && (r.area !== user.plant || r.aplicado)) throw httpError(403, 'Solo puedes borrar incidencias de tu planta que aún no se pagan');
@@ -1004,8 +1002,7 @@ export function createApp({ db, files, env = {} }) {
       return json(200, { ok: true });
     },
 
-    // owner: la cuenta dueña (ADMIN_EMAIL); solo ella borra empleados de nómina.
-    'GET /api/me': (req, user) => json(200, { ...user, owner: isOwner(user) }),
+    'GET /api/me': (req, user) => json(200, user),
 
     // Cambiar mi contraseña (pide la actual). Cierra las demás sesiones; esta sigue abierta con una sesión nueva.
     'POST /api/me/password': async (req, user, out) => {

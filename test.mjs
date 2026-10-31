@@ -220,16 +220,14 @@ await ok('POST', '/api/nomina/inc/delete', { id: ids[0] }, beto2);
 await ok('POST', '/api/users/nomina', { id: betoId, nomina: false }, admin);
 assert.equal((await call('GET', '/api/nomina', null, beto2)).status, 403); // se le quitó el acceso
 
-// Borrar empleado: solo la cuenta dueña (ADMIN_EMAIL); se van sus incidencias sin pagar.
+// Borrar empleado: cualquier admin; se van sus incidencias sin pagar.
 await ok('POST', '/api/users', { name: 'Admin 2', email: 'admin2@polar.test', password: pass, role: 'admin' }, admin);
 const admin2 = await login('admin2@polar.test');
-assert.deepEqual([(await ok('GET', '/api/me', null, admin)).data.owner, (await ok('GET', '/api/me', null, admin2)).data.owner], [true, false]);
 await ok('POST', '/api/nomina/emp', { nombre: 'Temporal', planta: 'Querétaro', sueldo: 100 }, admin);
 const tmpEmp = (await ok('GET', '/api/nomina', null, admin)).data.emps.find(e => e.nombre === 'Temporal');
 await ok('POST', '/api/nomina/inc', { emps: [tmpEmp.id], tipo: 'falta', fecha: hoy, cantidad: 1 }, admin);
-assert.equal((await call('POST', '/api/nomina/emp/delete', { id: tmpEmp.id }, admin2)).status, 403); // otro admin no
 assert.equal((await call('POST', '/api/nomina/emp/delete', { id: tmpEmp.id }, beto2)).status, 403); // encargado no
-await ok('POST', '/api/nomina/emp/delete', { id: tmpEmp.id }, admin);
+await ok('POST', '/api/nomina/emp/delete', { id: tmpEmp.id }, admin2); // otro admin también
 const nomD = (await ok('GET', '/api/nomina', null, admin)).data;
 assert.ok(!nomD.emps.some(e => e.id === tmpEmp.id) && !nomD.incs.some(i => i.empleadoId === tmpEmp.id));
 

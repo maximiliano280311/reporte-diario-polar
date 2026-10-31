@@ -1710,7 +1710,7 @@ const nomTabs = {
     const list = L => tbl(['Nombre', 'Planta', ...(admin ? ['#Sueldo', '#Diario', '#Hora extra', '#Bono mes'] : []), 'Ingreso'], L.map(e => `<tr>
       ${td(`<b>${esc(e.nombre)}</b> ${e.menor ? nChip('menor', BAD) : ''} ${e.baja && e.baja <= today ? nChip('baja ' + fcy(e.baja)) : ''}${e.notas ? `<br><span class="text-[11px] text-on-surface-variant">${esc(e.notas)}</span>` : ''}
         <span class="flex gap-4 mt-1"><button type="button" data-act="editemp" data-id="${e.id}" class="text-label-sm text-primary font-semibold py-1">Editar</button>
-        ${me.owner ? `<button type="button" data-act="delemp" data-id="${e.id}" class="text-label-sm text-error font-semibold py-1" aria-label="Borrar a ${esc(e.nombre)}"><span>Borrar</span></button>` : ''}</span>`)}${td(esc(e.planta))}
+        ${me.role === 'admin' ? `<button type="button" data-act="delemp" data-id="${e.id}" class="text-label-sm text-error font-semibold py-1" aria-label="Borrar a ${esc(e.nombre)}"><span>Borrar</span></button>` : ''}</span>`)}${td(esc(e.planta))}
       ${admin ? td(`${money(+e.sueldo || 0)}<br><span class="text-[11px] text-on-surface-variant">${e.pago === 'dia' ? 'por día' : 'semanal'}</span>`, 1) + td(money(salDiario(e)), 1)
         + td(`${money(teRate(e))}<br><span class="text-[11px] text-on-surface-variant">${teManual(e) ? 'tarifa propia' : 'por fórmula'}</span>`, 1) + td(+e.bono ? money(+e.bono) : '—', 1) : ''}
       ${td(e.ingreso ? fcy(e.ingreso) : nChip('falta', WARN))}</tr>`).join(''), 'Sin empleados.');
