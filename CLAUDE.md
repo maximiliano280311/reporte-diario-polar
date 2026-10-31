@@ -57,7 +57,7 @@ App web para **Retrabajos Industriales y Limpiezas Especializadas Polar**: los e
   `PROTECTED` los usa un cálculo: si se quitan, ese cálculo queda vacío. Solo la 1ª columna de una tabla fija no se quita (`canHide`). La config va en
   `settings.form` y se valida con `cleanConfig`. **Con IA**: la IA solo *propone* y el admin aplica o descarta.
 - **IA** (proveedor compatible con OpenAI, `AI_BASE_URL`): califica cada reporte (resumen, calidad 0-100, retroalimentación), resumen semanal,
-  propuestas del formulario. Modelo **deepseek-v4-flash** (rápido y barato; gpt-oss-120b tardaba ~1 min). Al reporte solo se le mandan las respuestas con valor (`formatAnswers`) para gastar menos tokens. Si la IA falla, el reporte se guarda
+  propuestas del formulario. Modelo **claude-haiku-5.5** (más listo que deepseek-v4-flash y casi igual de barato; gpt-oss-120b tardaba ~1 min). Al reporte solo se le mandan las respuestas con valor (`formatAnswers`) para gastar menos tokens. Si la IA falla, el reporte se guarda
   igual como "Sin evaluar".
 - **Cuentas**: autoregistro queda *pendiente* hasta que un admin lo aprueba con planta; el admin también crea cuentas, cambia roles
   (encargado ↔ admin; no el propio) y elimina (quita acceso, conserva reportes). `ADMIN_EMAIL` entra directo como admin.

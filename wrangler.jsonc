@@ -13,7 +13,7 @@
   "vars": {
     "ADMIN_EMAIL": "maxelpiloto3@gmail.com",
     "AI_BASE_URL": "https://api.cheaperinference.com/v1",
-    "AI_MODEL": "deepseek-v4-flash",
+    "AI_MODEL": "claude-haiku-5.5",
     "TZ": "America/Mexico_City"
   },
   "observability": { "enabled": true }
