@@ -60,8 +60,8 @@ App web para **Retrabajos Industriales y Limpiezas Especializadas Polar**: los e
   propuestas del formulario. Modelo **claude-haiku-5.5** (más listo que deepseek-v4-flash y casi igual de barato; gpt-oss-120b tardaba ~1 min). Al reporte solo se le mandan las respuestas con valor (`formatAnswers`) para gastar menos tokens. Si la IA falla, el reporte se guarda
   igual como "Sin evaluar".
 - **Cuentas**: autoregistro queda *pendiente* hasta que un admin lo aprueba con planta; el admin también crea cuentas, cambia roles
-  (encargado ↔ admin; no el propio) y elimina (quita acceso, conserva reportes). `ADMIN_EMAIL` entra directo como admin.
-  Roles en la base: `admin` y `colaborador` (se muestra como "Encargado").
+  (encargado ↔ admin ↔ líder; no el propio) y elimina (quita acceso, conserva reportes). `ADMIN_EMAIL` entra directo como admin.
+  Roles en la base: `admin`, `colaborador` (se muestra como "Encargado") y `lider` (líder de grupo).
   El admin pone contraseña nueva a otra cuenta; cada quien cambia la suya en "Mi cuenta" (`#/cuenta`, pide la actual).
   5 intentos fallidos de inicio de sesión bloquean ese correo 15 minutos.
 - **Solo admin** ve el PL-FOR-26 armado (imprimible) — el encargado ve su calificación y retroalimentación.
@@ -124,6 +124,28 @@ Especificación: `Modificaciones App Polar/MOD_APP_POLAR_SGC_ISO9001.md` (pedido
 - **Pendiente (etapas 2 y 3):** quejas PL-FOR-31, PL-FOR-24 (no está en los archivos), calibración PL-FOR-36, tablero de
   indicadores, lista maestra de documentos (consulta de PDF), formatos de gerencia (8D, auditorías, proveedores, revisión por la dirección),
   correo a gerencia, rol "administración".
+
+## Memoria del proyecto (decisiones y preferencias del dueño)
+Lo que se fue decidiendo en las sesiones de trabajo; aplica a cualquier colaborador o asistente de IA.
+- **El admin corrige todo**: cada reporte nuevo o formato nuevo debe traer desde el inicio su ruta de corrección para el admin (mismo folio,
+  mismas validaciones, recalcular lo que dependa de él). Pedido del dueño el 2026-10-24.
+- **Admins**: el dueño (maxelpiloto3@gmail.com) y **Rodrigo**, que es admin permanente; lo que puede hacer "el admin" lo puede hacer cualquier admin
+  (no hay funciones solo para el dueño).
+- **Publicar en producción solo cuando el dueño lo pide** ("publica"). Antes: `node test.mjs` y probar en el servidor local (`node server.mjs`).
+  Después de publicar: commit + push a `main`.
+- **Nunca dejar datos de prueba en producción** ni crear cuentas directo en D1; para probar usar el servidor local.
+- **Costos**: solo Workers Paid ($5/mes) + D1 + R2. Se quitó un worker de Containers (`ft-dryrun-freqtrade`) que encarecía la cuenta; no usar Containers.
+- **IA**: modelo `claude-haiku-5.5` (en `wrangler.jsonc`). Si los reportes salen "Sin evaluar" seguido, regresar a `deepseek-v4-flash`.
+- **Rama `formulario-google-forms`**: editor del Formulario estilo Google Forms, terminado pero **sin publicar** a petición del dueño. No juntarla con
+  `main` hasta que él lo pida.
+- **Periodo de pago** (configurado en Nómina → Empleados → Parámetros): Querétaro paga la semana en curso (lun–dom), Silao la última semana completa
+  (lun–dom); el mismo sábado se pagan periodos desfasados una semana. No cambiar esos parámetros sin avisar: mueven las incidencias viejas sin periodo guardado.
+
+## Trabajo en equipo (GitHub + Cloudflare)
+- Código: https://github.com/maximiliano280311/reporte-diario-polar (rama `main` = lo publicado). Antes de empezar `git pull`; al terminar commit + push.
+- Publicar: `npx wrangler login` con una cuenta que tenga acceso a la cuenta de Cloudflare del dueño (`account_id` en `wrangler.jsonc`) y `npx wrangler deploy`.
+  Publicar siempre desde `main` ya actualizado (`git pull`), si no se borra lo que publicó el otro.
+- `AGENTS.md` solo apunta a este archivo (para Codex u otros asistentes); el contexto vive aquí.
 
 ## Pendientes conocidos
 - No existe "olvidé mi contraseña" por correo (el admin pone una nueva).

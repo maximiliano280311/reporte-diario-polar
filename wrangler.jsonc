@@ -1,6 +1,8 @@
 // Configuración de Cloudflare: la app corre en Workers (worker.mjs) y la base en D1. Publicar: npx wrangler deploy
 {
   "name": "reporte-diario-polar",
+  // Cuenta de Cloudflare del dueño: así cualquier colaborador con acceso publica aquí y no en su propia cuenta.
+  "account_id": "e9d6ab7f8fd662f4545df8ebbd471b60",
   "main": "worker.mjs",
   "compatibility_date": "2026-09-01",
   "compatibility_flags": ["nodejs_compat"],

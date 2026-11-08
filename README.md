@@ -15,6 +15,15 @@ cd reporte-diario-polar
 cp .env.example .env          # y pon tu AI_API_KEY en .env
 ```
 
+### Para colaboradores
+1. Pide al dueño acceso al repositorio de GitHub y a la cuenta de Cloudflare.
+2. Antes de cambiar algo: `git pull`. Al terminar: `node test.mjs`, prueba en tu compu, y luego
+   `git add -A && git commit -m "qué cambiaste" && git push`.
+3. Para publicar: `git pull` (para no borrar lo que publicó otro) y `npx wrangler deploy`.
+   La cuenta de Cloudflare ya está fijada en `wrangler.jsonc` (`account_id`).
+4. Las reglas y decisiones del proyecto están en [CLAUDE.md](CLAUDE.md) (sección "Memoria del proyecto"). Si usas Claude Code,
+   lo lee solo; otros asistentes leen [AGENTS.md](AGENTS.md), que apunta ahí.
+
 ### Probar en tu compu (base local, datos de prueba)
 ```bash
 node server.mjs               # app: http://localhost:3000   admin: http://localhost:3001
