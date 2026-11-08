@@ -197,7 +197,7 @@ await ok('POST', '/api/nomina/emp', { nombre: 'Rosa', planta: 'Silao', sueldo: 2
 let nom = (await ok('GET', '/api/nomina', null, beto2)).data;
 assert.deepEqual(nom.emps.map(e => e.nombre), ['Luis']); // solo su planta
 const luis = nom.emps[0];
-assert.equal(luis.sueldo, undefined); assert.equal(luis.bono, undefined); assert.equal(luis.conBono, true); assert.equal(nom.config, null);
+assert.equal(luis.sueldo, undefined); assert.equal(luis.bono, undefined); assert.equal(luis.conBono, true); assert.ok(nom.config.inicio && !("porcentaje" in nom.config)); // solo el periodo de pago, sin montos
 assert.equal((await call('POST', '/api/nomina/cerrar', { payday: hoy }, beto2)).status, 403);
 // Encargado captura; un bono lo captura con monto pero ya no lo vuelve a ver.
 await ok('POST', '/api/nomina/inc', { emps: [luis.id], tipo: 'falta', fecha: hoy, cantidad: 1 }, beto2);

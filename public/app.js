@@ -1424,7 +1424,19 @@ function periodo(area, payday) {
   while (d.getDay() !== end) d.setDate(d.getDate() - 1);
   return { ini: addD(ymd(d), -6 - lag), fin: addD(ymd(d), -lag) };
 }
-// Renglones de la semana: sueldo base (proporcional si entró o salió a media semana) + incidencias sin pagar (las atrasadas se arrastran).
+// Día de pago cuyo periodo (de esa planta) contiene la fecha: ahí queda la incidencia.
+function paydayOf(area, f) {
+  for (let k = -1; k < 6; k++) { const p = addD(nextSat(f), 7 * k), q = periodo(area, p); if (f >= q.ini && f <= q.fin) return p; }
+  return nextSat(f);
+}
+const navArea = () => me.plant && N.d.areas.includes(me.plant) ? me.plant : N.d.areas[0];
+const enSemana = i => { const q = periodo(empById(i.empleadoId)?.planta || navArea(), N.payday); return i.fecha >= q.ini && i.fecha <= q.fin; };
+// Selector de semana para Capturar e Incidencias (todos los usuarios): cada incidencia vive en la semana de su fecha.
+const perNav = () => { const hoy = paydayOf(navArea(), ymd());
+  return weekNav('wk', `Semana ${weekNo(N.payday)} · pago ${fc(N.payday)}`,
+    N.d.areas.map(a => { const q = periodo(a, N.payday); return `${esc(a)}: del ${fc(q.ini)} al ${fc(q.fin)}`; }).join(' · ') + (N.payday === hoy ? ' · semana actual' : ''),
+    N.payday === hoy ? '' : '<button type="button" data-act="wkhoy" class="text-label-md text-primary font-semibold">Ir a esta semana</button>'); };
+// Renglones de la semana: sueldo base (proporcional si entró o salió a media semana) + incidencias de su periodo (no se acumulan; solo lo diferido pasa a la siguiente).
 function calcSemana(payday) {
   return nomEmps(true).flatMap(e => {
     const p = periodo(e.planta, payday);
@@ -1435,7 +1447,7 @@ function calcSemana(payday) {
       const dias = dBetween(e.ingreso > p.ini ? e.ingreso : p.ini, e.baja && e.baja < p.fin ? e.baja : p.fin) + 1;
       base = dias >= 7 ? +e.sueldo || 0 : Math.min(P().div, dias) * salDiario(e);
     }
-    const items = N.d.incs.filter(i => i.empleadoId === e.id && !i.aplicado && i.fecha <= p.fin).sort((a, b) => a.fecha.localeCompare(b.fecha));
+    const items = N.d.incs.filter(i => i.empleadoId === e.id && !i.aplicado && i.fecha <= p.fin && (i.fecha >= p.ini || i.diferido)).sort((a, b) => a.fecha.localeCompare(b.fecha));
     const L = { e, p, base: r2(base), faltas: 0, te: 0, teH: 0, extras: 0, desc: 0, arr: 0, items, menor: false };
     for (const i of items) {
       i._amt = amountOf(i, e); i._arr = i.fecha < p.ini;
@@ -1624,7 +1636,7 @@ const nomTabs = {
     const arrN = L.reduce((s, l) => s + l.items.filter(i => i._arr && !i.diferido).length, 0), difN = L.reduce((s, l) => s + l.items.filter(i => i.diferido).length, 0);
     const bonos = nomEmps().filter(e => bonoStatus(e, N.bonoMes).st === 'si'), menores = L.filter(l => l.menor);
     const alert = (cls, b, t, btn = '') => `<div class="rounded-xl p-3 mb-2 flex flex-wrap items-center gap-2 ${cls}"><b>${b}</b><span class="flex-1 min-w-[200px] text-body-md">${t}</span>${btn}</div>`;
-    return head + cards([['Total nómina', money(total)], [`Depósito contador +${pct}%`, money(total * (1 + pct / 100))], ['Horas extra', `${L.reduce((s, l) => s + l.teH, 0)} h`], ['Pendientes arrastrados', arrN, arrN]])
+    return head + cards([['Total nómina', money(total)], [`Depósito contador +${pct}%`, money(total * (1 + pct / 100))], ['Horas extra', `${L.reduce((s, l) => s + l.teH, 0)} h`], ['Diferidos de semanas pasadas', arrN, arrN]])
       + (bonos.length ? alert(WARN, `Bonos de ${mesL(N.bonoMes)}`, `Le toca bono de puntualidad a ${esc(bonos.map(e => e.nombre.split(' ')[0]).join(', '))} y aún no está en nómina.`, '<a href="#/nomina/bonos" class="text-label-md text-primary font-semibold">Revisar</a>') : '')
       + (menores.length ? alert(BAD, 'Menores de edad', `${esc(menores.map(l => l.e.nombre).join(', '))} tienen tiempo extra o domingo capturado. La LFT prohíbe horas extra y domingos a menores de 18; si se trabajan, se pagan al 200 % adicional.`) : '')
       + (difN ? alert(WARN, `${difN} pago${difN > 1 ? 's' : ''} diferido${difN > 1 ? 's' : ''}`, 'Seguirán apareciendo cada semana hasta que los incluyas.') : '')
@@ -1637,7 +1649,7 @@ const nomTabs = {
             ${td(money(l.base), 1)}${td(l.faltas ? `<span class="text-error">${money(l.faltas)}</span>` : '—', 1)}${td(l.te ? `${money(l.te)}<br><span class="text-[11px] text-on-surface-variant">${l.teH} h</span>` : '—', 1)}
             ${td(l.extras ? money(l.extras) : '—', 1)}${td(l.desc ? `<span class="text-error">${money(l.desc)}</span>` : '—', 1)}${td(`<b>${money(l.total)}</b>`, 1)}</tr>
             ${op ? `<tr><td colspan="7" class="px-3 pb-3 bg-surface-container-low">${l.items.length ? `<ul class="flex flex-col gap-2 pt-2">${l.items.map(i => `<li class="flex flex-wrap items-center gap-2 text-body-md">
-              <span class="text-on-surface-variant">${fc(i.fecha)}</span><b>${esc(incLabel(i))}</b>${i._arr ? nChip('de semana anterior', WARN) : ''}${i.diferido ? nChip('se paga después') : ''}${i.nota ? `<span class="text-on-surface-variant">${esc(i.nota)}</span>` : ''}
+              <span class="text-on-surface-variant">${fc(i.fecha)}</span><b>${esc(incLabel(i))}</b>${i._arr ? nChip('diferido de otra semana', WARN) : ''}${i.diferido ? nChip('se paga después') : ''}${i.nota ? `<span class="text-on-surface-variant">${esc(i.nota)}</span>` : ''}
               <span class="ml-auto tabular-nums ${i._amt < 0 ? 'text-error' : ''}">${i._amt ? money(i._amt) : ''}</span>${i._amt > 0 ? `<button type="button" data-act="diferir" data-id="${i.id}" class="text-label-sm text-primary font-semibold">${i.diferido ? 'Incluir esta semana' : 'Pagar después'}</button>` : ''}</li>`).join('')}</ul>`
               : '<p class="pt-2 text-body-md text-on-surface-variant">Sin incidencias. Se paga el sueldo base.</p>'}
               <p class="text-[11px] text-on-surface-variant mt-2">Sueldo ${money(+l.e.sueldo || 0)} ${l.e.pago === 'dia' ? 'por día' : 'semanal'} · día ${money(salDiario(l.e))} · hora extra ${money(teRate(l.e))}${teManual(l.e) ? ' (tarifa propia)' : ''}</p></td></tr>` : ''}`; }).join(''));
@@ -1648,11 +1660,13 @@ const nomTabs = {
   },
 
   capturar() {
+    if (N.cap.pay !== N.payday) { const q = periodo(navArea(), N.payday); N.cap.pay = N.payday; N.cap.fecha = ymd() >= q.ini && ymd() <= q.fin ? ymd() : q.ini; } // fecha dentro de la semana elegida
     const c = N.cap, t = NT[c.tipo], menorSel = [...c.emps].some(id => empById(id)?.menor) && ['te', 'dia_extra'].includes(c.tipo);
     let last = null;
     const picker = nomEmps().map(e => (e.planta !== last ? `<p class="col-span-full text-[11px] uppercase tracking-wide text-on-surface-variant font-semibold mt-2">${esc(last = e.planta)}</p>` : '')
       + `<label class="flex items-center gap-2 text-body-md py-1"><input type="checkbox" name="cemp" value="${e.id}" ${c.emps.has(e.id) ? 'checked' : ''} class="w-5 h-5 shrink-0 accent-[#2563eb]">${esc(e.nombre)}${e.menor ? ' ' + nChip('menor') : ''}${e.contrato && e.contrato !== 'planta' ? ' ' + nChip(e.contrato) : ''}</label>`).join('');
-    return `<p class="text-body-md text-on-surface-variant mb-3">Lo que captures entra solo a la nómina de su semana. Si no se paga, se arrastra.</p>
+    const nSem = N.d.incs.filter(enSemana).length;
+    return perNav() + `<p class="text-body-md text-on-surface-variant mb-3">Cada incidencia se queda en la semana de su fecha (no se acumula). ${nSem ? `Esta semana: <a href="#/nomina/incidencias" class="text-primary font-semibold">${nSem} capturada${nSem > 1 ? 's' : ''}</a>.` : ''}</p>
     <form id="capForm" class="card p-4 flex flex-col gap-4">
       <div><p class="text-label-md text-on-surface-variant mb-2">Tipo</p><div class="flex flex-wrap gap-2">${CAP_TIPOS.map(k => `<button type="button" data-act="ctipo" data-t="${k}" aria-pressed="${c.tipo === k}" class="px-3 py-2 rounded-full text-label-md border-[1.5px] ${c.tipo === k ? 'bg-primary text-white border-primary' : 'border-[#cbd5e1]'}">${NT[k].l}</button>`).join('')}</div></div>
       <div><p class="text-label-md text-on-surface-variant mb-1">Empleado(s) <span class="font-normal">— marca varios si aplica a más de uno</span></p>
@@ -1672,9 +1686,9 @@ const nomTabs = {
 
   incidencias() {
     const F = N.fil, admin = nomAdmin();
-    const L = N.d.incs.filter(i => (!F.emp || i.empleadoId === +F.emp) && (!F.tipo || i.tipo === F.tipo) && (F.estado === 'todas' || (F.estado === 'pend' ? !i.aplicado : i.aplicado)))
+    const L = N.d.incs.filter(i => enSemana(i) && (!F.emp || i.empleadoId === +F.emp) && (!F.tipo || i.tipo === F.tipo) && (F.estado === 'todas' || (F.estado === 'pend' ? !i.aplicado : i.aplicado)))
       .sort((a, b) => b.fecha.localeCompare(a.fecha) || b.id - a.id), shown = L.slice(0, 300);
-    return `<div id="filtros" class="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-3">
+    return perNav() + `<div id="filtros" class="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-3">
       ${sel('name="emp" aria-label="Empleado"', [['', 'Todos los empleados'], ...nomEmps(true).map(e => [e.id, e.nombre])], F.emp)}
       ${sel('name="tipo" aria-label="Tipo"', [['', 'Todos los tipos'], ...Object.entries(NT).map(([k, t]) => [k, t.l])], F.tipo)}
       ${sel('name="estado" aria-label="Estado"', [['pend', 'Pendientes de pago'], ['apl', 'Ya pagadas'], ['todas', 'Todas']], F.estado)}</div>
@@ -1687,7 +1701,7 @@ const nomTabs = {
         ${amt ? `<span class="tabular-nums ${amt < 0 ? 'text-error' : ''}">${money(amt)}</span>` : ''}
         ${can ? `<div class="flex gap-3"><button type="button" data-act="editinc" data-id="${i.id}" class="text-label-sm text-primary font-semibold">Editar</button>
           <button type="button" data-act="delinc" data-id="${i.id}" class="text-label-sm text-error font-semibold"><span>Borrar</span></button></div>` : ''}
-      </div>`; }).join('') || '<p class="p-6 text-center text-on-surface-variant">No hay incidencias con estos filtros.</p>'}</div>
+      </div>`; }).join('') || '<p class="p-6 text-center text-on-surface-variant">No hay incidencias en esta semana con estos filtros.</p>'}</div>
     ${L.length > 300 ? '<p class="text-body-sm text-on-surface-variant mt-2">Se muestran las 300 más recientes. Usa los filtros para ver otras.</p>' : ''}`;
   },
 
@@ -1776,10 +1790,11 @@ function capPreview() {
   const c = N.cap, t = NT[c.tipo];
   if (!c.emps.size) return 'Elige al menos un empleado.';
   const n = `${c.emps.size} empleado${c.emps.size > 1 ? 's' : ''}`;
-  if (!t.s) return `${n} · sin efecto en dinero${t.quita ? ' · quita el bono de puntualidad del mes' : ''}.`;
-  if (!nomAdmin()) return `${n} · ${t.s < 0 ? 'descuenta' : 'suma'} en la nómina.`;
+  const pe = empById([...c.emps][0]), wk = pe && c.fecha ? ` Queda en la semana del pago ${fc(paydayOf(pe.planta, c.fecha))}.` : '';
+  if (!t.s) return `${n} · sin efecto en dinero${t.quita ? ' · quita el bono de puntualidad del mes' : ''}.${wk}`;
+  if (!nomAdmin()) return `${n} · ${t.s < 0 ? 'descuenta' : 'suma'} en la nómina.${wk}`;
   const tot = [...c.emps].reduce((s, id) => { const e = empById(id); return e ? s + amountOf({ tipo: c.tipo, cantidad: +c.cant || 0 }, e) : s; }, 0);
-  return `${n} · ${tot < 0 ? 'descuenta' : 'suma'} ${money(Math.abs(tot))}${c.efectivo ? ' (pagado en efectivo)' : ''}`;
+  return `${n} · ${tot < 0 ? 'descuenta' : 'suma'} ${money(Math.abs(tot))}${c.efectivo ? ' (pagado en efectivo)' : ''}.${wk}`;
 }
 // Formularios para editar un empleado o una incidencia (en lugar de la pestaña).
 function nomEditForm() {
@@ -1848,7 +1863,7 @@ async function nomClick(e) {
   if (!b) return;
   const a = b.dataset.act, id = Number(b.dataset.id);
   if (a === 'wk') { N.payday = addD(N.payday, 7 * b.dataset.d); N.confirm = ''; }
-  else if (a === 'wkhoy') N.payday = nextSat(ymd());
+  else if (a === 'wkhoy') N.payday = N.tab === 'nomina' ? nextSat(ymd()) : paydayOf(navArea(), ymd());
   else if (a === 'bmes') { const [y, m] = N.bonoMes.split('-').map(Number); N.bonoMes = ymd(new Date(y, m - 1 + Number(b.dataset.d), 1)).slice(0, 7); }
   else if (a === 'toggle') N.open.has(id) ? N.open.delete(id) : N.open.add(id);
   else if (a === 'confirm') N.confirm = b.dataset.c;
@@ -1941,10 +1956,11 @@ function nomSubmit(e) {
 }
 views.nomina = async tab => {
   if (!N || N.uid !== me.id) { const d = new Date(); d.setDate(1); d.setMonth(d.getMonth() - 1);
-    N = { uid: me.id, payday: nextSat(ymd()), open: new Set(), confirm: '', edit: null, calcSue: 2200, bonoMes: ymd(d).slice(0, 7),
+    N = { uid: me.id, payday: null, open: new Set(), confirm: '', edit: null, calcSue: 2200, bonoMes: ymd(d).slice(0, 7),
       chat: { msgs: [], cambios: [], draft: '', file: null, busy: false },
-      cap: { tipo: 'falta', emps: new Set(), fecha: ymd(), cant: '1', nota: '', efectivo: false }, fil: { emp: '', tipo: '', estado: 'pend' }, bf: { emp: '', monto: '', motivo: '', fecha: ymd() } }; }
+      cap: { tipo: 'falta', emps: new Set(), fecha: ymd(), cant: '1', nota: '', efectivo: false }, fil: { emp: '', tipo: '', estado: 'todas' }, bf: { emp: '', monto: '', motivo: '', fecha: ymd() } }; }
   N.d = await api('/api/nomina');
+  N.payday ||= N.d.admin ? nextSat(ymd()) : paydayOf(navArea(), ymd());
   N.tab = tab || N.tab || (N.d.admin ? 'nomina' : 'capturar'); N.edit = null; N.confirm = '';
   nomDraw();
 };

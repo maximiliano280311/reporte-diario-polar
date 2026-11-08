@@ -793,7 +793,7 @@ export function createApp({ db, files, env = {} }) {
       const incs = (await db.all(`SELECT i.*, u.name AS creador FROM nom_incs i JOIN nom_emps a ON a.id = i.emp_id LEFT JOIN users u ON u.id = i.user_id
         WHERE a.area IN (${inA}) AND (i.aplicado = 0 OR i.fecha >= ?) ORDER BY i.fecha DESC, i.id DESC`, ...areas, ymd(new Date(Date.now() - 400 * DAY)))).filter(r => ver.has(r.emp_id)).map(r => incOut(r, user));
       const cierres = admin ? (await db.all('SELECT data FROM nom_cierres ORDER BY payday DESC LIMIT 120')).map(r => JSON.parse(r.data)) : [];
-      return json(200, { emps, incs, cierres, config: admin ? await nomConfig() : null, areas, admin });
+      return json(200, { emps, incs, cierres, config: admin ? await nomConfig() : (({ inicio, desfase }) => ({ inicio, desfase }))(await nomConfig()), areas, admin });
     }),
 
     // Alta o cambio de empleado. El encargado no pone sueldos (se conservan los que puso el admin) y solo en su planta.
