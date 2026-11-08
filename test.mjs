@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
-import { createApp, cleanNomCambios } from './app.mjs';
+import { createApp, cleanNomCambios, paydayDe } from './app.mjs';
 
 const sqlite = new DatabaseSync(':memory:');
 sqlite.exec(readFileSync(new URL('./schema.sql', import.meta.url), 'utf8'));
@@ -399,5 +399,13 @@ await ok('POST', '/api/form-config', { config: {} }, admin);
 // Sesiones vencidas (más de 30 días) ya no sirven.
 sqlite.prepare('UPDATE sessions SET created = 0').run();
 assert.equal((await call('GET', '/api/me', null, admin)).status, 401);
+
+// Periodo de pago de cada incidencia: Querétaro paga la semana en curso, Silao la última completa (las dos de lunes a domingo).
+const pcfg = { inicio: { 'Querétaro': 1, Silao: 1 }, desfase: { 'Querétaro': -1, Silao: 0 } };
+assert.equal(paydayDe(pcfg, 'Querétaro', '2026-10-26'), '2026-10-31'); assert.equal(paydayDe(pcfg, 'Querétaro', '2026-11-01'), '2026-10-31');
+assert.equal(paydayDe(pcfg, 'Querétaro', '2026-11-02'), '2026-11-07');
+assert.equal(paydayDe(pcfg, 'Silao', '2026-10-19'), '2026-10-31'); assert.equal(paydayDe(pcfg, 'Silao', '2026-10-25'), '2026-10-31');
+assert.equal(paydayDe(pcfg, 'Silao', '2026-10-26'), '2026-11-07');
+assert.equal(paydayDe({ inicio: { 'Querétaro': 6 } }, 'Querétaro', '2026-11-06'), '2026-11-07'); // sin desfase: semana sáb-vie que termina antes del pago
 
 console.log('OK: todas las pruebas pasaron');

@@ -163,6 +163,19 @@ const isDate = s => /^\d{4}-\d{2}-\d{2}$/.test(String(s ?? ''));
 // Propuestas del asistente de nómina: solo empleados (alta / cambio) e incidencias válidas; los nombres se ligan a su empleado.
 // La IA solo PROPONE: el admin las revisa, las edita y las aplica con las rutas normales (que vuelven a validar).
 const NOM_EMP_KEYS = ['nombre', 'planta', 'contrato', 'pago', 'sueldo', 'bono', 'te', 'teModo', 'diasBase', 'ingreso', 'baja', 'vacAjuste', 'menor', 'notas'];
+// Día de pago (sábado) cuyo periodo de esa área contiene la fecha; mismo cálculo que periodo() / paydayOf() de public/app.js.
+// Se guarda en cada incidencia (data.payday) para que se quede en ese periodo aunque después cambien los parámetros.
+export function paydayDe(cfg, area, f) {
+  const d0 = s => new Date(s + 'T00:00:00Z'), add = (s, n) => { const d = d0(s); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); };
+  const end = (+(cfg.inicio?.[area] ?? 6) + 6) % 7, lag = 7 * (+cfg.desfase?.[area] || 0);
+  let sat = f; while (d0(sat).getUTCDay() !== 6) sat = add(sat, 1);
+  for (let k = -1; k < 6; k++) {
+    const p = add(sat, 7 * k); let e = p; while (d0(e).getUTCDay() !== end) e = add(e, -1);
+    if (f >= add(e, -6 - lag) && f <= add(e, -lag)) return p;
+  }
+  return sat;
+}
+
 export function cleanNomCambios(cambios, emps) {
   const norm = v => String(v ?? '').trim().toLowerCase(), byName = n => emps.find(e => norm(e.nombre) === norm(n));
   return [].concat(cambios ?? []).slice(0, 200).flatMap(c => {
@@ -820,9 +833,10 @@ export function createApp({ db, files, env = {} }) {
       const b = await body(req), ids = [...new Set([].concat(b.emps ?? []).map(Number))].slice(0, 100);
       if (!ids.length) throw httpError(400, 'Elige al menos un empleado');
       const x = cleanInc(b, user);
-      for (const id of ids) await nomEmp(id, user); // todos visibles antes de guardar nada
-      for (const id of ids) await db.run('INSERT INTO nom_incs(emp_id, tipo, fecha, aplicado, data, user_id) VALUES (?, ?, ?, ?, ?, ?)',
-        id, x.tipo, x.fecha, x.data.efectivo ? 1 : 0, JSON.stringify(x.data), user.id);
+      const emps = []; for (const id of ids) emps.push(await nomEmp(id, user)); // todos visibles antes de guardar nada
+      const cfg = await nomConfig();
+      for (const e of emps) await db.run('INSERT INTO nom_incs(emp_id, tipo, fecha, aplicado, data, user_id) VALUES (?, ?, ?, ?, ?, ?)',
+        e.id, x.tipo, x.fecha, x.data.efectivo ? 1 : 0, JSON.stringify({ ...x.data, payday: paydayDe(cfg, e.planta, x.fecha) }), user.id);
       return json(200, { ok: true, n: ids.length });
     }),
 
@@ -835,6 +849,7 @@ export function createApp({ db, files, env = {} }) {
       delete x.data.tipo;
       const aplicado = admin ? !!b.aplicado : !!r.aplicado;
       if (admin) x.data.aplicadoEn = aplicado ? x.data.aplicadoEn || 'manual' : null;
+      if (!x.data.payday || x.fecha !== r.fecha || emp.id !== r.emp_id) x.data.payday = paydayDe(await nomConfig(), emp.planta, x.fecha); // otra fecha: otro periodo
       await db.run('UPDATE nom_incs SET emp_id = ?, tipo = ?, fecha = ?, aplicado = ?, data = ? WHERE id = ?', emp.id, x.tipo, x.fecha, aplicado ? 1 : 0, JSON.stringify(x.data), r.id);
       return json(200, { ok: true });
     }),
@@ -864,7 +879,7 @@ export function createApp({ db, files, env = {} }) {
         const ya = (await db.all("SELECT data FROM nom_incs WHERE emp_id = ? AND tipo = 'bono_puntualidad'", e.id)).some(r => JSON.parse(r.data).mes === mes);
         if (ya) continue;
         await db.run("INSERT INTO nom_incs(emp_id, tipo, fecha, data, user_id) VALUES (?, 'bono_puntualidad', ?, ?, ?)", e.id, ymd(),
-          JSON.stringify({ cantidad: Number(e.bono), mes, nota: `Bono de puntualidad ${mes}` }), user.id);
+          JSON.stringify({ cantidad: Number(e.bono), mes, nota: `Bono de puntualidad ${mes}`, payday: paydayDe(await nomConfig(), e.planta, ymd()) }), user.id);
         n++;
       }
       return json(200, { ok: true, n });

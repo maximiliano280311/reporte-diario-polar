@@ -73,8 +73,9 @@ App web para **Retrabajos Industriales y Limpiezas Especializadas Polar**: los e
   de bonos/descuentos (`empOut` / `incOut`). Áreas: Querétaro, Silao y Administración. El cálculo de la semana lo hace el panel del admin.
   **Periodo de pago por planta** (Parámetros, `settings.nomina`): día de inicio de la semana (`inicio`) y `desfase` (−1 = semana en curso,
   0 = última completa, 1-2 = semanas de atraso; p. ej. Querétaro paga del 26 al 1 y Silao del 19 al 25 el mismo sábado) — `periodo()`.
-  **Cada incidencia se queda en la semana de su fecha** (`paydayOf`): no se acumulan a la siguiente (solo lo "pagar después" / diferido pasa).
-  Capturar e Incidencias tienen selector de semana para todos (`perNav`; el encargado recibe solo `inicio`/`desfase` de la config, sin montos).
+  **Cada incidencia guarda su periodo** (`data.payday`, lo calcula el servidor con `paydayDe` al capturar o al cambiarle fecha/empleado; las viejas sin él se calculan con `paydayOf`):
+  se queda en ese periodo aunque cambien los parámetros y no se acumula a la siguiente (solo lo "pagar después" / diferido pasa).
+  Capturar e Incidencias tienen selector de periodo de pago para todos (`perNav`: flechas + lista con cuántas incidencias tiene cada periodo; el encargado recibe solo `inicio`/`desfase` de la config, sin montos).
   **Asistente IA** (pestaña solo admin, `POST /api/nomina/ai`): chat que acepta Excel .xlsx o CSV (se leen en el navegador sin librerías,
   `leerArchivo`) y **solo propone** altas/cambios de empleados e incidencias (`cleanNomCambios`); el admin edita o quita cada propuesta y
   "Aplicar" las guarda con las rutas normales (`nomAplicar`). Las pestañas de captura manual siguen igual Botón "Limpiar historial" del chat.

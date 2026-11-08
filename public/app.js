@@ -1430,12 +1430,20 @@ function paydayOf(area, f) {
   return nextSat(f);
 }
 const navArea = () => me.plant && N.d.areas.includes(me.plant) ? me.plant : N.d.areas[0];
-const enSemana = i => { const q = periodo(empById(i.empleadoId)?.planta || navArea(), N.payday); return i.fecha >= q.ini && i.fecha <= q.fin; };
+// Periodo de la incidencia: el que guardó el servidor al capturarla (las viejas sin él se calculan por su fecha).
+const incPay = i => i.payday || paydayOf(empById(i.empleadoId)?.planta || navArea(), i.fecha);
+const enSemana = i => incPay(i) === N.payday;
 // Selector de semana para Capturar e Incidencias (todos los usuarios): cada incidencia vive en la semana de su fecha.
-const perNav = () => { const hoy = paydayOf(navArea(), ymd());
-  return weekNav('wk', `Semana ${weekNo(N.payday)} · pago ${fc(N.payday)}`,
-    N.d.areas.map(a => { const q = periodo(a, N.payday); return `${esc(a)}: del ${fc(q.ini)} al ${fc(q.fin)}`; }).join(' · ') + (N.payday === hoy ? ' · semana actual' : ''),
-    N.payday === hoy ? '' : '<button type="button" data-act="wkhoy" class="text-label-md text-primary font-semibold">Ir a esta semana</button>'); };
+const perNav = () => { const hoy = paydayOf(navArea(), ymd()), arrow = (d, ic, l) => `<button type="button" data-act="wk" data-d="${d}" class="btn border-[1.5px] border-[#cbd5e1] !px-3 shrink-0" aria-label="${l}"><span class="material-symbols-outlined">${ic}</span></button>`;
+  return `<div class="mb-4"><p class="text-label-md text-on-surface-variant mb-1">Periodo de pago</p>
+    <div class="flex items-center gap-2">${arrow(-1, 'chevron_left', 'Anterior')}
+    <select data-per class="input flex-1 min-w-0" aria-label="Periodo de pago">${perList(hoy).map(p => { const n = N.d.incs.filter(i => incPay(i) === p).length;
+      return `<option value="${p}" ${p === N.payday ? 'selected' : ''}>Semana ${weekNo(p)} · pago ${fc(p)}${p === hoy ? ' (actual)' : ''}${n ? ` · ${n} incidencia${n > 1 ? 's' : ''}` : ''}</option>`; }).join('')}</select>
+    ${arrow(1, 'chevron_right', 'Siguiente')}</div>
+    <p class="text-body-sm text-on-surface-variant mt-1">${N.d.areas.map(a => { const q = periodo(a, N.payday); return `${esc(a)}: del <b>${fc(q.ini)}</b> al <b>${fc(q.fin)}</b>`; }).join(' · ')}
+      ${N.payday === hoy ? '· semana actual' : '· <button type="button" data-act="wkhoy" class="text-primary font-semibold">Ir a esta semana</button>'}</p></div>`; };
+// Periodos para elegir: los que tienen incidencias guardadas + las últimas 8 semanas y las 2 siguientes.
+const perList = hoy => [...new Set([...N.d.incs.map(incPay), N.payday, ...Array.from({ length: 11 }, (_, k) => addD(hoy, 7 * (2 - k)))])].sort().reverse();
 // Renglones de la semana: sueldo base (proporcional si entró o salió a media semana) + incidencias de su periodo (no se acumulan; solo lo diferido pasa a la siguiente).
 function calcSemana(payday) {
   return nomEmps(true).flatMap(e => {
@@ -1447,10 +1455,10 @@ function calcSemana(payday) {
       const dias = dBetween(e.ingreso > p.ini ? e.ingreso : p.ini, e.baja && e.baja < p.fin ? e.baja : p.fin) + 1;
       base = dias >= 7 ? +e.sueldo || 0 : Math.min(P().div, dias) * salDiario(e);
     }
-    const items = N.d.incs.filter(i => i.empleadoId === e.id && !i.aplicado && i.fecha <= p.fin && (i.fecha >= p.ini || i.diferido)).sort((a, b) => a.fecha.localeCompare(b.fecha));
+    const items = N.d.incs.filter(i => i.empleadoId === e.id && !i.aplicado && (incPay(i) === payday || (i.diferido && incPay(i) < payday))).sort((a, b) => a.fecha.localeCompare(b.fecha));
     const L = { e, p, base: r2(base), faltas: 0, te: 0, teH: 0, extras: 0, desc: 0, arr: 0, items, menor: false };
     for (const i of items) {
-      i._amt = amountOf(i, e); i._arr = i.fecha < p.ini;
+      i._amt = amountOf(i, e); i._arr = incPay(i) < payday;
       if (i.diferido) continue;
       if (i._arr) L.arr += i._amt;
       if (['falta', 'permiso_sg', 'incapacidad'].includes(i.tipo)) L.faltas += i._amt;
@@ -1917,6 +1925,7 @@ function nomChange(e) {
     const file = t.files[0];
     return leerArchivo(file).then(texto => { N.chat.file = { nombre: file.name, texto: texto.length > 300_000 ? texto.slice(0, 300_000) + '\n(recortado)' : texto }; nomDraw(); }, showErr);
   }
+  if (t.dataset.per !== undefined) { N.payday = t.value; N.confirm = ''; return nomDraw(); }
   if (t.name === 'cemp') { t.checked ? N.cap.emps.add(+t.value) : N.cap.emps.delete(+t.value); return nomDraw(); }
   if (t.name === 'efectivo') { N.cap.efectivo = t.checked; $('#cprev').textContent = capPreview(); }
   if (t.closest('#filtros')) { N.fil[t.name] = t.value; nomDraw(); }
