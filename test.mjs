@@ -178,21 +178,22 @@ await ok('GET', '/api/me', null, ana3);
 await login('ana@polar.test', 'otra12345');
 
 // Vista previa del formulario: aplica la configuración sin guardarla; solo admin.
-const prev = (await ok('POST', '/api/form-config/preview', { config: { sections: { 9: { hidden: true }, 2: { title: 'Gente' } } } }, admin)).data;
-assert.ok(!prev.some(s => s.n === 9) && prev.find(s => s.n === 2).title === 'Gente');
-assert.ok((await ok('GET', '/api/questions')).data.some(s => s.n === 9)); // no se guardó
+const prev = (await ok('POST', '/api/form-config/preview', { config: { sections: { 8: { hidden: true }, 2: { title: 'Gente' } } } }, admin)).data;
+assert.ok(!prev.some(s => s.n === 8) && prev.find(s => s.n === 2).title === 'Gente');
+assert.ok((await ok('GET', '/api/questions')).data.some(s => s.n === 8)); // no se guardó
+assert.ok(!(await ok('GET', '/api/questions')).data.some(s => s.n === 9)); // las visitas salieron del reporte (Registro de visitantes)
 assert.equal((await call('POST', '/api/form-config/preview', { config: {} }, beto)).status, 403);
 
 // Control total del admin: quitar cualquier pregunta (aunque la use un cálculo), cambiar si es obligatoria y subpreguntas.
 const pv = (await ok('POST', '/api/form-config/preview', { config: {
   fields: { turno: { hidden: true }, manana: { required: false }, 'vehiculos.vehiculo': { hidden: true }, 'gas.tanque': { hidden: true } },
-  extra: { 9: [{ id: 'x_visita', label: '¿Hubo visita?', type: 'sino' }, { id: 'x_quien', label: '¿Quién?', type: 'text', required: true, padre: 'x_visita', cuando: 'Sí' },
+  extra: { 8: [{ id: 'x_visita', label: '¿Hubo visita?', type: 'sino' }, { id: 'x_quien', label: '¿Quién?', type: 'text', required: true, padre: 'x_visita', cuando: 'Sí' },
     { id: 'x_hora', label: 'Hora', type: 'time', padre: 'x_quien' }, { id: 'x_mal', label: 'Mal padre', padre: 'no_existe' }] } } }, admin)).data;
 assert.ok(!pv[0].fields?.some(f => f.id === 'turno'));
 assert.equal(pv.find(s => s.n === 13).fields[0].required, false);
 assert.ok(!pv.find(s => s.n === 3).table.cols.some(c => c.id === 'vehiculo'));
 assert.ok(pv.find(s => s.n === 4).table.cols.some(c => c.id === 'tanque')); // la primera columna de una tabla fija no se quita
-assert.deepEqual(pv.find(s => s.n === 9).fields.filter(f => f.id.startsWith('x_')).map(f => [f.id, f.padre || '', f.nivel || 0]),
+assert.deepEqual(pv.find(s => s.n === 8).fields.filter(f => f.id.startsWith('x_')).map(f => [f.id, f.padre || '', f.nivel || 0]),
   [['x_visita', '', 0], ['x_quien', 'x_visita', 1], ['x_hora', 'x_quien', 2], ['x_mal', '', 0]]);
 
 // ---------- Nómina: solo admin y encargados con acceso; el encargado ve su planta y nunca montos ----------
@@ -415,6 +416,32 @@ const lalo = await login('lalo@polar.test');
 assert.equal((await ok('GET', '/api/me', null, lalo)).data.role, 'lider');
 for (const [m, p] of [['GET', '/api/reports'], ['GET', '/api/nomina'], ['GET', '/api/calidad'], ['GET', '/api/semana'], ['POST', '/api/reports']])
   assert.equal((await call(m, p, m === 'POST' ? { answers: base } : null, lalo)).status, 403, p); // solo ve su check list (se valida en el servidor)
+
+// ---------- Registro de visitantes (antes sección 9 del PL-FOR-26): lo llenan encargado, líder y admin ----------
+const vis = { fecha: hoy, hora: '09:00', nombre: 'Pedro Ruiz', empresa: 'Gas Express', tipo: 'Proveedor', motivo: 'Entrega de gas', atendio: 'Lalo', seguimiento: 'No' };
+assert.equal((await call('POST', '/api/calidad/vis', { answers: { ...vis, hora_salida: '08:00' } }, lalo)).status, 400); // sale antes de entrar
+assert.equal((await call('POST', '/api/calidad/vis', { answers: { ...vis, seguimiento: 'Sí' } }, lalo)).status, 400); // ¿qué seguimiento?
+assert.equal((await call('POST', '/api/calidad/vis', { answers: { ...vis, nombre: '' } }, lalo)).status, 400);
+const v1 = (await ok('POST', '/api/calidad/vis', { answers: { ...vis, hora_salida: '09:30', seguimiento_que: 'se ignora' } }, lalo)).data;
+assert.deepEqual([v1.folio, v1.status, v1.seguimiento_que], ['VIS-0001', 'REGISTRADA', '']);
+const v2 = (await ok('POST', '/api/calidad/vis', { answers: { ...vis, nombre: 'Inspector', empresa: 'Protección Civil', tipo: 'Dependencia de gobierno',
+  motivo: 'Revisión de extintores', seguimiento: 'Sí', seguimiento_que: 'Mandar constancia' } }, beto2)).data;
+await ok('POST', '/api/calidad/vis', { answers: { ...vis, nombre: 'Ana Silao' } }, sara);
+assert.deepEqual((await ok('GET', '/api/visitas', null, lalo)).data.map(v => v.folio), [v2.folio, v1.folio]); // su planta, la más reciente primero
+assert.deepEqual((await ok('GET', '/api/visitas', null, sara)).data.map(v => v.data.nombre), ['Ana Silao']);
+assert.deepEqual([(await ok('GET', '/api/visitas', null, admin)).data.length, (await ok('GET', '/api/visitas?planta=Silao', null, admin)).data.length], [3, 1]);
+assert.equal((await ok('GET', '/api/calidad/registro?folio=' + v1.folio, null, lalo)).data.data.nombre, 'Pedro Ruiz');
+assert.equal((await ok('GET', '/api/calidad/form?tipo=VIS', null, lalo)).data.code, 'REG-VIS');
+assert.equal((await call('GET', '/api/calidad/registro?folio=REC-0001', null, lalo)).status, 404); // el líder solo ve visitas
+assert.equal((await call('GET', '/api/calidad/form?tipo=REC', null, lalo)).status, 404);
+const calV = (await ok('GET', '/api/calidad', null, admin)).data;
+assert.ok(calV.alertas.some(a => a.folio === v2.folio && a.text.includes('Protección Civil'))); // gobierno: aviso a gerencia
+assert.ok(!calV.registros.some(r => r.kind === 'VIS')); // no se mezclan con los registros de Calidad
+assert.equal((await ok('POST', '/api/calidad/formato/editar', { folio: v1.folio, answers: { ...vis, hora_salida: '10:00' } }, admin)).data.hora_salida, '10:00'); // el admin corrige
+// Reportes de antes con visitas en la sección 9: al corregirlos se conservan (se siguen imprimiendo).
+const rv = sqlite.prepare('SELECT id, answers FROM reports ORDER BY id LIMIT 1').get();
+sqlite.prepare('UPDATE reports SET answers = ? WHERE id = ?').run(JSON.stringify({ ...JSON.parse(rv.answers), visitas: [{ nombre: 'Viejo', motivo: 'x' }] }), rv.id);
+assert.equal((await ok('POST', '/api/reports/edit', { id: rv.id, answers: JSON.parse(rv.answers) }, admin)).data.answers.visitas[0].nombre, 'Viejo');
 let cl = (await ok('GET', '/api/cll', null, lalo)).data;
 assert.deepEqual([cl.plant, cl.catalogo.length, cl.registro, cl.encargado.includes('Ana')], ['Querétaro', 28, null, true]);
 const resp = Object.fromEntries(cl.catalogo.map(p => [p.id, { r: 'SI' }]));
@@ -455,7 +482,7 @@ assert.equal((await call('POST', '/api/cll/catalogo', { puntos: [] }, admin)).st
 
 // Formulario guardado con preguntas quitadas y una subpregunta condicional: el reporte se envía sin ellas.
 await ok('POST', '/api/form-config', { config: { fields: { turno: { hidden: true }, 'vehiculos.vehiculo': { hidden: true } },
-  extra: { 9: [{ id: 'x_visita', label: '¿Hubo visita?', type: 'sino', required: true }, { id: 'x_quien', label: '¿Quién?', type: 'text', required: true, padre: 'x_visita', cuando: 'Sí' }] } } }, admin);
+  extra: { 8: [{ id: 'x_visita', label: '¿Hubo visita?', type: 'sino', required: true }, { id: 'x_quien', label: '¿Quién?', type: 'text', required: true, padre: 'x_visita', cuando: 'Sí' }] } } }, admin);
 await ok('POST', '/api/users', { name: 'Zoe', email: 'zoe@polar.test', password: pass, plant: 'Silao' }, admin);
 const zoe = await login('zoe@polar.test'), rep0 = { presentes: '3', hubo_reportes: 'No', manana: 'Nada', vehiculos: [{ km_ini: '10', km_fin: '20' }] };
 assert.equal((await call('POST', '/api/reports', { answers: { ...rep0, x_visita: 'Sí' } }, zoe)).status, 400); // con "Sí" pide ¿Quién?

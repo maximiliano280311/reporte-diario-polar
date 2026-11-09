@@ -53,11 +53,8 @@ const FORM = [
       'Revisión de fugas de gas', 'Nivel de aceite hidrolavadora', 'Plática de seguridad (registrar en PL-FOR-25)'] }],
     table: { id: 'otras', item: 'actividad', cols: [{ id: 'descripcion', label: 'Otra actividad / extraordinaria', wide: true }, { id: 'tipo', label: 'Tipo', type: 'select', options: ['R', 'E'] },
       { id: 'horas', label: 'Tiempo (hrs)', type: 'number' }, { id: 'quien', label: '¿Quién la hizo?', wide: true }] } },
-  { n: 9, title: 'Visitas a la planta', hint: 'Tipo: PR = proveedor, CL = cliente, GO = dependencia de gobierno, EM = solicitud de empleo, IN = informes / pregunta, OT = otro. Si es dependencia de gobierno avisar a gerencia de inmediato y tomar foto de cualquier documento que deje.',
-    table: { id: 'visitas', item: 'visita', cols: [{ id: 'nombre', label: 'Nombre y teléfono', wide: true }, { id: 'empresa', label: 'Empresa / dependencia' },
-      { id: 'tipo', label: 'Tipo', type: 'select', options: ['PR', 'CL', 'GO', 'EM', 'IN', 'OT'] }, { id: 'motivo', label: 'Motivo de la visita', wide: true },
-      { id: 'atendio', label: 'Atendió y hora' }, { id: 'seguimiento', label: '¿Requiere seguimiento?', type: 'select', options: SN }] },
-    fields: [{ id: 'fotos_visitas', label: 'Fotos de documentos', type: 'photos', wide: true, after: true }] },
+  // La sección 9 (visitas) salió del reporte: ahora es el Registro de visitantes (FORMATOS.VIS). Se conserva el número 10+ para no
+  // mover la configuración del formulario ni los reportes viejos (sus visitas se siguen imprimiendo, ver plDoc en public/app.js).
   { n: 10, title: 'Incidencias del día', hint: 'Tipo: GA = gas, EL = eléctrica, EQ = equipo / herramienta, SE = seguridad / accidente, CA = calidad / rechazo, CL = cliente, PE = personal. Toda falla de equipo que no se resuelva hoy se pasa a mantenimiento. Fuga de gas, falla eléctrica, incendio o accidente: avisar por teléfono a gerencia de inmediato.',
     table: { id: 'incidencias', item: 'incidencia', empty: 'SIN INCIDENCIAS', cols: [{ id: 'tipo', label: 'Tipo', type: 'select', options: ['GA', 'EL', 'EQ', 'SE', 'CA', 'CL', 'PE'] },
       { id: 'hora', label: 'Hora', type: 'time' }, { id: 'que_paso', label: 'Qué pasó', type: 'textarea', wide: true },
@@ -240,6 +237,8 @@ const TEMAS = ['5S / orden y limpieza', 'Uso de EPP', 'Manejo de químicos / HDS
   'Manejo seguro de gas LP', 'Operación segura de hornos', 'Trabajo en caliente', 'Levantamiento de cargas', 'Plan de emergencia / evacuación',
   'Primeros auxilios', 'Manejo de residuos', 'Otro'];
 const PEND_NUEVO = 'NO, ES UN TRABAJO NUEVO';
+const VIS_TIPOS = ['Proveedor', 'Cliente', 'Dependencia de gobierno', 'Solicitud de empleo', 'Informes / pregunta', 'Otro'];
+const VIS_GOB = 'Dependencia de gobierno'; // avisa a gerencia de inmediato
 const RESULTADO_MT = ['FUNCIONANDO', 'FUNCIONA PARCIALMENTE', 'NO FUNCIONA (SIGUE PENDIENTE)'];
 const FORMATOS = {
   CL21: checklist('PL-FOR-21', 'Check list de camión', ['BIEN', 'MAL', 'N/A'], ['MAL'], [
@@ -304,6 +303,18 @@ const FORMATOS = {
       fields: [{ id: 'resultado', label: 'El equipo quedó', type: 'select', options: RESULTADO_MT, required: true, wide: true },
         { id: 'pruebas', label: 'Pruebas realizadas', wide: true }, { id: 'libero', label: 'Liberó / recibió (encargado)', required: true },
         { id: 'proximo', label: 'Próximo mantenimiento', type: 'date' }, { id: 'observaciones', label: 'Observaciones', type: 'textarea', wide: true }] }] },
+  // Registro de visitantes (antes sección 9 del PL-FOR-26): uno por visita. Lo llenan encargado, líder y admin; no es obligatorio por semana.
+  VIS: { code: 'REG-VIS', title: 'Registro de visitantes', sections: [
+    { n: 1, title: 'Visita', fields: [{ id: 'fecha', label: 'Fecha', type: 'date', required: true }, { id: 'hora', label: 'Hora de entrada', type: 'time', required: true },
+      { id: 'hora_salida', label: 'Hora de salida', type: 'time' }] },
+    { n: 2, title: 'Visitante', hint: 'Si es dependencia de gobierno: avisar a gerencia por teléfono de inmediato (la app también le avisa) y tomar foto de cualquier documento que deje.',
+      fields: [{ id: 'nombre', label: 'Nombre', required: true, wide: true }, { id: 'telefono', label: 'Teléfono' }, { id: 'empresa', label: 'Empresa / dependencia', required: true },
+        { id: 'tipo', label: 'Tipo de visita', type: 'select', options: VIS_TIPOS, required: true, wide: true },
+        { id: 'motivo', label: 'Motivo de la visita', type: 'textarea', required: true, wide: true }] },
+    { n: 3, title: 'Atención y seguridad', fields: [{ id: 'atendio', label: '¿Quién lo atendió?', required: true },
+      { id: 'seguridad', label: '¿Recibió indicaciones de seguridad / EPP?', type: 'select', options: ['Sí', 'No', 'No entró al área de trabajo'] },
+      { id: 'seguimiento', label: '¿Requiere seguimiento?', type: 'select', options: SN, required: true }, { id: 'seguimiento_que', label: '¿Qué seguimiento?', wide: true }] },
+    { n: 4, title: 'Fotos', fields: [{ id: 'fotos', label: 'Fotos (documentos que dejó, identificación)', type: 'photos', wide: true }] }] },
 };
 Object.assign(QFORMS, FORMATOS); // mismas rutas de formato, registro e impresión que Calidad
 const pendKey = m => `${m.equipo}|${m.falla}`.trim().toLowerCase();
@@ -731,6 +742,12 @@ export function createApp({ db, files, env = {} }) {
       const [h1, m1] = a.hora.split(':').map(Number), [h2, m2] = a.hora_fin.split(':').map(Number);
       a.duracion = String(Math.max(0, h2 * 60 + m2 - h1 * 60 - m1));
     }
+    if (kind === 'VIS') {
+      if (a.hora_salida && a.hora_salida < a.hora) throw httpError(400, 'La hora de salida no puede ser antes de la de entrada');
+      if (a.seguimiento === 'Sí' && !a.seguimiento_que) throw httpError(400, 'Anota qué seguimiento requiere la visita');
+      if (a.seguimiento !== 'Sí') a.seguimiento_que = '';
+      a.resultado = 'REGISTRADA';
+    }
     if (kind === 'MT') {
       if (a.tipo === 'ACTUALIZACIÓN DE SOFTWARE' && !a.sistema) throw httpError(400, 'Anota qué sistema o equipo se actualizó');
       a.sin_respaldo = a.tipo === 'ACTUALIZACIÓN DE SOFTWARE' && a.respaldo !== 'Sí' ? 'Sí' : 'No';
@@ -747,6 +764,8 @@ export function createApp({ db, files, env = {} }) {
     await saveRecord(folio, kind, plant, a.fecha, user, status, a);
     if (status.startsWith('RECHAZADA')) await db.run('INSERT INTO alerts(plant, folio, text) VALUES (?, ?, ?)', plant, folio,
       `${fx.code} ${fx.title} RECHAZADO ${a.unidad || a.horno || ''} · ${plant}: ${a.fallas} punto(s) con falla`);
+    if (kind === 'VIS' && a.tipo === VIS_GOB) await db.run('INSERT INTO alerts(plant, folio, text) VALUES (?, ?, ?)', plant, folio,
+      `Visita de dependencia de gobierno en ${plant}: ${a.empresa} (${a.nombre}) — ${a.motivo}`.slice(0, 1000));
     return { folio, status, ...a };
   }
   // Formatos de la semana (lunes a hoy) por planta: cuáles faltan. PL-FOR-21: cada unidad que no es montacargas.
@@ -1123,9 +1142,12 @@ export function createApp({ db, files, env = {} }) {
     // y después se vuelven a calcular los saldos de material de los siguientes de la planta (los arrastran).
     'POST /api/reports/edit': async (req, user) => {
       const { id, answers = {} } = await body(req);
-      const r = await db.get('SELECT id, user_id, date, plant FROM reports WHERE id = ?', Number(id));
+      const r = await db.get('SELECT id, user_id, date, plant, answers FROM reports WHERE id = ?', Number(id));
       if (!r || (user.role !== 'admin' && (r.user_id !== user.id || r.date !== ymd()))) throw httpError(403, 'Solo puedes corregir tu reporte de hoy');
       const { a, form } = await prepare(r.plant, answers, r, r.date);
+      // Visitas de reportes de antes del Registro de visitantes: ya no se capturan aquí, pero se conservan al corregir.
+      const viejo = JSON.parse(r.answers);
+      for (const k of ['visitas', 'fotos_visitas']) if (viejo[k]?.length) a[k] = viejo[k];
       await db.run('UPDATE reports SET answers = ? WHERE id = ?', JSON.stringify(a), r.id);
       // ponytail: un UPDATE por reporte siguiente; si alguna planta llega a miles de reportes, recalcular en lote.
       for (const n of await db.all('SELECT id, date, answers FROM reports WHERE plant = ? AND (date > ? OR (date = ? AND id > ?)) ORDER BY date, id', r.plant, r.date, r.date, r.id)) {
@@ -1162,7 +1184,7 @@ export function createApp({ db, files, env = {} }) {
       const lotes = await db.all(`${LOT_SQL} WHERE ${inP('l.plant')} AND (l.status != 'ENTREGADO' OR l.delivered >= ?) ORDER BY l.received DESC, l.code DESC`,
         ...plants, ymd(new Date(Date.now() - 30 * DAY)));
       const registros = (await db.all(`SELECT q.folio, q.kind, q.plant, q.date, q.status, q.data, u.name FROM qrecords q JOIN users u ON u.id = q.user_id
-        WHERE ${inP('q.plant')} AND q.kind != 'CLL' ORDER BY q.created_at DESC, q.folio DESC LIMIT 100`, ...plants)).map(r => ({ ...r, data: JSON.parse(r.data) }));
+        WHERE ${inP('q.plant')} AND q.kind NOT IN ('CLL', 'VIS') ORDER BY q.created_at DESC, q.folio DESC LIMIT 100`, ...plants)).map(r => ({ ...r, data: JSON.parse(r.data) }));
       // Alertas: las guardadas (solo gerencia las ve y las marca) + las que se calculan de los lotes.
       const alertas = user.role === 'admin' ? await db.all(`SELECT id, folio, text, created_at FROM alerts WHERE seen = 0 AND ${inP('plant')} ORDER BY id DESC`, ...plants) : [];
       const openNC = registros.filter(r => r.kind === 'NC' && r.status === 'ABIERTO').flatMap(r => r.data.lotes || []), old = ymd(new Date(Date.now() - LOT_DAYS * DAY));
@@ -1184,7 +1206,7 @@ export function createApp({ db, files, env = {} }) {
     // Formato con las listas de la planta, más los datos de los lotes (para llenar cliente / parte solos) y las especificaciones por cliente.
     'GET /api/calidad/form': async (req, user) => {
       const q = new URL(req.url).searchParams, kind = q.get('tipo');
-      if (!QFORMS[kind]) return json(404, { error: 'Formato no encontrado' });
+      if (!QFORMS[kind] || (user.role === 'lider' && kind !== 'VIS')) return json(404, { error: 'Formato no encontrado' });
       const plant = plantFor(user, q.get('planta')), cal = await getCalidad();
       const av = await avanceLotes(plant), lotes = (await db.all(`${LOT_SQL} WHERE l.plant = ? AND (l.received >= ? OR l.status = 'EN PLANTA')`, plant, ymd(new Date(Date.now() - 180 * DAY))))
         .map(({ code, client, part, qty, rec, status, proceso, remision }) => ({ code, client, part, qty, rec, status, proceso, remision,
@@ -1197,6 +1219,7 @@ export function createApp({ db, files, env = {} }) {
     // Un registro con sus lotes (para verlo / imprimirlo).
     'GET /api/calidad/registro': async (req, user) => {
       const r = await getRecord(new URL(req.url).searchParams.get('folio'), user);
+      if (user.role === 'lider' && r.kind !== 'VIS') throw httpError(404, 'Registro no encontrado'); // el líder solo ve visitas
       const codes = r.kind === 'REC' ? r.data.partidas.map(p => p.lote) : r.kind === 'LIB' ? [r.data.lote] : r.data.lotes || [];
       const lotes = codes.length ? await db.all(`${LOT_SQL} WHERE l.code IN (${codes.map(() => '?').join(', ')})`, ...codes) : [];
       if (r.kind === 'LIB' && !r.data.remision) r.data.remision = lotes[0]?.remision || ''; // liberaciones de antes de ligar la remisión
@@ -1299,6 +1322,17 @@ export function createApp({ db, files, env = {} }) {
       const b = await body(req), r = await getRecord(b.folio, user);
       if (r.kind !== 'NC') return json(400, { error: 'Ese folio no es un no conforme' });
       return json(200, await saveNC(user, r.plant, b.answers || {}, null, r));
+    },
+
+    // Registro de visitantes (encargado y líder: su planta; admin: todas o ?planta=). Por omisión, los últimos 60 días.
+    'GET /api/visitas': async (req, user) => {
+      const q = new URL(req.url).searchParams, asked = q.get('planta');
+      const plants = user.role === 'admin' ? (PLANTS.includes(asked) ? [asked] : PLANTS) : PLANTS.includes(user.plant) ? [user.plant] : [];
+      if (!plants.length) return json(200, []);
+      const desde = isDate(q.get('desde')) ? q.get('desde') : ymd(new Date(Date.now() - 60 * DAY)), hasta = isDate(q.get('hasta')) ? q.get('hasta') : '9999-12-31';
+      return json(200, (await db.all(`SELECT q.folio, q.plant, q.date, q.data, u.name FROM qrecords q JOIN users u ON u.id = q.user_id
+        WHERE q.kind = 'VIS' AND q.plant IN (${plants.map(() => '?').join(', ')}) AND q.date BETWEEN ? AND ? ORDER BY q.date DESC, q.folio DESC LIMIT 500`,
+        ...plants, desde, hasta)).map(r => ({ ...r, data: JSON.parse(r.data) })));
     },
 
     // Formatos de operación de la semana (encargado: su planta; admin: todas).
@@ -1510,7 +1544,9 @@ export function createApp({ db, files, env = {} }) {
     }),
   };
 
-  const LIDER_OK = new Set(['GET /api/questions', 'GET /api/me', 'POST /api/logout', 'POST /api/me/password', 'POST /api/upload', 'GET /api/files/', 'GET /api/cll', 'GET /api/cll/registro', 'POST /api/cll']);
+  // Líder: su check list y el registro de visitantes (form y registro de Calidad solo le dan VIS, ver sus rutas).
+  const LIDER_OK = new Set(['GET /api/questions', 'GET /api/me', 'POST /api/logout', 'POST /api/me/password', 'POST /api/upload', 'GET /api/files/', 'GET /api/cll', 'GET /api/cll/registro', 'POST /api/cll',
+    'GET /api/visitas', 'POST /api/calidad/vis', 'GET /api/calidad/form', 'GET /api/calidad/registro']);
   // Atiende /api/*: Request → Response (Fetch API, igual en Node y en Workers).
   return async function handleApi(req) {
     try {

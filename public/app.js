@@ -68,6 +68,7 @@ async function api(path, data) {
 let me = null, questions = [], reports = [];
 let filt = { planta: '', q: '', desde: daysAgo(30), hasta: '' }; // filtros de Reportes (admin); se conservan al ir y volver de un PL-FOR-26
 let calPlant = '', calFilter = 'activos', alertN = 0; // Calidad: planta elegida (admin), filtro de lotes y alertas pendientes (insignia del menú)
+let visPlant = ''; // Registro de visitantes: planta elegida (admin)
 
 function quality(score) {
   if (score == null) return { cls: 'bg-surface-container text-on-surface-variant', dot: 'bg-outline-variant', label: 'Sin evaluar' };
@@ -111,8 +112,12 @@ async function upload(file) {
 }
 const photoThumb = (name, k) => `<div data-photo class="relative w-20 h-20"><a href="/api/files/${esc(k)}" target="_blank"><img src="/api/files/${esc(k)}" alt="Foto" class="w-full h-full object-cover rounded-lg"></a>
   <input type="hidden" name="${name}" value="${esc(k)}"><button type="button" data-del-photo class="absolute -top-2 -right-2 w-7 h-7 rounded-full bg-error text-white flex items-center justify-center" aria-label="Quitar foto"><span class="material-symbols-outlined text-[16px]">close</span></button></div>`;
-// Claves de todas las fotos de un reporte, con el nombre de su pregunta.
-const photosOf = r => questions.flatMap(s => (s.fields || []).filter(f => f.type === 'photos').flatMap(f => [].concat(r.answers[f.id] || []).map(k => [`${s.n}. ${f.label}`, k])));
+// Claves de todas las fotos de un reporte, con el nombre de su pregunta (y las de visitas de reportes de antes del Registro de visitantes).
+const photosOf = r => [...questions.flatMap(s => (s.fields || []).filter(f => f.type === 'photos').flatMap(f => [].concat(r.answers[f.id] || []).map(k => [`${s.n}. ${f.label}`, k]))),
+  ...[].concat(r.answers.fotos_visitas || []).map(k => ['9. Visitas — fotos de documentos', k])];
+// Sección 9 de los reportes viejos (las visitas ahora van en el Registro de visitantes): solo para imprimirlas.
+const VISITAS_ANT = [['nombre', 'Nombre y teléfono'], ['empresa', 'Empresa / dependencia'], ['tipo', 'Tipo'], ['motivo', 'Motivo de la visita'],
+  ['atendio', 'Atendió y hora'], ['seguimiento', '¿Requiere seguimiento?']];
 
 // ---------- Cuestionario PL-FOR-26 (el esquema viene de /api/questions) ----------
 function input(f, name, v = '') {
@@ -217,11 +222,12 @@ const STATUS_CLS = { 'EN PLANTA': 'bg-surface-container-high text-primary', LIBE
   APROBADA: 'bg-secondary-container text-on-secondary-container', 'APROBADA CON OBSERVACIONES': 'bg-tertiary-fixed text-on-tertiary-fixed',
   'RECHAZADA (NO SALE)': 'bg-error-container text-on-error-container', FUNCIONANDO: 'bg-secondary-container text-on-secondary-container',
   'FUNCIONA PARCIALMENTE': 'bg-tertiary-fixed text-on-tertiary-fixed', 'NO FUNCIONA (SIGUE PENDIENTE)': 'bg-error-container text-on-error-container',
-  REALIZADA: 'bg-secondary-container text-on-secondary-container' };
+  REALIZADA: 'bg-secondary-container text-on-secondary-container', REGISTRADA: 'bg-secondary-container text-on-secondary-container' };
 const statusChip = s => `<span class="chip ${STATUS_CLS[s] || 'bg-surface-container'}">${esc(s)}</span>`;
 const KIND = { REC: ['PL-FOR-28', 'Recepción', 'inventory'], LIB: ['PL-FOR-29', 'Liberación', 'fact_check'], NC: ['PL-FOR-30', 'No conforme', 'report'],
   CL21: ['PL-FOR-21', 'Check list de camión', 'local_shipping'], CL22: ['PL-FOR-22', 'Check list de gas', 'propane_tank'],
-  CL23: ['PL-FOR-23', 'Check list de horno', 'local_fire_department'], PLA: ['PL-FOR-25', 'Plática', 'record_voice_over'], MT: ['PL-FOR-35', 'Mantenimiento', 'build'] };
+  CL23: ['PL-FOR-23', 'Check list de horno', 'local_fire_department'], PLA: ['PL-FOR-25', 'Plática', 'record_voice_over'], MT: ['PL-FOR-35', 'Mantenimiento', 'build'],
+  VIS: ['REG-VIS', 'Visita', 'how_to_reg'] };
 // Equipos para el PL-FOR-35 (catálogo base de MOD-000; se puede escribir otro).
 const EQUIPOS = ['Horno de pirólisis', 'Quemador / control de flama', 'Controlador / PLC', 'Hidrolavadora', 'Montacargas', 'Vehículo', 'Compresor', 'Bomba / Rotoplas',
   'Instalación de gas', 'Instalación eléctrica', 'Tanque de proceso / decapado', 'Herramienta', 'Cómputo / software', 'Edificio'];
@@ -308,6 +314,9 @@ function plDoc(r) {
       ${after.length || extra[s.n] ? kv([...after, ...(extra[s.n] || [])]) : ''}
       ${s.hint ? `<p class="hint">${esc(s.hint)}</p>` : ''}`;
     }).join('')}
+    ${a.visitas?.length ? `<div class="bar">9. VISITAS A LA PLANTA (CAPTURADAS EN EL REPORTE; HOY VAN EN EL REGISTRO DE VISITANTES)</div>
+      <table><thead><tr>${VISITAS_ANT.map(([, l]) => `<th>${esc(l)}</th>`).join('')}</tr></thead>
+      <tbody>${a.visitas.map(x => `<tr>${VISITAS_ANT.map(([k]) => `<td>${esc(x[k])}</td>`).join('')}</tr>`).join('')}</tbody></table>` : ''}
     <table class="firmas"><tr><td>${esc(r.name)}<br><b>ELABORÓ — ENCARGADO DE PLANTA</b></td><td><b>REVISÓ — GERENCIA</b></td></tr></table>
     ${fotos.length ? `<div class="bar">ANEXOS — FOTOS</div><div class="fotos">${fotos.map(([l, k]) => `<figure><img src="/api/files/${esc(k)}" alt="${esc(l)}"><figcaption>${esc(l)}</figcaption></figure>`).join('')}</div>` : ''}
     ${controlado('PL-FOR-26', '06')}
@@ -1201,21 +1210,47 @@ const views = {
   lib: lote => views.qnuevo('LIB', lote),
   nc: origen => views.qnuevo('NC', origen),
   ncedit: folio => views.qnuevo('NC', folio, true),
-  fmtedit: folio => views.qnuevo(decodeURIComponent(folio).split('-')[0], folio, true), // admin: corregir check list, plática o mantenimiento
+  fmtedit: folio => views.qnuevo(decodeURIComponent(folio).split('-')[0], folio, true), // admin: corregir check list, plática, mantenimiento o visita
+  visita: () => views.qnuevo('VIS'),
+
+  // Registro de visitantes (encargado, líder y admin): visitas de los últimos 60 días y botón para registrar una nueva.
+  async visitas() {
+    const vs = await api('/api/visitas' + (me.role === 'admin' && visPlant ? '?planta=' + encodeURIComponent(visPlant) : ''));
+    const horas = d => [d.hora, d.hora_salida].filter(Boolean).join(' – ');
+    $('#app').innerHTML = `
+    <div class="flex flex-col gap-4 ${WIDE ? 'max-w-4xl' : ''}">
+      <div><h1 class="${WIDE ? 'text-3xl font-bold' : 'text-2xl font-semibold'} tracking-tight">Registro de visitantes</h1>
+        <p class="text-sm text-on-surface-variant">Anota a cada persona que llega a la planta: proveedores, clientes, dependencias de gobierno, solicitudes de empleo…</p></div>
+      ${me.role === 'admin' ? `<label class="flex items-center gap-2 text-label-md text-on-surface-variant">Planta
+        <select id="vis-planta" class="input w-auto"><option value="">Todas</option>${PLANTS.map(p => `<option ${p === visPlant ? 'selected' : ''}>${p}</option>`).join('')}</select></label>` : ''}
+      <a href="#/visita" class="btn btn-primary w-full ${WIDE ? 'lg:w-auto lg:self-start' : ''}"><span class="material-symbols-outlined">how_to_reg</span>Registrar visita</a>
+      <section class="card p-4 flex flex-col">
+        <h2 class="font-semibold flex items-center gap-2 mb-2"><span class="material-symbols-outlined text-primary">history</span>Visitas de los últimos 60 días (${vs.length})</h2>
+        ${vs.length ? vs.map(v => `<a href="#/q/${esc(v.folio)}" class="flex items-start justify-between gap-2 py-2 border-t border-[#f1f5f9] hover:bg-surface-container-low">
+          <div class="min-w-0"><p class="font-semibold flex flex-wrap items-center gap-2">${esc(v.data.nombre)} <span class="chip ${v.data.tipo === 'Dependencia de gobierno' ? 'bg-error-container text-on-error-container' : 'bg-surface-container text-on-surface-variant'}">${esc(v.data.tipo)}</span></p>
+            <p class="text-[12px] text-on-surface-variant">${esc(v.data.empresa)} · ${esc(v.data.motivo)}</p>
+            <p class="text-[12px] text-on-surface-variant">${dmy(v.date)} · ${esc(horas(v.data))} · atendió ${esc(v.data.atendio)}${me.role === 'admin' ? ' · ' + esc(v.plant) : ''}${v.data.seguimiento === 'Sí' ? ' · <b class="text-tertiary">requiere seguimiento</b>' : ''}</p></div>
+          <span class="text-label-sm text-on-surface-variant whitespace-nowrap">${esc(v.folio)}</span></a>`).join('')
+          : '<p class="text-sm text-on-surface-variant">Sin visitas registradas en los últimos 60 días.</p>'}
+      </section>
+    </div>`;
+    if ($('#vis-planta')) $('#vis-planta').onchange = e => { visPlant = e.target.value; views.visitas(); };
+  },
 
   // Captura de PL-FOR-28 / 29 / 30. arg: LIB → lote preseleccionado; NC → folio REC / LIB de origen o código de lote; edit: NC a actualizar.
   async qnuevo(kind, arg = '', edit = false) {
     arg = decodeURIComponent(arg);
-    const prev = /^(REC|LIB|NC|CL2[123]|PLA|MT)-\d+$/.test(arg) ? await api('/api/calidad/registro?folio=' + encodeURIComponent(arg)) : null;
+    const prev = /^(REC|LIB|NC|CL2[123]|PLA|MT|VIS)-\d+$/.test(arg) ? await api('/api/calidad/registro?folio=' + encodeURIComponent(arg)) : null;
     let plant = prev?.plant || (me.role === 'admin' ? calPlant || PLANTS[0] : me.plant);
     if (!plant) throw new Error('Tu cuenta no tiene planta asignada: pide al administrador que te asigne una.');
     const draw = async () => {
       const f = await api(`/api/calidad/form?tipo=${kind}&planta=${encodeURIComponent(plant)}`), secs = f.sections; rowN = 0;
       const pre = edit ? prev.data : { fecha: ymd(), hora: new Date().toTimeString().slice(0, 5),
-        ...(kind === 'LIB' && { lote: arg, remision: f.lotes.find(l => l.code === arg)?.remision || '' }), ...(kind === 'NC' && ncPrefill(prev, arg, f)) };
+        ...(kind === 'LIB' && { lote: arg, remision: f.lotes.find(l => l.code === arg)?.remision || '' }), ...(kind === 'NC' && ncPrefill(prev, arg, f)),
+        ...(kind === 'VIS' && { atendio: me.name }) };
       $('#app').innerHTML = `
       <div class="flex flex-col gap-4 ${WIDE ? 'max-w-4xl' : ''}">
-        <div><a href="#/calidad" class="text-primary text-label-md flex items-center gap-1"><span class="material-symbols-outlined text-[18px]">arrow_back</span>Calidad</a>
+        <div><a href="${kind === 'VIS' ? '#/visitas' : '#/calidad'}" class="text-primary text-label-md flex items-center gap-1"><span class="material-symbols-outlined text-[18px]">arrow_back</span>${kind === 'VIS' ? 'Visitantes' : 'Calidad'}</a>
           <p class="text-label-sm font-semibold text-primary mt-2">${f.code} · REV. 00${edit ? ' · ' + esc(prev.folio) : ''}</p>
           <h1 class="text-headline-lg-mobile tracking-tight">${esc(f.title)}</h1>
           <p class="text-body-md text-on-surface-variant">Planta ${esc(plant)} · ${esc(me.name)}${prev && !edit ? ` · desde ${esc(prev.folio)}` : ''}</p></div>
@@ -1319,6 +1354,8 @@ const views = {
         : `<p class="text-body-md">Lote <b>${esc(r.lote)}</b>: ${statusChip(r.status)} · aceptación ${esc(r.pct)} %</p>`
           + (r.retenidas ? box('bg-error-container text-on-error-container', 'block', `Liberación parcial: salieron <b>${esc(r.aceptadas)}</b> piezas y <b>${r.retenidas}</b> quedan <b>RETENIDAS</b>. Sepáralas, identifícalas y levanta ahora el no conforme (PL-FOR-30).`) : '')
           + (r.quedan > 0 ? box('bg-tertiary-fixed text-on-tertiary-fixed', 'pending_actions', `Entrega parcial: quedan <b>${r.quedan}</b> piezas del lote por liberar. La recepción ${esc(r.rec)} sigue abierta hasta entregar todo.`) : ''))
+      : kind === 'VIS' ? `<p class="text-body-md">Visita de <b>${esc(r.nombre)}</b> (${esc(r.empresa)}) registrada.</p>`
+        + (r.tipo === 'Dependencia de gobierno' ? box('bg-error-container text-on-error-container', 'call', 'Dependencia de gobierno: ya se avisó a gerencia en la app. <b>Llámales también por teléfono.</b>') : '')
       : kind !== 'NC' ? `<p class="text-body-md">Resultado: ${statusChip(r.status)}${r.status.startsWith('RECHAZADA') ? ' · se avisó a gerencia' : ''}</p>`
         + (r.sin_respaldo === 'Sí' ? box('bg-tertiary-fixed text-on-tertiary-fixed', 'warning', 'Actualización de software <b>sin respaldo</b> previo.') : '')
       : `<p class="text-body-md">Estatus ${statusChip(r.estatus)} · ¿Requiere 8D? (sugerido): <b>${esc(r.sugiere_8d)}</b></p>${edit ? '' : '<p class="text-body-sm text-on-surface-variant">Se avisó a gerencia.</p>'}`;
@@ -1330,7 +1367,8 @@ const views = {
       <div class="flex flex-col gap-3 w-full text-left">${msg}</div>
       ${nc ? `<a href="#/nc/${esc(r.folio)}" class="btn btn-primary w-full"><span class="material-symbols-outlined">report</span>Crear no conforme</a>` : ''}
       <a href="#/q/${esc(r.folio)}" class="btn border-[1.5px] border-[#cbd5e1] text-primary w-full"><span class="material-symbols-outlined">description</span>Ver / imprimir ${esc(r.folio)}</a>
-      <a href="#/calidad" class="btn border-[1.5px] border-[#cbd5e1] w-full">Volver a Calidad</a>
+      ${kind === 'VIS' ? '<a href="#/visita" class="btn border-[1.5px] border-[#cbd5e1] text-primary w-full"><span class="material-symbols-outlined">how_to_reg</span>Registrar otra visita</a>' : ''}
+      <a href="${kind === 'VIS' ? '#/visitas' : '#/calidad'}" class="btn border-[1.5px] border-[#cbd5e1] w-full">Volver a ${kind === 'VIS' ? 'Visitantes' : 'Calidad'}</a>
     </div>`;
   },
 
@@ -1341,11 +1379,11 @@ const views = {
     const needNC = !r.ligados.length && ((r.kind === 'REC' && r.status === 'CON OBSERVACIONES') || (r.kind === 'LIB' && (r.status === 'RETENIDO' || r.data.disposicion === 'LIBERADO PARCIAL')));
     $('#app').innerHTML = `
     <div class="no-print flex flex-wrap items-center justify-between gap-2 mb-4">
-      <a href="#/calidad" class="text-primary font-semibold flex items-center gap-1"><span class="material-symbols-outlined">arrow_back</span>Calidad</a>
+      <a href="${r.kind === 'VIS' ? '#/visitas' : '#/calidad'}" class="text-primary font-semibold flex items-center gap-1"><span class="material-symbols-outlined">arrow_back</span>${r.kind === 'VIS' ? 'Visitantes' : 'Calidad'}</a>
       <div class="flex flex-wrap gap-2">
         ${needNC ? `<a href="#/nc/${esc(r.folio)}" class="btn btn-primary"><span class="material-symbols-outlined">report</span>Crear no conforme</a>` : ''}
         ${r.kind === 'NC' && r.status === 'ABIERTO' ? `<a href="#/ncedit/${esc(r.folio)}" class="btn btn-primary"><span class="material-symbols-outlined">edit</span>Actualizar / cerrar</a>` : ''}
-        ${me.role === 'admin' && ['CL21', 'CL22', 'CL23', 'PLA', 'MT'].includes(r.kind) ? `<a href="#/fmtedit/${esc(r.folio)}" class="btn btn-primary"><span class="material-symbols-outlined">edit</span>Corregir</a>` : ''}
+        ${me.role === 'admin' && ['CL21', 'CL22', 'CL23', 'PLA', 'MT', 'VIS'].includes(r.kind) ? `<a href="#/fmtedit/${esc(r.folio)}" class="btn btn-primary"><span class="material-symbols-outlined">edit</span>Corregir</a>` : ''}
         <button onclick="print()" class="btn border-[1.5px] border-[#cbd5e1] text-primary"><span class="material-symbols-outlined">print</span>Imprimir</button>
       </div></div>
     <p id="err" class="text-sm text-error hidden no-print" role="alert"></p>
@@ -2255,10 +2293,10 @@ function wireCatalogo() {
 
 // ---------- Navegación ----------
 const NAV = {
-  lider: [['cll', 'fact_check', 'Check list']],
-  colaborador: [['inicio', 'dashboard', 'Inicio'], ['nuevo', 'add_task', ''], ['historial', 'history', 'Historial'], ['calidad', 'verified', 'Calidad']],
+  lider: [['cll', 'fact_check', 'Check list'], ['visitas', 'how_to_reg', 'Visitantes']],
+  colaborador: [['inicio', 'dashboard', 'Inicio'], ['nuevo', 'add_task', ''], ['historial', 'history', 'Historial'], ['calidad', 'verified', 'Calidad'], ['visitas', 'how_to_reg', 'Visitantes']],
   admin: [['admin', 'groups', 'Reportes'], ['semanal', 'auto_awesome', 'Semanal'], ['calidad', 'verified', 'Calidad'], ['cuentas', 'manage_accounts', 'Cuentas'],
-    ['camiones', 'local_shipping', 'Camiones'], ['formulario', 'edit_note', 'Formulario'], ['cll', 'fact_check', 'Check list líder']],
+    ['camiones', 'local_shipping', 'Camiones'], ['formulario', 'edit_note', 'Formulario'], ['cll', 'fact_check', 'Check list líder'], ['visitas', 'how_to_reg', 'Visitantes']],
 };
 // Nómina: el admin siempre; el encargado solo si el admin le dio acceso (Cuentas → Nómina).
 const navItems = () => [...NAV[me.role], ...(me.role === 'admin' || me.nomina ? [['nomina', 'badge', 'Nómina']] : [])];
@@ -2282,13 +2320,15 @@ function renderNav(name) {
 
 // Opción del menú que se marca en pantallas que no están en el menú.
 const QVIEWS = ['rec', 'lib', 'nc', 'ncedit', 'q', 'fmt', 'fmtedit', 'docs']; // pantallas de Calidad que no están en el menú
-const navOf = name => ({ pl: 'admin', editar: me.role === 'admin' ? 'admin' : 'historial', cllver: 'cll' })[name] ?? (QVIEWS.includes(name) ? 'calidad' : name);
+const navOf = name => ({ pl: 'admin', editar: me.role === 'admin' ? 'admin' : 'historial', cllver: 'cll', visita: 'visitas', ...(me.role === 'lider' && { q: 'visitas' }) })[name]
+  ?? (QVIEWS.includes(name) ? 'calidad' : name);
 async function route() {
   const [name, arg] = location.hash.slice(2).split('/');
   if (!me) return views.login();
   if (WEB && me.role !== 'admin') return views.soloAdmin();
   // pl/ID: PL-FOR-26, solo admin; editar/ID: corregir un reporte; cuenta: mi contraseña (ambos roles).
-  const allowed = [...navItems().map(n => n[0]), 'cuenta', 'cllver', ...(me.role === 'lider' ? [] : ['editar', 'cll', ...QVIEWS]), ...(me.role === 'admin' ? ['pl'] : [])];
+  // visita: registrar visitante (todos); el líder además solo abre registros (q) de visitas — el servidor no le da otros.
+  const allowed = [...navItems().map(n => n[0]), 'cuenta', 'cllver', 'visita', ...(me.role === 'lider' ? ['q'] : ['editar', 'cll', ...QVIEWS]), ...(me.role === 'admin' ? ['pl'] : [])];
   if (!allowed.includes(name)) return location.hash = '#/' + allowed[0];
   renderNav(navOf(name));
   try { await views[name](arg); } catch (e) { $('#app').innerHTML = `<p class="text-error text-sm">${esc(e.message)}</p>`; }

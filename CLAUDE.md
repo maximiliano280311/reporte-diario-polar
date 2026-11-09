@@ -33,7 +33,9 @@ App web para **Retrabajos Industriales y Limpiezas Especializadas Polar**: los e
 | `public/app.js` | Toda la interfaz (SPA con hash routing, Tailwind por CDN). La comparten `index.html` (app/teléfono) y `admin.html` (panel web). |
 
 ## Funcionalidad clave
-- **Formulario PL-FOR-26** (13 secciones) definido en `FORM` (`app.mjs`). Campos `auto: true` los calcula el servidor:
+- **Formulario PL-FOR-26** (12 secciones: la **9, visitas, salió** el 2026-11-08 y ahora es el Registro de visitantes; se dejó el hueco
+  en la numeración para no mover la configuración del formulario, que va por número de sección) definido en `FORM` (`app.mjs`).
+  Los reportes viejos con visitas las siguen imprimiendo (`plDoc` / `VISITAS_ANT`) y al corregirlos se conservan. Campos `auto: true` los calcula el servidor:
   - Vehículos: km inicial = km final anterior de la unidad; recorrido = final − inicial. Solo se aceptan **camiones registrados de la planta**.
   - Gas: casillas N/A (tanque que no aplica / "no hubo carga") vía `disables`.
   - Material (sección 7): **recibido y entregado del día salen de Calidad** (REC y entregas de LIB, `movimientos()`), no se capturan;
@@ -84,8 +86,13 @@ App web para **Retrabajos Industriales y Limpiezas Especializadas Polar**: los e
   **Dar de baja / Reactivar** (todos los que capturan nómina): pone o quita la fecha de baja; los dados de baja van en su propia lista.
   **Borrar empleado**: cualquier admin; se borran también sus incidencias sin pagar.
 
+- **Registro de visitantes** (`#/visitas`, en el menú de encargado, líder y admin; pedido del 2026-11-08): formato `VIS` en `FORMATOS`
+  (código `REG-VIS` mientras no tenga número de control oficial), uno por visita, en `qrecords`; folio `VIS-0001`. Lista `GET /api/visitas`
+  (su planta; admin todas o `?planta=`, últimos 60 días). Dependencia de gobierno → alerta a gerencia. No es obligatorio por semana ni sale en
+  los registros de Calidad. El admin lo corrige (`#/fmtedit/VIS-…`).
 - **Check list del líder de grupo PL-FOR-43 (MOD-009)**: rol `lider` (Cuentas, siempre con planta); el servidor solo le deja las rutas de
-  `LIDER_OK` (se valida en `handleApi`, no solo en la interfaz). Pantalla `#/cll` (SÍ / NO / N/A; NO pide observación y foto en los puntos 📷;
+  `LIDER_OK` (se valida en `handleApi`, no solo en la interfaz): su check list y el Registro de visitantes (en `GET /api/calidad/form` y
+  `/registro` solo le da `VIS`). Pantalla `#/cll` (SÍ / NO / N/A; NO pide observación y foto en los puntos 📷;
   avance en `localStorage`). Uno por planta al día en `qrecords` (kind `CLL`, folio `CLL-QRO-AAAAMMDD-T1`, no se edita). Resultado automático
   (`CLL_RES`; NO en punto crítico → URGENTE + alerta). Catálogo editable por el admin en `settings.cll` (`cleanCll`, inicial `CLL_INI`, horas de aviso).
   Se ve arriba del reporte del encargado de esa planta y fecha (`cllPanel`), que marca cada NO / incidencia ATENDIDO o PENDIENTE (`/api/cll/atender`);
