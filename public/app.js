@@ -1131,7 +1131,7 @@ const views = {
           ${lotes.length ? `<div class="flex flex-col">${lotes.map(l => `<div class="flex flex-wrap items-center justify-between gap-2 py-2 border-t border-[#f1f5f9]">
             <div class="min-w-0"><p class="font-semibold flex flex-wrap items-center gap-2">${esc(l.code)} ${statusChip(l.status)}</p>
               <p class="text-[12px] text-on-surface-variant">${esc(l.client)} · ${esc(l.part)} · ${l.qty} pza${l.delivered_qty && l.status !== 'ENTREGADO' ? ` (entregadas ${l.delivered_qty})` : ''} · recibido ${dmy(l.received)}${l.status === 'EN PLANTA' ? ` (${days(l)} d)` : ''}${me.role === 'admin' ? ' · ' + esc(l.plant) : ''}
-                · <a href="#/q/${esc(l.rec)}" class="text-primary">${esc(l.rec)}</a></p></div>
+                ${l.remision ? `· Remisión ${esc(l.remision)} ` : ''}· <a href="#/q/${esc(l.rec)}" class="text-primary">${esc(l.rec)}</a></p></div>
             ${accion(l)}</div>`).join('')}</div>` : '<p class="text-sm text-on-surface-variant">Sin lotes con ese filtro.</p>'}
         </section>
         <section class="card p-4 flex flex-col">
@@ -1204,7 +1204,8 @@ const views = {
     if (!plant) throw new Error('Tu cuenta no tiene planta asignada: pide al administrador que te asigne una.');
     const draw = async () => {
       const f = await api(`/api/calidad/form?tipo=${kind}&planta=${encodeURIComponent(plant)}`), secs = f.sections; rowN = 0;
-      const pre = edit ? prev.data : { fecha: ymd(), hora: new Date().toTimeString().slice(0, 5), ...(kind === 'LIB' && { lote: arg }), ...(kind === 'NC' && ncPrefill(prev, arg, f)) };
+      const pre = edit ? prev.data : { fecha: ymd(), hora: new Date().toTimeString().slice(0, 5),
+        ...(kind === 'LIB' && { lote: arg, remision: f.lotes.find(l => l.code === arg)?.remision || '' }), ...(kind === 'NC' && ncPrefill(prev, arg, f)) };
       $('#app').innerHTML = `
       <div class="flex flex-col gap-4 ${WIDE ? 'max-w-4xl' : ''}">
         <div><a href="#/calidad" class="text-primary text-label-md flex items-center gap-1"><span class="material-symbols-outlined text-[18px]">arrow_back</span>Calidad</a>
@@ -1212,7 +1213,7 @@ const views = {
           <h1 class="text-headline-lg-mobile tracking-tight">${esc(f.title)}</h1>
           <p class="text-body-md text-on-surface-variant">Planta ${esc(plant)} · ${esc(me.name)}${prev && !edit ? ` · desde ${esc(prev.folio)}` : ''}</p></div>
         ${me.role === 'admin' && !prev ? `<label class="flex flex-col gap-1 text-label-md text-on-surface-variant max-w-xs">Planta${plantSelect('id="q-planta"', plant)}</label>` : ''}
-        ${kind === 'LIB' && !secs[0].fields[0].options.length ? '<p class="card p-4 text-body-md">No hay lotes EN PLANTA para liberar. Registra primero la recepción (PL-FOR-28).</p>' : ''}
+        ${kind === 'LIB' && !secs[0].fields.find(x => x.id === 'lote').options.length ? '<p class="card p-4 text-body-md">No hay lotes EN PLANTA para liberar. Registra primero la recepción (PL-FOR-28).</p>' : ''}
         <datalist id="dl-piezas">${[...new Set(f.lotes.map(l => l.part))].map(p => `<option value="${esc(p)}">`).join('')}</datalist>
         <datalist id="dl-equipos">${EQUIPOS.map(p => `<option value="${esc(p)}">`).join('')}</datalist>
         <form id="qform" class="flex flex-col gap-4">
@@ -1237,9 +1238,15 @@ const views = {
           form.querySelector('[data-anomalia]').classList.toggle('hidden', !anom);
         }
         if (kind === 'LIB') {
-          const l = f.lotes.find(x => x.code === form.elements.lote?.value), spec = l && f.specs[l.client];
-          form.querySelector('[data-lote-info]').textContent = l ? `${l.client} · ${l.part} · quedan ${l.porLiberar} de ${l.qty} pza por liberar${l.entregadas ? ` (ya entregadas ${l.entregadas})` : ''} · ${l.rec}${spec ? ` · Especificación del cliente (criterio 7): ${spec}` : ''}`
-            : 'Elige un lote para ver cliente, no. de parte y folio REC.';
+          // Remisión → solo sus lotes; si eligen el lote primero, se pone su remisión.
+          const selR = form.elements.remision, selL = form.elements.lote, remDe = code => f.lotes.find(x => x.code === code)?.remision;
+          let l = f.lotes.find(x => x.code === selL.value);
+          if (l && !selR.value) selR.value = l.remision || '';
+          for (const o of selL.options) if (o.value) o.hidden = o.disabled = !!selR.value && remDe(o.value) !== selR.value;
+          if (selL.selectedOptions[0]?.disabled) { selL.value = ''; l = null; }
+          const spec = l && f.specs[l.client];
+          form.querySelector('[data-lote-info]').textContent = l ? `${l.client} · Remisión ${l.remision || '—'} · ${l.part} · quedan ${l.porLiberar} de ${l.qty} pza por liberar${l.entregadas ? ` (ya entregadas ${l.entregadas})` : ''} · ${l.rec}${spec ? ` · Especificación del cliente (criterio 7): ${spec}` : ''}`
+            : selR.value ? 'Elige el lote de esta remisión para ver cliente, no. de parte y folio REC.' : 'Elige la remisión y el lote para ver cliente, no. de parte y folio REC.';
           const ins = Number(form.elements.inspeccionadas.value) || 0, acc = Number(form.elements.aceptadas.value) || 0;
           form.querySelector('[data-pct]').textContent = `% de aceptación: ${ins ? Math.round(acc / ins * 1000) / 10 : 0} %`;
         }

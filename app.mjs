@@ -90,6 +90,8 @@ const PROCESOS = ['Pirólisis', 'Decapado', 'Lavado', 'Otro'];
 const CLIENTES_INI = [{ name: 'KH México', plant: 'Querétaro', spec: '' }, { name: 'Mitchell', plant: 'Querétaro', spec: '' },
   { name: 'Summit Silao', plant: 'Silao', spec: '' }, { name: 'Summit Guanajuato', plant: 'Silao', spec: '' }];
 const LOT_DAYS = 7; // alerta si un lote lleva más días EN PLANTA sin liberar (propuesta del documento; ajustable)
+// Lotes con la remisión del cliente: sale de la recepción (lots.rec → PL-FOR-28) para no duplicarla en la tabla lots.
+const LOT_SQL = "SELECT l.*, json_extract(q.data, '$.remision') remision FROM lots l LEFT JOIN qrecords q ON q.folio = l.rec";
 const CRITERIOS = ['Recubrimiento 100 % removido', 'Sin residuos de proceso', 'Sin residuo químico', 'Sin daño por temperatura',
   'Sin daño mecánico', 'Roscas y barrenos limpios', 'Especificación particular del cliente', 'Identificación conservada'];
 const DISPOS = ['LIBERADO', 'LIBERADO CON DESVIACIÓN', 'RETENIDO / NO CONFORME', 'RETRABAJO INTERNO'];
@@ -115,8 +117,10 @@ const QFORMS = {
       { id: 'danos', label: 'Daños / observaciones', type: 'textarea', wide: true }, { id: 'ubicacion', label: 'Ubicación en planta' },
       { id: 'compromiso', label: 'Fecha compromiso de entrega', type: 'date' }, { id: 'aviso', label: '¿Se avisó al cliente?', type: 'select', options: SN }] }] },
   LIB: { code: 'PL-FOR-29', title: 'Inspección y liberación de producto', sections: [
-    { n: 1, title: 'Lote', hint: 'Solo aparecen los lotes EN PLANTA. Cliente, no. de parte y folio REC se llenan solos.',
-      fields: [{ id: 'lote', label: 'Lote POLAR', type: 'select', options: [], src: 'lotes', required: true, wide: true },
+    { n: 1, title: 'Lote', hint: 'Elige la remisión del cliente: solo aparecen sus lotes EN PLANTA. Cliente, no. de parte y folio REC se llenan solos.',
+      // Remisión: la de la recepción (PL-FOR-28) del lote; el servidor la toma del lote, así cada liberación queda ligada a su remisión.
+      fields: [{ id: 'remision', label: 'Remisión del cliente', type: 'select', options: [], src: 'remisiones', required: true, wide: true },
+        { id: 'lote', label: 'Lote POLAR', type: 'select', options: [], src: 'lotes', required: true, wide: true },
         { id: 'fecha', label: 'Fecha', type: 'date', required: true }, { id: 'proceso', label: 'Proceso', type: 'select', options: PROCESOS, required: true },
         { id: 'horno', label: 'Horno #' }] },
     { n: 2, title: 'Criterios de inspección', hint: 'Con un criterio NOK no se puede liberar: el lote queda RETENIDO y hay que levantar el no conforme (PL-FOR-30).',
@@ -578,12 +582,12 @@ export function createApp({ db, files, env = {} }) {
   const lotCode = async (plant, fecha) => `${PLANT_CODE[plant]}-${fecha.replaceAll('-', '')}-${String(await nextNum(`LOTE:${plant}:${fecha}`)).padStart(2, '0')}`;
   // El admin elige planta; el encargado siempre trabaja con la suya.
   const plantFor = (user, asked) => { const p = user.role === 'admin' ? asked : user.plant; if (!PLANTS.includes(p)) throw badPlant(); return p; };
-  // Formato con sus listas de la planta: clientes del catálogo; lotes EN PLANTA (liberación) o recientes (no conforme).
+  // Formato con sus listas de la planta: clientes del catálogo; lotes EN PLANTA y sus remisiones (liberación) o recientes (no conforme).
   async function qform(kind, plant) {
     const clientes = (await getCalidad()).clientes.filter(c => c.plant === plant).map(c => c.name);
-    const lotes = (kind === 'LIB' ? await db.all("SELECT code FROM lots WHERE plant = ? AND status = 'EN PLANTA' ORDER BY code", plant)
-      : await db.all('SELECT code FROM lots WHERE plant = ? AND received >= ? ORDER BY code DESC', plant, ymd(new Date(Date.now() - 180 * DAY)))).map(l => l.code);
-    const src = { clientes, lotes };
+    const lotes = kind === 'LIB' ? await db.all(`${LOT_SQL} WHERE l.plant = ? AND l.status = 'EN PLANTA' ORDER BY l.code`, plant)
+      : await db.all('SELECT code FROM lots WHERE plant = ? AND received >= ? ORDER BY code DESC', plant, ymd(new Date(Date.now() - 180 * DAY)));
+    const src = { clientes, lotes: lotes.map(l => l.code), remisiones: [...new Set(lotes.map(l => l.remision).filter(Boolean))].sort() };
     if (kind === 'CL21') src.unidades = (await db.all('SELECT name FROM trucks WHERE plant = ? ORDER BY horometro, name', plant)).map(t => t.name);
     if (kind === 'PLA') src.personal = (await db.all('SELECT data FROM nom_emps WHERE area = ?', plant)).map(r => JSON.parse(r.data))
       .filter(e => (!e.baja || e.baja >= ymd()) && e.contrato !== 'confianza').map(e => e.nombre).sort();
@@ -1116,7 +1120,7 @@ export function createApp({ db, files, env = {} }) {
     'GET /api/calidad': async (req, user) => {
       const asked = new URL(req.url).searchParams.get('planta'), plants = user.role === 'admin' ? (PLANTS.includes(asked) ? [asked] : PLANTS) : [user.plant];
       const inP = col => `${col} IN (${plants.map(() => '?').join(', ')})`, cal = await getCalidad();
-      const lotes = await db.all(`SELECT * FROM lots WHERE ${inP('plant')} AND (status != 'ENTREGADO' OR delivered >= ?) ORDER BY received DESC, code DESC`,
+      const lotes = await db.all(`${LOT_SQL} WHERE ${inP('l.plant')} AND (l.status != 'ENTREGADO' OR l.delivered >= ?) ORDER BY l.received DESC, l.code DESC`,
         ...plants, ymd(new Date(Date.now() - 30 * DAY)));
       const registros = (await db.all(`SELECT q.folio, q.kind, q.plant, q.date, q.status, q.data, u.name FROM qrecords q JOIN users u ON u.id = q.user_id
         WHERE ${inP('q.plant')} AND q.kind != 'CLL' ORDER BY q.created_at DESC, q.folio DESC LIMIT 100`, ...plants)).map(r => ({ ...r, data: JSON.parse(r.data) }));
@@ -1137,8 +1141,9 @@ export function createApp({ db, files, env = {} }) {
       const q = new URL(req.url).searchParams, kind = q.get('tipo');
       if (!QFORMS[kind]) return json(404, { error: 'Formato no encontrado' });
       const plant = plantFor(user, q.get('planta')), cal = await getCalidad();
-      const av = await avanceLotes(plant), lotes = (await db.all('SELECT code, client, part, qty, rec, status, proceso FROM lots WHERE plant = ? AND received >= ?', plant, ymd(new Date(Date.now() - 180 * DAY))))
-        .map(l => ({ ...l, porLiberar: l.qty - (av[l.code] || AV0).inspeccionadas, entregadas: (av[l.code] || AV0).entregadas }));
+      const av = await avanceLotes(plant), lotes = (await db.all(`${LOT_SQL} WHERE l.plant = ? AND (l.received >= ? OR l.status = 'EN PLANTA')`, plant, ymd(new Date(Date.now() - 180 * DAY))))
+        .map(({ code, client, part, qty, rec, status, proceso, remision }) => ({ code, client, part, qty, rec, status, proceso, remision,
+          porLiberar: qty - (av[code] || AV0).inspeccionadas, entregadas: (av[code] || AV0).entregadas }));
       return json(200, { ...await qform(kind, plant), plant, lotes, specs: Object.fromEntries(cal.clientes.filter(c => c.plant === plant).map(c => [c.name, c.spec])) });
     },
 
@@ -1146,7 +1151,8 @@ export function createApp({ db, files, env = {} }) {
     'GET /api/calidad/registro': async (req, user) => {
       const r = await getRecord(new URL(req.url).searchParams.get('folio'), user);
       const codes = r.kind === 'REC' ? r.data.partidas.map(p => p.lote) : r.kind === 'LIB' ? [r.data.lote] : r.data.lotes || [];
-      const lotes = codes.length ? await db.all(`SELECT * FROM lots WHERE code IN (${codes.map(() => '?').join(', ')})`, ...codes) : [];
+      const lotes = codes.length ? await db.all(`${LOT_SQL} WHERE l.code IN (${codes.map(() => '?').join(', ')})`, ...codes) : [];
+      if (r.kind === 'LIB' && !r.data.remision) r.data.remision = lotes[0]?.remision || ''; // liberaciones de antes de ligar la remisión
       const ligados = (await db.all("SELECT folio, kind, status, data FROM qrecords WHERE kind = 'NC' AND plant = ?", r.plant))
         .filter(n => JSON.parse(n.data).origen === r.folio).map(({ folio, status }) => ({ folio, status }));
       const avance = r.kind === 'REC' ? (await recepcionesAbiertas(r.plant)).find(x => x.folio === r.folio) || { total: 0, partidas: [] } : null;
@@ -1173,9 +1179,13 @@ export function createApp({ db, files, env = {} }) {
 
     // PL-FOR-29: NOK o RETENIDO → lote RETENIDO (hay que levantar NC); LIBERADO (+ entrega) → LIBERADO / ENTREGADO.
     'POST /api/calidad/lib': async (req, user) => {
-      const b = await body(req), plant = plantFor(user, b.planta), a = clean(b.answers || {}, (await qform('LIB', plant)).sections);
-      const lot = await db.get('SELECT * FROM lots WHERE code = ? AND plant = ?', a.lote, plant);
-      if (lot?.status !== 'EN PLANTA') throw httpError(400, 'Ese lote no está EN PLANTA');
+      const b = await body(req), plant = plantFor(user, b.planta), ans = { ...b.answers }, code = String(ans.lote ?? '').trim();
+      const lot = code ? await db.get(`${LOT_SQL} WHERE l.code = ? AND l.plant = ?`, code, plant) : null;
+      if (code && lot?.status !== 'EN PLANTA') throw httpError(400, 'Ese lote no está EN PLANTA');
+      // La remisión es la de la recepción del lote: si mandan otra, el lote no es de esa remisión.
+      if (lot && ans.remision && ans.remision !== lot.remision) throw httpError(400, `El lote ${lot.code} es de la remisión ${lot.remision}, no de la ${ans.remision}`);
+      if (lot) ans.remision = lot.remision;
+      const a = clean(ans, (await qform('LIB', plant)).sections);
       if (a.criterios.length !== CRITERIOS.length || a.criterios.some((c, i) => c.criterio !== CRITERIOS[i] || !c.resultado))
         throw httpError(400, 'Marca OK o NOK en los 8 criterios de inspección');
       const nok = a.criterios.some(c => c.resultado === 'NOK'), insp = num(a.inspeccionadas), acc = num(a.aceptadas), libera = a.disposicion.startsWith('LIBERADO');

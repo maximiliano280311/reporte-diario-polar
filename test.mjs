@@ -63,9 +63,16 @@ assert.deepEqual([rec2.folio, rec2.anomalia, rec2.partidas[0].diferencia, rec2.p
 assert.equal((await lib({ lote: `QRO-${dia}-02`, criterios: criterios(2) })).status, 400); // NOK + LIBERADO
 assert.equal((await lib({ lote: `QRO-${dia}-02`, disposicion: 'RETRABAJO INTERNO', entrega_fecha: hoy, remision_polar: 'P-9', recibio: 'X' })).status, 400); // entrega sin liberar
 assert.equal((await lib({ lote: `QRO-${dia}-01`, entrega_fecha: hoy })).status, 400); // entrega incompleta
+// Remisión: el PL-FOR-29 ofrece las remisiones con lotes EN PLANTA y cada lote trae la de su recepción.
+const fLib = (await ok('GET', '/api/calidad/form?tipo=LIB', null, ana)).data;
+assert.deepEqual(fLib.sections[0].fields.find(x => x.id === 'remision').options, ['R-1', 'R-2']);
+assert.deepEqual([`QRO-${dia}-01`, `QRO-${dia}-02`].map(c => fLib.lotes.find(l => l.code === c).remision), ['R-1', 'R-2']);
+assert.equal((await lib({ lote: `QRO-${dia}-01`, remision: 'R-2' })).status, 400); // el lote no es de esa remisión
+assert.equal((await lib({ remision: 'R-1' })).status, 400); // falta el lote
 const lib1 = (await ok('POST', '/api/calidad/lib', { answers: { fecha: hoy, proceso: 'Pirólisis', criterios: criterios(), inspeccionadas: '10', aceptadas: '10',
   disposicion: 'LIBERADO', lote: `QRO-${dia}-01`, entrega_fecha: hoy, remision_polar: 'POL-1', recibio: 'Juan (KH)' } }, ana)).data;
-assert.deepEqual([lib1.folio, lib1.status, lib1.cliente, lib1.rec, lib1.pct], ['LIB-0001', 'ENTREGADO', 'KH México', 'REC-0001', '100']);
+assert.deepEqual([lib1.folio, lib1.status, lib1.cliente, lib1.rec, lib1.pct, lib1.remision], ['LIB-0001', 'ENTREGADO', 'KH México', 'REC-0001', '100', 'R-1']);
+assert.equal((await ok('GET', '/api/calidad/registro?folio=' + lib1.folio, null, ana)).data.data.remision, 'R-1'); // se imprime en el PL-FOR-29
 assert.equal((await lib({ lote: `QRO-${dia}-01` })).status, 400); // ya no está EN PLANTA
 const lib2 = (await ok('POST', '/api/calidad/lib', { answers: { fecha: hoy, proceso: 'Lavado', criterios: criterios(2), inspeccionadas: '8', aceptadas: '6',
   disposicion: 'RETENIDO / NO CONFORME', lote: `QRO-${dia}-02` } }, ana)).data;
@@ -73,6 +80,7 @@ assert.deepEqual([lib2.status, lib2.requiereNC, lib2.pct], ['RETENIDO', true, '7
 assert.equal((await call('POST', '/api/calidad/entrega', { folio: lib2.folio, answers: { entrega_fecha: hoy, remision_polar: 'P', recibio: 'X' } }, ana)).status, 400);
 let cal = (await ok('GET', '/api/calidad', null, ana)).data;
 assert.equal(cal.lotes.find(l => l.code === `QRO-${dia}-02`).status, 'RETENIDO');
+assert.deepEqual(cal.lotes.map(l => [l.code, l.remision]).sort(), [[`QRO-${dia}-01`, 'R-1'], [`QRO-${dia}-02`, 'R-2']]); // cada lote con su remisión
 assert.ok(cal.alertas.some(a => a.text.includes('RETENIDO sin no conforme'))); // pide levantar el NC
 
 // No conforme: retiene, avisa a gerencia, sugiere 8D si se repite; al cerrarlo el lote vuelve a EN PLANTA.

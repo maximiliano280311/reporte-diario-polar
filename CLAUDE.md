@@ -101,6 +101,10 @@ Especificación: `Modificaciones App Polar/MOD_APP_POLAR_SGC_ISO9001.md` (pedido
 - Formatos `QFORMS` en `app.mjs` (mismo esquema que `FORM`): **PL-FOR-28 Recepción (REC)**, **PL-FOR-29 Inspección y liberación (LIB)**,
   **PL-FOR-30 No conforme (NC)**. Folios `REC-0001`… consecutivos por tipo (`counters`, `INSERT … RETURNING`), no editables.
 - Cada partida de REC crea un **lote POLAR** `QRO|SIL-AAAAMMDD-NN` (tabla `lots`): EN PLANTA → LIBERADO / RETENIDO → ENTREGADO.
+- **Remisión del lote**: todo lote está ligado a la remisión del cliente de su recepción (`lots.rec` → `remision` del REC, consulta `LOT_SQL`;
+  no hay columna en `lots`). El PL-FOR-29 pide primero la **remisión** (solo aparecen sus lotes EN PLANTA) y el servidor guarda en la liberación la
+  remisión del lote (si mandan otra, error). Se ve en la lista de lotes de Calidad, en el dato del lote y en el PL-FOR-29 impreso
+  (las liberaciones viejas la toman del lote al abrirlas). Pedido del 2026-11-08.
 - **Entregas parciales**: un lote se libera y se entrega por partes (cada PL-FOR-29 inspecciona una parte; no más de lo que queda).
   El lote sigue EN PLANTA mientras le falten piezas por liberar (`avanceLotes` / `estadoLote`). La recepción PL-FOR-28 queda
   **abierta** hasta entregar todo lo recibido (lo rechazado no cuenta): `recepcionesAbiertas`, lista "Piezas pendientes por entregar"
@@ -131,8 +135,8 @@ Lo que se fue decidiendo en las sesiones de trabajo; aplica a cualquier colabora
   mismas validaciones, recalcular lo que dependa de él). Pedido del dueño el 2026-10-24.
 - **Admins**: el dueño (maxelpiloto3@gmail.com) y **Rodrigo**, que es admin permanente; lo que puede hacer "el admin" lo puede hacer cualquier admin
   (no hay funciones solo para el dueño).
-- **Publicar en producción solo cuando el dueño lo pide** ("publica"). Antes: `node test.mjs` y probar en el servidor local (`node server.mjs`).
-  Después de publicar: commit + push a `main`.
+- **Publicar cada cambio sin preguntar** (pedido de sr.maseco el 2026-11-08; antes se esperaba el "publica" del dueño). Antes: `git pull`,
+  `node test.mjs` y probar en el servidor local (`node server.mjs`); si las pruebas fallan, no se publica. Después de publicar: commit + push a `main`.
 - **Nunca dejar datos de prueba en producción** ni crear cuentas directo en D1; para probar usar el servidor local.
 - **Costos**: solo Workers Paid ($5/mes) + D1 + R2. Se quitó un worker de Containers (`ft-dryrun-freqtrade`) que encarecía la cuenta; no usar Containers.
 - **IA**: modelo `claude-haiku-5.5` (en `wrangler.jsonc`). Si los reportes salen "Sin evaluar" seguido, regresar a `deepseek-v4-flash`.
@@ -145,6 +149,8 @@ Lo que se fue decidiendo en las sesiones de trabajo; aplica a cualquier colabora
 - Código: https://github.com/maximiliano280311/reporte-diario-polar (rama `main` = lo publicado). Antes de empezar `git pull`; al terminar commit + push.
 - Publicar: `npx wrangler login` con una cuenta que tenga acceso a la cuenta de Cloudflare del dueño (`account_id` en `wrangler.jsonc`) y `npx wrangler deploy`.
   Publicar siempre desde `main` ya actualizado (`git pull`), si no se borra lo que publicó el otro.
+- Colaborador **sr.maseco@gmail.com**: publica con `wrangler` en la cuenta del dueño, pero **no puede consultar ni modificar D1**
+  (`wrangler d1 execute` da error 7403). Un cambio de tablas lo tiene que aplicar el dueño o darle ese permiso en Cloudflare.
 - `AGENTS.md` solo apunta a este archivo (para Codex u otros asistentes); el contexto vive aquí.
 
 ## Pendientes conocidos
