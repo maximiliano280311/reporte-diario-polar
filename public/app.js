@@ -181,12 +181,18 @@ const sectionsHtml = (secs, pre, rows, extra = () => '') => secs.map(s => { cons
     ${extra(s, 'top')}
     ${top.length ? `<div class="grid grid-cols-2 lg:grid-cols-4 gap-3">${top.map(f => f.padre
       ? `<div data-padre="${esc(f.padre)}" data-cuando="${esc(f.cuando || '')}" class="col-span-2 lg:col-span-4 grid grid-cols-2 lg:grid-cols-4 gap-3 border-l-4 border-primary-container/40" style="padding-left:${12 * (f.nivel || 1)}px">${labeled({ ...f, wide: true }, input(f, f.id, pre?.[f.id]))}</div>`
-      : labeled(f, input(f, f.id, pre?.[f.id]))).join('')}</div>` : ''}
+      : condField(f, input(f, f.id, pre?.[f.id]))).join('')}</div>` : ''}
     ${s.table ? `<div data-table="${s.table.id}" class="flex flex-col gap-2">${rows(s.table).map(r => rowHtml(s.table, r)).join('')}</div>
       ${s.table.fixed ? '' : `<button type="button" data-add="${s.table.id}" class="btn border-[1.5px] border-[#cbd5e1] text-primary"><span class="material-symbols-outlined">add</span>Agregar ${esc(s.table.item)}</button>`}` : ''}
     ${extra(s, 'bottom')}
     ${(s.fields || []).filter(f => f.after).map(f => `<div class="grid grid-cols-2">${labeled(f, input(f, f.id, pre?.[f.id]))}</div>`).join('')}
   </section>`; }).join('');
+// Campo con cond (p. ej. el aviso de entrega incompleta): lleva data-cond y su asterisco; syncCond lo muestra y lo exige solo cuando aplica.
+const condField = (f, html) => f.cond ? labeled({ ...f, required: true }, html).replace(/^\s*<(\w+) /, `<$1 data-cond="${esc(f.cond)}" `) : labeled(f, html);
+const syncCond = (root, cond, on) => root.querySelectorAll(`[data-cond="${cond}"]`).forEach(box => {
+  box.classList.toggle('hidden', !on);
+  box.querySelectorAll('input, select, textarea').forEach(x => { x.disabled = !on; x.required = on; });
+});
 // Subpreguntas: se ven solo si su pregunta padre tiene respuesta (y es la de "cuando", si la hay). Las ocultas se desactivan:
 // no se envían ni se exigen (el servidor hace lo mismo).
 function syncSubs(root) {
@@ -254,7 +260,7 @@ const pendientesHtml = (abiertas, admin) => abiertas.length ? `<section class="c
       <span class="chip bg-tertiary-fixed text-on-tertiary-fixed">${r.total} por entregar</span></p>
     <p class="text-[12px] text-on-surface-variant">Recibido ${dmy(r.date)}${r.compromiso ? ` · compromiso ${dmy(r.compromiso)}${r.compromiso < ymd() ? ' ⚠ vencido' : ''}` : ''}${admin ? ' · ' + esc(r.plant) : ''}</p>
     ${r.partidas.filter(x => x.porEntregar).map(x => `<div class="flex flex-wrap items-center gap-2 mt-1 text-body-sm">
-      <span class="font-medium">${esc(x.lote)}</span><span class="text-on-surface-variant">${esc(x.parte)} · recibidas ${x.recibidas} · entregadas ${x.entregadas}${x.rechazadas ? ` · rechazadas ${x.rechazadas}` : ''}${x.faltanLlegar ? ` · faltan por llegar ${x.faltanLlegar}` : ''}</span>
+      <span class="font-medium">${esc(x.lote)}</span><span class="text-on-surface-variant">${esc(x.parte)} · recibidas ${x.recibidas} · entregadas ${x.entregadas}${x.rechazadas ? ` · rechazadas ${x.rechazadas}` : ''}${x.retenidas ? ` · <b class="text-error">retenidas ${x.retenidas}</b>` : ''}${x.faltanLlegar ? ` · faltan por llegar ${x.faltanLlegar}` : ''}</span>
       <b class="text-tertiary">${x.porEntregar} por entregar</b>
       ${x.porLiberar ? `<a href="#/lib/${encodeURIComponent(x.lote)}" class="text-label-sm text-primary font-semibold">Liberar ${x.porLiberar}</a>` : ''}
       ${x.libsPorEntregar.map(f => `<a href="#/q/${esc(f)}" class="text-label-sm text-primary font-semibold">Entregar ${esc(f)}</a>`).join(' ')}</div>`).join('')}
@@ -264,7 +270,8 @@ function ncPrefill(prev, arg, f) {
   const d = prev?.data;
   if (prev?.kind === 'REC') return { cliente: d.cliente, parte: d.partidas.map(p => p.parte).join(', '), lotes: d.partidas.map(p => p.lote),
     cantidad: String(d.partidas.reduce((t, p) => t + Math.abs(Number(p.diferencia) || 0), 0) || ''), detectado: 'Recepción', descripcion: d.danos || '' };
-  if (prev?.kind === 'LIB') return { cliente: d.cliente, parte: d.parte, lotes: [d.lote], cantidad: d.rechazadas || String(sum(d.criterios, 'piezas_nok') || ''), detectado: 'Inspección final' };
+  if (prev?.kind === 'LIB') return { cliente: d.cliente, parte: d.parte, lotes: [d.lote], cantidad: Number(d.rechazadas) ? d.rechazadas : String(sum(d.criterios, 'piezas_nok') || ''),
+    detectado: 'Inspección final', descripcion: (d.criterios || []).filter(c => c.resultado === 'NOK' && c.corregido === 'No').map(c => `${c.criterio}: ${c.piezas_nok} pza — ${c.accion}`).join('\n') };
   const l = f.lotes.find(x => x.code === arg);
   return l ? { cliente: l.client, parte: l.part, lotes: [l.code] } : {};
 }
@@ -324,12 +331,12 @@ function qDoc(r) {
       <tr><td class="bar">${esc(r.title.toUpperCase())}</td><td class="k">Folio</td><td>${esc(r.folio)}</td></tr></table>
     <div class="bar">DATOS DEL REGISTRO</div>${kv(head)}
     ${r.sections.map(s => {
-      const fs = (s.fields || []).filter(f => f.type !== 'photos'), t = s.table, rows = t ? a[t.id] || [] : [];
+      const fs = (s.fields || []).filter(f => f.type !== 'photos' && !(f.cond && !a[f.id])), t = s.table, rows = t ? a[t.id] || [] : [];
       return `<div class="bar">${s.n}. ${esc(s.title.toUpperCase())}</div>
         ${fs.length ? kv(fs.map(f => [f.label, f.type === 'date' ? dmy(a[f.id]) : [].concat(a[f.id] ?? '').join(', ')])) : ''}
         ${t ? `<table><thead><tr>${t.cols.map(c => `<th>${esc(c.label)}</th>`).join('')}</tr></thead><tbody>${rows.length
           ? rows.map(x => `<tr>${t.cols.map(c => `<td>${esc(x[c.id])}</td>`).join('')}</tr>`).join('') : `<tr><td colspan="${t.cols.length}" class="c">—</td></tr>`}</tbody></table>` : ''}
-        ${r.kind === 'LIB' && s.n === 3 ? kv([['% de aceptación', `${a.pct} %`]]) : ''}`;
+        ${r.kind === 'LIB' && s.n === 3 ? kv([['% de aceptación', `${a.pct} %`], ['No conformes (inspeccionadas − aceptadas)', a.rechazadas || '0']]) : ''}`;
     }).join('')}
     <table class="firmas"><tr><td>${esc(r.name)}<br><b>ELABORÓ</b></td><td><b>REVISÓ — GERENCIA</b></td></tr></table>
     ${fotos.length ? `<div class="bar">ANEXOS — FOTOS</div><div class="fotos">${fotos.map(([l, k]) => `<figure><img src="/api/files/${esc(k)}" alt="${esc(l)}"><figcaption>${esc(l)}</figcaption></figure>`).join('')}</div>` : ''}
@@ -1221,6 +1228,7 @@ const views = {
             : kind === 'LIB' && s.n === 1 ? '<p data-lote-info class="p-3 rounded-xl bg-surface-container text-label-md"></p>'
             : kind === 'LIB' && s.n === 3 ? '<p data-pct class="p-3 rounded-xl bg-surface-container-high/60 text-label-lg text-primary"></p>'
             : kind === 'LIB' && s.n === 4 ? '<p data-dispo class="hidden p-3 rounded-xl bg-error-container text-on-error-container text-label-md"></p>'
+            : kind === 'LIB' && s.n === 5 ? '<p data-incompleta class="hidden p-3 rounded-xl bg-tertiary-fixed text-on-tertiary-fixed text-label-md"></p>'
             : kind === 'REC' && s.n === 3 ? '<p data-anomalia class="hidden p-3 rounded-xl bg-tertiary-fixed text-on-tertiary-fixed text-label-md">⚠ Hay diferencia de conteo o algo en "No": anótalo en la remisión antes de firmar. Al guardar podrás levantar el no conforme.</p>' : '')}
           <p id="err" class="text-sm text-error hidden" role="alert"></p>
           <button class="btn btn-primary w-full"><span class="material-symbols-outlined">save</span>${edit ? 'Guardar cambios' : 'Guardar ' + KIND[kind][1].toLowerCase()}</button>
@@ -1249,7 +1257,7 @@ const views = {
           form.querySelector('[data-lote-info]').textContent = l ? `${l.client} · Remisión ${l.remision || '—'} · ${l.part} · quedan ${l.porLiberar} de ${l.qty} pza por liberar${l.entregadas ? ` (ya entregadas ${l.entregadas})` : ''} · ${l.rec}${spec ? ` · Especificación del cliente (criterio 7): ${spec}` : ''}`
             : selR.value ? 'Elige el lote de esta remisión para ver cliente, no. de parte y folio REC.' : 'Elige la remisión y el lote para ver cliente, no. de parte y folio REC.';
           const ins = Number(form.elements.inspeccionadas.value) || 0, acc = Number(form.elements.aceptadas.value) || 0;
-          form.querySelector('[data-pct]').textContent = `% de aceptación: ${ins ? Math.round(acc / ins * 1000) / 10 : 0} %`;
+          form.querySelector('[data-pct]').textContent = `% de aceptación: ${ins ? Math.round(acc / ins * 1000) / 10 : 0} % · No conformes: ${Math.max(0, ins - acc)}`;
           // Criterio NOK: se abren piezas no OK, ¿se corrigió? y qué se va a hacer (obligatorias). Si alguno no se corrigió, no se puede liberar.
           const sinCorregir = [];
           form.querySelectorAll('[data-table="criterios"] [data-row]').forEach(row => {
@@ -1260,11 +1268,20 @@ const views = {
             });
             if (nok && row.querySelector('[name$=".corregido"]').value === 'No') sinCorregir.push(row.querySelector('[name$=".criterio"]').value);
           });
+          // Con NOK sin corregir no se libera todo (LIBERADO); LIBERADO PARCIAL solo tiene sentido si los hay.
           const dispo = form.elements.disposicion, aviso = form.querySelector('[data-dispo]');
-          for (const o of dispo.options) if (o.value.startsWith('LIBERADO')) o.disabled = sinCorregir.length > 0;
+          for (const o of dispo.options) o.disabled = (o.value === 'LIBERADO' && sinCorregir.length > 0) || (o.value === 'LIBERADO PARCIAL' && !sinCorregir.length);
           if (dispo.selectedOptions[0]?.disabled) dispo.value = '';
           aviso.classList.toggle('hidden', !sinCorregir.length);
-          aviso.textContent = sinCorregir.length ? `NOK sin corregir (${sinCorregir.join(', ')}): no se puede liberar. Elige la disposición; el lote queda RETENIDO y hay que levantar el no conforme (PL-FOR-30).` : '';
+          aviso.textContent = sinCorregir.length ? `NOK sin corregir (${sinCorregir.join(', ')}): no se puede liberar todo. LIBERADO PARCIAL: salen las aceptadas y las no conformes quedan RETENIDAS ` +
+            'con su no conforme (PL-FOR-30). CON DESVIACIÓN: si el cliente las acepta como están. O RETENIDO / RETRABAJO de todo lo inspeccionado.' : '';
+          // Entrega incompleta: si con esta entrega quedan piezas de la remisión sin entregar, pide el aviso previo al cliente.
+          const faltan = l ? (f.pendRec[l.rec] || 0) - acc : 0, entregaLlena = ['entrega_fecha', 'remision_polar', 'recibio'].some(k => form.elements[k].value);
+          const incompleta = faltan > 0 && entregaLlena && dispo.value.startsWith('LIBERADO');
+          syncCond(form, 'incompleta', incompleta);
+          const inc = form.querySelector('[data-incompleta]');
+          inc.classList.toggle('hidden', !incompleta);
+          inc.textContent = incompleta ? `Entrega incompleta: quedan ${faltan} piezas de la remisión ${l.remision || ''} sin entregar. Anota a quién del cliente se le avisó antes, la fecha y el medio.` : '';
         }
       };
       form.onclick = e => {
@@ -1298,8 +1315,9 @@ const views = {
     const box = (cls, icon, html) => `<div class="rounded-xl p-4 flex items-start gap-3 ${cls}"><span class="material-symbols-outlined">${icon}</span><p class="text-body-md">${html}</p></div>`;
     const msg = kind === 'REC' ? (r.anomalia ? box('bg-tertiary-fixed text-on-tertiary-fixed', 'warning', 'Hay diferencia de conteo o algo en "No". Anótalo en la remisión antes de firmar y levanta el no conforme.') : '')
         + `<p class="text-body-md">Lotes asignados: ${r.partidas.map(p => `<b>${esc(p.lote)}</b> (${esc(p.parte)}, ${esc(p.contada)} pza)`).join(', ')}</p>`
-      : kind === 'LIB' ? (r.requiereNC ? box('bg-error-container text-on-error-container', 'block', `El lote ${esc(r.lote)} quedó <b>RETENIDO</b>. Levanta ahora el no conforme (PL-FOR-30).`)
+      : kind === 'LIB' ? (r.status === 'RETENIDO' ? box('bg-error-container text-on-error-container', 'block', `El lote ${esc(r.lote)} quedó <b>RETENIDO</b>. Levanta ahora el no conforme (PL-FOR-30).`)
         : `<p class="text-body-md">Lote <b>${esc(r.lote)}</b>: ${statusChip(r.status)} · aceptación ${esc(r.pct)} %</p>`
+          + (r.retenidas ? box('bg-error-container text-on-error-container', 'block', `Liberación parcial: salieron <b>${esc(r.aceptadas)}</b> piezas y <b>${r.retenidas}</b> quedan <b>RETENIDAS</b>. Sepáralas, identifícalas y levanta ahora el no conforme (PL-FOR-30).`) : '')
           + (r.quedan > 0 ? box('bg-tertiary-fixed text-on-tertiary-fixed', 'pending_actions', `Entrega parcial: quedan <b>${r.quedan}</b> piezas del lote por liberar. La recepción ${esc(r.rec)} sigue abierta hasta entregar todo.`) : ''))
       : kind !== 'NC' ? `<p class="text-body-md">Resultado: ${statusChip(r.status)}${r.status.startsWith('RECHAZADA') ? ' · se avisó a gerencia' : ''}</p>`
         + (r.sin_respaldo === 'Sí' ? box('bg-tertiary-fixed text-on-tertiary-fixed', 'warning', 'Actualización de software <b>sin respaldo</b> previo.') : '')
@@ -1319,8 +1337,8 @@ const views = {
   // Registro de Calidad: documento imprimible + siguientes pasos (entregar, levantar o cerrar el no conforme).
   async q(folio) {
     const r = await api('/api/calidad/registro?folio=' + encodeURIComponent(decodeURIComponent(folio)));
-    const entrega = r.kind === 'LIB' && r.status === 'LIBERADO' ? r.sections.find(s => s.n === 5).fields.map(f => ({ ...f, required: f.type !== 'photos' })) : null;
-    const needNC = !r.ligados.length && ((r.kind === 'REC' && r.status === 'CON OBSERVACIONES') || (r.kind === 'LIB' && r.status === 'RETENIDO'));
+    const entrega = r.kind === 'LIB' && r.status === 'LIBERADO' ? r.sections.find(s => s.n === 5).fields.map(f => ({ ...f, required: f.type !== 'photos' && !f.cond })) : null;
+    const needNC = !r.ligados.length && ((r.kind === 'REC' && r.status === 'CON OBSERVACIONES') || (r.kind === 'LIB' && (r.status === 'RETENIDO' || r.data.disposicion === 'LIBERADO PARCIAL')));
     $('#app').innerHTML = `
     <div class="no-print flex flex-wrap items-center justify-between gap-2 mb-4">
       <a href="#/calidad" class="text-primary font-semibold flex items-center gap-1"><span class="material-symbols-outlined">arrow_back</span>Calidad</a>
@@ -1336,12 +1354,14 @@ const views = {
       ${r.ligados.length ? `<p>No conformes ligados: ${r.ligados.map(n => `<a href="#/q/${esc(n.folio)}" class="text-primary font-semibold">${esc(n.folio)}</a> ${statusChip(n.status)}`).join(' ')}</p>` : ''}</div>` : ''}
     ${entrega ? `<form id="entrega" class="no-print card p-4 mb-4 flex flex-col gap-3">
       <h2 class="font-semibold flex items-center gap-2"><span class="material-symbols-outlined text-primary">local_shipping</span>Registrar entrega del lote ${esc(r.data.lote)}</h2>
-      <div class="grid grid-cols-2 lg:grid-cols-4 gap-3">${entrega.map(f => labeled(f, input(f, f.id, f.type === 'date' ? ymd() : ''))).join('')}</div>
+      ${r.faltan > 0 ? `<p class="p-3 rounded-xl bg-tertiary-fixed text-on-tertiary-fixed text-label-md">Entrega incompleta: con esta entrega quedan ${r.faltan} piezas de la remisión ${esc(r.data.remision || '')} sin entregar. Anota a quién del cliente se le avisó antes, la fecha y el medio.</p>` : ''}
+      <div class="grid grid-cols-2 lg:grid-cols-4 gap-3">${entrega.map(f => condField(f, input(f, f.id, f.type === 'date' ? ymd() : ''))).join('')}</div>
       <button class="btn btn-primary"><span class="material-symbols-outlined">save</span>Guardar entrega</button></form>` : ''}
     ${r.kind === 'REC' && r.avance?.total ? `<div class="no-print mb-3">${pendientesHtml([r.avance], false)}</div>` : ''}
     ${qDoc(r)}`;
     const form = $('#entrega');
     if (!form) return;
+    syncCond(form, 'incompleta', r.faltan > 0);
     form.onchange = e => handleUpload(e, () => {});
     form.onclick = e => { const d = e.target.closest('[data-del-photo]'); if (d) d.closest('[data-photo]').remove(); };
     form.onsubmit = async e => {

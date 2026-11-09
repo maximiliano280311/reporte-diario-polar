@@ -315,8 +315,12 @@ const recP = (await ok('POST', '/api/calidad/rec', { answers: { fecha: hoy, hora
 const loteP = recP.partidas[0].lote, libP = a => call('POST', '/api/calidad/lib', { answers: { fecha: hoy, proceso: 'Lavado', criterios: criterios(), disposicion: 'LIBERADO', lote: loteP, ...a } }, beto2);
 const abierta = async () => (await ok('GET', '/api/calidad', null, beto2)).data.abiertas.find(x => x.folio === recP.folio);
 assert.deepEqual([(await abierta()).total, (await abierta()).partidas[0].faltanLlegar], [10, 2]); // faltan 2 por llegar según remisión
-const lp1 = (await libP({ inspeccionadas: '6', aceptadas: '6', entrega_fecha: hoy, remision_polar: 'POL-P1', recibio: 'Juan' })).data; // entrega parcial
-assert.deepEqual([lp1.status, lp1.estadoLote, lp1.quedan], ['ENTREGADO', 'EN PLANTA', 4]);
+// Entrega incompleta (quedan piezas de la remisión): se permite solo con el aviso previo al cliente.
+const entregaP1 = { inspeccionadas: '6', aceptadas: '6', entrega_fecha: hoy, remision_polar: 'POL-P1', recibio: 'Juan' }, aviso = { aviso_contacto: 'Juan (KH)', aviso_fecha: hoy, aviso_medio: 'Llamada' };
+assert.equal((await libP(entregaP1)).status, 400); // sin aviso
+assert.equal((await libP({ ...entregaP1, ...aviso, aviso_fecha: '2099-01-01' })).status, 400); // el aviso no puede ser después de la entrega
+const lp1 = (await libP({ ...entregaP1, ...aviso })).data; // entrega parcial
+assert.deepEqual([lp1.status, lp1.estadoLote, lp1.quedan, lp1.aviso_contacto], ['ENTREGADO', 'EN PLANTA', 4, 'Juan (KH)']);
 assert.equal((await abierta()).total, 4);
 assert.equal((await libP({ inspeccionadas: '5', aceptadas: '5' })).status, 400); // solo quedan 4
 // NOK: piezas, acción y "¿se corrigió?" obligatorios; sin corregir no libera; corregido sí.
@@ -332,6 +336,55 @@ assert.equal(calP.lotes.find(l => l.code === loteP).status, 'ENTREGADO');
 assert.equal(calP.registros.find(r => r.folio === recP.folio).porEntregar, 0);
 const movP = (await ok('GET', '/api/defaults', null, beto2)).data.mov['kh méxico|p-9'];
 assert.deepEqual([movP.recibido, movP.entregado], [10, 10]); // la sección 7 suma las dos entregas
+
+// ---------- Liberación parcial (ISO 9001 8.7): salen las aceptadas; las no conformes quedan retenidas hasta cerrar su no conforme ----------
+const recR = (await ok('POST', '/api/calidad/rec', { answers: { fecha: hoy, hora: '10:00', cliente: 'KH México', remision: 'R-RET', fotos: [foto], ...estadoOK,
+  partidas: [{ parte: 'P-7', remision: '10', contada: '10', proceso: 'Pirólisis' }] } }, beto2)).data;
+const loteR = recR.partidas[0].lote, entregaR = { entrega_fecha: hoy, remision_polar: 'POL-R1', recibio: 'Juan' };
+const libR = a => call('POST', '/api/calidad/lib', { answers: { fecha: hoy, proceso: 'Pirólisis', lote: loteR, inspeccionadas: '10', aceptadas: '8',
+  criterios: criterios(4, { piezas_nok: '2' }), disposicion: 'LIBERADO PARCIAL', ...a } }, beto2);
+assert.equal((await libR({ disposicion: 'LIBERADO' })).status, 400); // NOK sin corregir: no se libera todo
+assert.equal((await libR({ criterios: criterios() })).status, 400); // parcial sin NOK sin corregir
+assert.equal((await libR({ aceptadas: '9' })).status, 400); // 1 no conforme < 2 piezas NOK
+assert.equal((await libR({ aceptadas: '0' })).status, 400); // nada que liberar
+assert.equal((await libR({ disposicion: 'LIBERADO CON DESVIACIÓN', autorizo_cliente: 'Ing. Pérez' })).status, 400); // con desviación se aceptan todas
+assert.equal((await libR(entregaR)).status, 400); // entrega incompleta (quedan las retenidas) sin aviso
+const lr1r = await libR({ ...entregaR, ...aviso });
+assert.equal(lr1r.status, 200, JSON.stringify(lr1r.data));
+const lr1 = lr1r.data;
+assert.deepEqual([lr1.status, lr1.estadoLote, lr1.retenidas, lr1.requiereNC, lr1.rechazadas], ['ENTREGADO', 'RETENIDO', 2, true, '2']);
+let calR = (await ok('GET', '/api/calidad', null, beto2)).data;
+const abR = () => calR.abiertas.find(x => x.folio === recR.folio);
+assert.deepEqual([abR().total, abR().partidas[0].retenidas, abR().partidas[0].porLiberar], [2, 2, 0]); // la remisión sigue abierta por las retenidas
+assert.ok(calR.alertas.some(a => a.folio === lr1.folio && a.text.includes('retenidas sin no conforme')));
+assert.ok(!calR.alertas.some(a => a.text.includes(`Lote ${loteR} está RETENIDO`)));
+// El NC de las retenidas no retiene todo el lote; al cerrarlo con retrabajo regresan a liberarse.
+const ncR = { fecha: hoy, cliente: 'KH México', parte: 'P-7', cantidad: '2', lotes: [loteR], detectado: 'Inspección final', tipo: ['Residuo químico'],
+  descripcion: 'Residuo', fotos: [foto], separado: 'Sí', disposicion: 'Retrabajo' };
+const ncr = (await ok('POST', '/api/calidad/nc', { answers: ncR, origen: lr1.folio }, beto2)).data;
+calR = (await ok('GET', '/api/calidad', null, beto2)).data;
+assert.equal(calR.lotes.find(l => l.code === loteR).status, 'RETENIDO');
+assert.ok(!calR.alertas.some(a => a.folio === lr1.folio));
+await ok('POST', '/api/calidad/nc/actualizar', { folio: ncr.folio, answers: { ...ncR, estatus: 'CERRADO', cierre: hoy } }, beto2);
+calR = (await ok('GET', '/api/calidad', null, beto2)).data;
+assert.deepEqual([calR.lotes.find(l => l.code === loteR).status, abR().partidas[0].porLiberar], ['EN PLANTA', 2]);
+// Las retrabajadas se vuelven a inspeccionar: un NOK corregido y vuelto a revisar sí se libera; la entrega completa no pide aviso.
+const lr2 = (await ok('POST', '/api/calidad/lib', { answers: { fecha: hoy, proceso: 'Pirólisis', lote: loteR, inspeccionadas: '2', aceptadas: '2',
+  criterios: criterios(4, { piezas_nok: '1', corregido: 'Sí' }), disposicion: 'LIBERADO', ...entregaR, remision_polar: 'POL-R2' } }, beto2)).data;
+assert.deepEqual([lr2.status, lr2.estadoLote, lr2.aviso_contacto], ['ENTREGADO', 'ENTREGADO', '']);
+calR = (await ok('GET', '/api/calidad', null, beto2)).data;
+assert.equal(abR(), undefined); // la remisión ya se entregó completa
+// Si el NC de las retenidas se cierra con desecho, salen como rechazadas y la remisión se cierra sin ellas.
+const recD = (await ok('POST', '/api/calidad/rec', { answers: { fecha: hoy, hora: '11:00', cliente: 'KH México', remision: 'R-DES', fotos: [foto], ...estadoOK,
+  partidas: [{ parte: 'P-8', remision: '5', contada: '5', proceso: 'Lavado' }] } }, beto2)).data;
+const libD = (await ok('POST', '/api/calidad/lib', { answers: { fecha: hoy, proceso: 'Lavado', lote: recD.partidas[0].lote, inspeccionadas: '5', aceptadas: '4',
+  criterios: criterios(4, { piezas_nok: '1' }), disposicion: 'LIBERADO PARCIAL', entrega_fecha: hoy, remision_polar: 'POL-D1', recibio: 'Juan', ...aviso } }, beto2)).data;
+const ncD = { ...ncR, parte: 'P-8', cantidad: '1', lotes: [recD.partidas[0].lote], disposicion: 'Desecho (autoriza cliente)' };
+const ncd = (await ok('POST', '/api/calidad/nc', { answers: ncD, origen: libD.folio }, beto2)).data;
+await ok('POST', '/api/calidad/nc/actualizar', { folio: ncd.folio, answers: { ...ncD, estatus: 'CERRADO', cierre: hoy } }, beto2);
+calR = (await ok('GET', '/api/calidad', null, beto2)).data;
+assert.equal(calR.abiertas.find(x => x.folio === recD.folio), undefined);
+assert.equal(calR.lotes.find(l => l.code === recD.partidas[0].lote).status, 'ENTREGADO');
 
 // Periodo de pago por planta: día de inicio y desfase (Silao paga una semana atrás); solo admin.
 const cfgN = (await ok('POST', '/api/nomina/config', { config: { inicio: { Querétaro: 1, Silao: 1 }, desfase: { Querétaro: -1, Silao: 1, Administración: 9 } } }, admin)).data;

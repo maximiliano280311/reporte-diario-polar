@@ -94,12 +94,22 @@ const LOT_DAYS = 7; // alerta si un lote lleva más días EN PLANTA sin liberar 
 const LOT_SQL = "SELECT l.*, json_extract(q.data, '$.remision') remision FROM lots l LEFT JOIN qrecords q ON q.folio = l.rec";
 const CRITERIOS = ['Recubrimiento 100 % removido', 'Sin residuos de proceso', 'Sin residuo químico', 'Sin daño por temperatura',
   'Sin daño mecánico', 'Roscas y barrenos limpios', 'Especificación particular del cliente', 'Identificación conservada'];
-const DISPOS = ['LIBERADO', 'LIBERADO CON DESVIACIÓN', 'RETENIDO / NO CONFORME', 'RETRABAJO INTERNO'];
+// LIBERADO PARCIAL (ISO 9001 8.7): salen las aceptadas; las no conformes quedan retenidas con su PL-FOR-30 sin detener el resto del lote.
+const DISPOS = ['LIBERADO', 'LIBERADO PARCIAL', 'LIBERADO CON DESVIACIÓN', 'RETENIDO / NO CONFORME', 'RETRABAJO INTERNO'];
+const PARCIAL = 'LIBERADO PARCIAL';
+const NC_DISPOS = ['Retrabajo', 'Usar como está (autoriza cliente)', 'Desecho (autoriza cliente)', 'Reposición o pago'];
+const NC_BAJA = NC_DISPOS.slice(2); // al cerrar el NC esas piezas ya no regresan a liberarse (no se entregan)
 const NC_TIPOS = ['Proceso incompleto', 'Daño por temperatura', 'Daño mecánico', 'Residuo químico', 'Faltante / pérdida', 'Pieza mezclada', 'Otro'];
 const ESTADO_REC = [['empaque', 'Empaque OK'], ['sin_danos', 'Piezas sin golpes / óxido'], ['identificacion', 'Identificación legible'],
   ['cantidad_ok', 'Cantidad coincide'], ['fotos_ok', 'Fotos tomadas'], ['separado', 'Material separado']];
+// cond 'incompleta': solo se piden si con esta entrega quedan piezas de la remisión sin entregar (aviso previo al cliente, ISO 9001 8.2).
+const AVISO = ['aviso_contacto', 'aviso_fecha', 'aviso_medio'];
 const ENTREGA = [{ id: 'entrega_fecha', label: 'Fecha de entrega', type: 'date' }, { id: 'remision_polar', label: 'Remisión POLAR' },
-  { id: 'recibio', label: 'Recibió (cliente)' }, { id: 'foto_remision', label: 'Foto de la remisión firmada', type: 'photos', wide: true }];
+  { id: 'recibio', label: 'Recibió (cliente)' },
+  { id: 'aviso_contacto', label: 'Entrega incompleta: ¿a quién del cliente se le avisó antes?', cond: 'incompleta', wide: true },
+  { id: 'aviso_fecha', label: 'Fecha del aviso', type: 'date', cond: 'incompleta' },
+  { id: 'aviso_medio', label: 'Medio del aviso', type: 'select', options: ['Llamada', 'Correo', 'WhatsApp', 'En persona'], cond: 'incompleta' },
+  { id: 'foto_remision', label: 'Foto de la remisión firmada', type: 'photos', wide: true }];
 const QFORMS = {
   REC: { code: 'PL-FOR-28', title: 'Recepción de material del cliente y trazabilidad', sections: [
     { n: 1, title: 'Encabezado', fields: [{ id: 'fecha', label: 'Fecha', type: 'date', required: true }, { id: 'hora', label: 'Hora', type: 'time', required: true },
@@ -126,14 +136,18 @@ const QFORMS = {
     { n: 2, title: 'Criterios de inspección', hint: 'Si un criterio sale NOK anota cuántas piezas, qué se va a hacer y si se corrigió. Si no se corrigió no se puede liberar: ' +
       'en la disposición el lote queda RETENIDO y hay que levantar el no conforme (PL-FOR-30).',
       // Columnas nok: solo se ven y se exigen cuando el criterio es NOK (la app las abre; el servidor las valida en POST /api/calidad/lib).
+      // corregido = Sí solo si después de corregir se volvió a revisar y quedó OK (ISO 9001 8.7.1: verificar lo corregido).
       table: { id: 'criterios', fixed: CRITERIOS, cols: [{ id: 'criterio', label: 'Criterio', readonly: true, wide: true },
         { id: 'resultado', label: 'Resultado', type: 'select', options: ['OK', 'NOK'], required: true },
-        { id: 'piezas_nok', label: 'Piezas no OK', type: 'number', nok: true }, { id: 'corregido', label: '¿Se corrigió?', type: 'select', options: SN, nok: true },
+        { id: 'piezas_nok', label: 'Piezas no OK', type: 'number', nok: true },
+        { id: 'corregido', label: '¿Se corrigió y se volvió a revisar OK?', type: 'select', options: SN, nok: true },
         { id: 'accion', label: '¿Qué se va a hacer?', nok: true, wide: true }] } },
-    { n: 3, title: 'Cantidades', hint: '% de aceptación = aceptadas ÷ inspeccionadas (se calcula solo).',
+    { n: 3, title: 'Cantidades', hint: 'Aceptadas = las OK más las corregidas y vueltas a revisar. No conformes = inspeccionadas − aceptadas (se calcula solo).',
       fields: [{ id: 'inspeccionadas', label: 'Inspeccionadas', type: 'number', required: true }, { id: 'aceptadas', label: 'Aceptadas', type: 'number', required: true },
-        { id: 'rechazadas', label: 'Rechazadas', type: 'number' }, { id: 'retrabajo', label: 'A retrabajo', type: 'number' }] },
-    { n: 4, title: 'Disposición', fields: [{ id: 'disposicion', label: 'Disposición', type: 'select', options: DISPOS, required: true, wide: true },
+        { id: 'retrabajo', label: 'A retrabajo', type: 'number' }] },
+    { n: 4, title: 'Disposición', hint: 'LIBERADO: todo OK o corregido. LIBERADO PARCIAL: salen las aceptadas y las no conformes quedan retenidas con su ' +
+      'no conforme (PL-FOR-30). CON DESVIACIÓN: el cliente autorizó aceptarlas como están. RETRABAJO INTERNO: se reprocesan y se vuelven a inspeccionar.',
+      fields: [{ id: 'disposicion', label: 'Disposición', type: 'select', options: DISPOS, required: true, wide: true },
       { id: 'autorizo_cliente', label: 'Quién autorizó la desviación (cliente)', wide: true }] },
     { n: 5, title: 'Entrega', hint: 'Llénala cuando las piezas salgan de planta (también se puede registrar después). Al guardarla el lote pasa a ENTREGADO.', fields: ENTREGA }] },
   NC: { code: 'PL-FOR-30', title: 'Producto no conforme y daño a propiedad del cliente', sections: [
@@ -148,8 +162,7 @@ const QFORMS = {
     { n: 3, title: 'Contención', fields: [{ id: 'separado', label: '¿Se separó e identificó?', type: 'select', options: SN, required: true },
       { id: 'aviso', label: '¿Se avisó al cliente?', type: 'select', options: SN }, { id: 'contencion', label: 'Contención realizada', type: 'textarea', wide: true },
       { id: 'aviso_fecha', label: 'Fecha del aviso', type: 'date' }, { id: 'aviso_contacto', label: 'Contacto del cliente' }] },
-    { n: 4, title: 'Disposición', fields: [{ id: 'disposicion', label: 'Disposición', type: 'select', required: true, wide: true,
-      options: ['Retrabajo', 'Usar como está (autoriza cliente)', 'Desecho (autoriza cliente)', 'Reposición o pago'] },
+    { n: 4, title: 'Disposición', fields: [{ id: 'disposicion', label: 'Disposición', type: 'select', required: true, wide: true, options: NC_DISPOS },
       { id: 'costo', label: 'Costo estimado ($)', type: 'number' }, { id: 'autorizo', label: 'Autorizó' }] },
     { n: 5, title: 'Cierre', hint: 'El lote queda RETENIDO mientras el no conforme esté ABIERTO. Para cerrarlo anota la fecha de cierre.',
       fields: [{ id: 'folio_ac', label: 'Folio de acción correctiva (AC / 8D)' }, { id: 'lib_retrabajo', label: 'LIB de las piezas retrabajadas' },
@@ -299,10 +312,16 @@ const pendLabel = m => `${m.equipo || '(sin equipo)'} — ${m.falla || ''}`.slic
 const lunes = s => { const d = new Date(s + 'T12:00:00Z'); d.setUTCDate(d.getUTCDate() - (d.getUTCDay() + 6) % 7); return d.toISOString().slice(0, 10); };
 
 // Entrega de un lote: va completa (fecha, remisión POLAR, quién recibió) o vacía, y solo si el lote se libera.
-function entregaDe(a, libera) {
-  if (!(a.entrega_fecha || a.remision_polar || a.recibio || a.foto_remision?.length)) return false;
-  if (!libera) throw Object.assign(new Error('Solo se puede registrar la entrega de un lote LIBERADO'), { code: 400 });
-  if (!a.entrega_fecha || !a.remision_polar || !a.recibio) throw Object.assign(new Error('Para la entrega anota fecha, remisión POLAR y quién recibió'), { code: 400 });
+// faltan: piezas de la remisión que quedan sin entregar después de esta entrega. Entregar incompleto se permite con aviso previo al cliente.
+function entregaDe(a, libera, faltan = 0) {
+  const err = m => Object.assign(new Error(m), { code: 400 });
+  const entrega = !!(a.entrega_fecha || a.remision_polar || a.recibio || a.foto_remision?.length);
+  if (!entrega || faltan <= 0) for (const k of AVISO) a[k] = '';
+  if (!entrega) return false;
+  if (!libera) throw err('Solo se puede registrar la entrega de un lote LIBERADO');
+  if (!a.entrega_fecha || !a.remision_polar || !a.recibio) throw err('Para la entrega anota fecha, remisión POLAR y quién recibió');
+  if (faltan > 0 && AVISO.some(k => !a[k])) throw err(`Entrega incompleta: quedan ${faltan} piezas de la remisión sin entregar. Anota a quién del cliente se le avisó, la fecha y el medio del aviso`);
+  if (faltan > 0 && a.aviso_fecha > a.entrega_fecha) throw err('El aviso al cliente debe ser antes o el mismo día de la entrega');
   return true;
 }
 
@@ -607,20 +626,33 @@ export function createApp({ db, files, env = {} }) {
     db.run('INSERT INTO qrecords(folio, kind, plant, date, user_id, status, data) VALUES (?, ?, ?, ?, ?, ?, ?)', folio, kind, plant, date, user.id, status, JSON.stringify(data));
   // Entregas parciales: un lote se libera (PL-FOR-29) y se entrega en partes. Avance por lote: piezas inspeccionadas en liberaciones
   // LIBERADO / ENTREGADO, entregadas, rechazadas y folios LIB liberados que faltan por entregar.
+  // Liberación parcial: sus no conformes quedan retenidas mientras su NC (origen = folio LIB) no se cierre. Al cerrarlo con retrabajo o
+  // "usar como está" regresan a liberarse (otro PL-FOR-29); con desecho o reposición salen como rechazadas.
   async function avanceLotes(plant) {
-    const out = {};
+    const out = {}, ncDe = {};
+    for (const r of await db.all("SELECT status, data FROM qrecords WHERE kind = 'NC' AND plant = ? ORDER BY folio", plant)) {
+      const d = JSON.parse(r.data);
+      if (d.origen) ncDe[d.origen] = { status: r.status, disposicion: d.disposicion }; // el más reciente de esa liberación
+    }
     for (const r of await db.all("SELECT folio, status, data FROM qrecords WHERE kind = 'LIB' AND plant = ? AND status IN ('LIBERADO', 'ENTREGADO')", plant)) {
-      const d = JSON.parse(r.data), x = out[d.lote] ??= { inspeccionadas: 0, entregadas: 0, rechazadas: 0, porEntregar: [] };
-      x.inspeccionadas += num(d.inspeccionadas); x.rechazadas += num(d.inspeccionadas) - num(d.aceptadas);
-      if (r.status === 'ENTREGADO') x.entregadas += num(d.aceptadas); else x.porEntregar.push(r.folio);
+      const d = JSON.parse(r.data), x = out[d.lote] ??= { ...AV0, porEntregar: [] }, insp = num(d.inspeccionadas), acc = num(d.aceptadas);
+      if (d.disposicion === PARCIAL) {
+        const nc = ncDe[r.folio], n = insp - acc;
+        x.inspeccionadas += acc;
+        if (nc?.status !== 'CERRADO') x.retenidas += n;
+        else if (NC_BAJA.includes(nc.disposicion)) { x.inspeccionadas += n; x.rechazadas += n; }
+      } else { x.inspeccionadas += insp; x.rechazadas += insp - acc; }
+      if (r.status === 'ENTREGADO') x.entregadas += acc; else x.porEntregar.push(r.folio);
     }
     return out;
   }
-  const AV0 = { inspeccionadas: 0, entregadas: 0, rechazadas: 0, porEntregar: [] };
-  // Estatus de un lote que no está RETENIDO: EN PLANTA mientras le falten piezas por liberar; LIBERADO si falta entregar algo liberado.
+  const AV0 = { inspeccionadas: 0, entregadas: 0, rechazadas: 0, retenidas: 0, porEntregar: [] };
+  const porLiberarDe = (qty, a = AV0) => qty - a.inspeccionadas - a.retenidas;
+  // Estatus de un lote que no está RETENIDO por un NC: EN PLANTA mientras le falten piezas por liberar; LIBERADO si falta entregar algo
+  // liberado; RETENIDO si solo le quedan piezas retenidas de una liberación parcial; ENTREGADO al terminar.
   async function estadoLote(code, plant) {
     const l = await db.get('SELECT qty FROM lots WHERE code = ?', code), a = (await avanceLotes(plant))[code] || AV0;
-    const status = l.qty - a.inspeccionadas > 0 ? 'EN PLANTA' : a.porEntregar.length ? 'LIBERADO' : 'ENTREGADO';
+    const status = porLiberarDe(l.qty, a) > 0 ? 'EN PLANTA' : a.porEntregar.length ? 'LIBERADO' : a.retenidas ? 'RETENIDO' : 'ENTREGADO';
     await db.run('UPDATE lots SET status = ?, delivered_qty = ? WHERE code = ?', status, a.entregadas, code);
     return status;
   }
@@ -630,7 +662,7 @@ export function createApp({ db, files, env = {} }) {
     const av = await avanceLotes(plant), out = [];
     for (const r of await db.all("SELECT folio, date, data FROM qrecords WHERE kind = 'REC' AND plant = ? ORDER BY date, folio", plant)) {
       const d = JSON.parse(r.data), partidas = d.partidas.map(x => { const a = av[x.lote] || AV0, recibidas = num(x.contada);
-        return { lote: x.lote, parte: x.parte, recibidas, entregadas: a.entregadas, rechazadas: a.rechazadas, porLiberar: Math.max(0, recibidas - a.inspeccionadas),
+        return { lote: x.lote, parte: x.parte, recibidas, entregadas: a.entregadas, rechazadas: a.rechazadas, retenidas: a.retenidas, porLiberar: Math.max(0, porLiberarDe(recibidas, a)),
           porEntregar: Math.max(0, recibidas - a.entregadas - a.rechazadas), faltanLlegar: Math.max(0, num(x.remision) - recibidas), libsPorEntregar: a.porEntregar }; });
       const total = partidas.reduce((t, x) => t + x.porEntregar, 0);
       if (total > 0) out.push({ folio: r.folio, plant, date: r.date, cliente: d.cliente, remision: d.remision, compromiso: d.compromiso, partidas, total });
@@ -638,13 +670,16 @@ export function createApp({ db, files, env = {} }) {
     return out;
   }
   // Un lote con no conforme ABIERTO queda RETENIDO; al cerrarse todos vuelve a EN PLANTA (hay que volver a inspeccionarlo).
-  // Los ya entregados no cambian (un NC que detectó el cliente queda solo como registro).
+  // El NC de una liberación parcial no retiene el lote: solo sus piezas (avanceLotes). Los ya entregados no se retienen
+  // (un NC que detectó el cliente queda solo como registro).
   async function syncLots(plant, codes) {
-    const open = (await db.all("SELECT data FROM qrecords WHERE kind = 'NC' AND plant = ? AND status = 'ABIERTO'", plant)).flatMap(r => JSON.parse(r.data).lotes || []);
+    const parciales = new Set((await db.all("SELECT folio FROM qrecords WHERE kind = 'LIB' AND plant = ? AND json_extract(data, '$.disposicion') = ?", plant, PARCIAL)).map(r => r.folio));
+    const open = (await db.all("SELECT data FROM qrecords WHERE kind = 'NC' AND plant = ? AND status = 'ABIERTO'", plant)).map(r => JSON.parse(r.data))
+      .filter(d => !parciales.has(d.origen)).flatMap(d => d.lotes || []);
     for (const code of codes) {
       const l = await db.get('SELECT status FROM lots WHERE code = ?', code);
-      if (!l || l.status === 'ENTREGADO' || (l.status === 'LIBERADO' && !open.includes(code))) continue;
-      if (open.includes(code)) await db.run("UPDATE lots SET status = 'RETENIDO' WHERE code = ?", code);
+      if (!l) continue;
+      if (open.includes(code)) { if (l.status !== 'ENTREGADO') await db.run("UPDATE lots SET status = 'RETENIDO' WHERE code = ?", code); }
       else await estadoLote(code, plant); // vuelve a EN PLANTA (o como vaya su liberación por partes)
     }
   }
@@ -1131,9 +1166,15 @@ export function createApp({ db, files, env = {} }) {
       // Alertas: las guardadas (solo gerencia las ve y las marca) + las que se calculan de los lotes.
       const alertas = user.role === 'admin' ? await db.all(`SELECT id, folio, text, created_at FROM alerts WHERE seen = 0 AND ${inP('plant')} ORDER BY id DESC`, ...plants) : [];
       const openNC = registros.filter(r => r.kind === 'NC' && r.status === 'ABIERTO').flatMap(r => r.data.lotes || []), old = ymd(new Date(Date.now() - LOT_DAYS * DAY));
+      // Liberación parcial sin su no conforme: las piezas retenidas no tienen disposición (ISO 9001 8.7).
+      const conNC = new Set(registros.filter(r => r.kind === 'NC').map(r => r.data.origen)), parcialSinNC = new Set();
+      for (const r of registros) if (r.kind === 'LIB' && r.data.disposicion === PARCIAL && !conNC.has(r.folio)) {
+        parcialSinNC.add(r.data.lote);
+        alertas.push({ folio: r.folio, text: `${r.folio}: ${r.data.rechazadas} piezas del lote ${r.data.lote} quedaron retenidas sin no conforme: levanta el PL-FOR-30` });
+      }
       for (const l of lotes) {
         if (l.status === 'EN PLANTA' && l.received < old) alertas.push({ folio: l.rec, text: `Lote ${l.code} (${l.client}) lleva más de ${LOT_DAYS} días en planta sin liberar` });
-        if (l.status === 'RETENIDO' && !openNC.includes(l.code)) alertas.push({ lote: l.code, text: `Lote ${l.code} está RETENIDO sin no conforme abierto: levanta el PL-FOR-30` });
+        if (l.status === 'RETENIDO' && !openNC.includes(l.code) && !parcialSinNC.has(l.code)) alertas.push({ lote: l.code, text: `Lote ${l.code} está RETENIDO sin no conforme abierto: levanta el PL-FOR-30` });
       }
       const abiertas = (await Promise.all(plants.map(recepcionesAbiertas))).flat(), porRec = Object.fromEntries(abiertas.map(r => [r.folio, r.total]));
       for (const r of registros) if (r.kind === 'REC') r.porEntregar = porRec[r.folio] || 0;
@@ -1147,8 +1188,10 @@ export function createApp({ db, files, env = {} }) {
       const plant = plantFor(user, q.get('planta')), cal = await getCalidad();
       const av = await avanceLotes(plant), lotes = (await db.all(`${LOT_SQL} WHERE l.plant = ? AND (l.received >= ? OR l.status = 'EN PLANTA')`, plant, ymd(new Date(Date.now() - 180 * DAY))))
         .map(({ code, client, part, qty, rec, status, proceso, remision }) => ({ code, client, part, qty, rec, status, proceso, remision,
-          porLiberar: qty - (av[code] || AV0).inspeccionadas, entregadas: (av[code] || AV0).entregadas }));
-      return json(200, { ...await qform(kind, plant), plant, lotes, specs: Object.fromEntries(cal.clientes.filter(c => c.plant === plant).map(c => [c.name, c.spec])) });
+          porLiberar: porLiberarDe(qty, av[code]), entregadas: (av[code] || AV0).entregadas, retenidas: (av[code] || AV0).retenidas }));
+      // Piezas por entregar de cada recepción: la app avisa si la entrega deja la remisión incompleta (pide el aviso al cliente).
+      const pendRec = Object.fromEntries((await recepcionesAbiertas(plant)).map(r => [r.folio, r.total]));
+      return json(200, { ...await qform(kind, plant), plant, lotes, pendRec, specs: Object.fromEntries(cal.clientes.filter(c => c.plant === plant).map(c => [c.name, c.spec])) });
     },
 
     // Un registro con sus lotes (para verlo / imprimirlo).
@@ -1160,7 +1203,9 @@ export function createApp({ db, files, env = {} }) {
       const ligados = (await db.all("SELECT folio, kind, status, data FROM qrecords WHERE kind = 'NC' AND plant = ?", r.plant))
         .filter(n => JSON.parse(n.data).origen === r.folio).map(({ folio, status }) => ({ folio, status }));
       const avance = r.kind === 'REC' ? (await recepcionesAbiertas(r.plant)).find(x => x.folio === r.folio) || { total: 0, partidas: [] } : null;
-      return json(200, { ...r, lotes, ligados, avance, ...QFORMS[r.kind] }); // + code, title y sections (para imprimirlo)
+      // LIB por entregar: piezas que quedarían sin entregar de su remisión (si > 0 la entrega es incompleta y pide el aviso al cliente).
+      const faltan = r.kind === 'LIB' && r.status === 'LIBERADO' ? ((await recepcionesAbiertas(r.plant)).find(x => x.folio === r.data.rec)?.total || 0) - num(r.data.aceptadas) : 0;
+      return json(200, { ...r, lotes, ligados, avance, faltan, ...QFORMS[r.kind] }); // + code, title y sections (para imprimirlo)
     },
 
     // PL-FOR-28: cada partida crea su lote EN PLANTA (suma al saldo de la sección 7 de ese día).
@@ -1201,21 +1246,35 @@ export function createApp({ db, files, env = {} }) {
         if (!c.accion) throw httpError(400, `"${c.criterio}" salió NOK: anota qué se va a hacer`);
         if (!c.corregido) throw httpError(400, `"${c.criterio}" salió NOK: indica si se corrigió`);
       }
-      const nok = a.criterios.some(c => c.resultado === 'NOK' && c.corregido === 'No'); // NOK corregido ya no detiene la liberación
+      // NOK sin corregir: solo pueden salir las aceptadas (parcial), con concesión del cliente (desviación), o se retiene / retrabaja todo.
+      const sinCorregir = a.criterios.filter(c => c.resultado === 'NOK' && c.corregido === 'No'), noConf = insp - acc, disp = a.disposicion;
       if (acc > insp) throw httpError(400, 'Las piezas aceptadas no pueden ser más que las inspeccionadas');
-      const quedan = lot.qty - ((await avanceLotes(plant))[lot.code] || AV0).inspeccionadas; // se puede liberar por partes
+      const quedan = porLiberarDe(lot.qty, (await avanceLotes(plant))[lot.code]); // se puede liberar por partes
       if (insp > quedan) throw httpError(400, `Del lote ${lot.code} quedan ${quedan} piezas por liberar`);
-      if (nok && libera) throw httpError(400, 'Hay criterios NOK sin corregir: no se puede liberar. Elige RETENIDO / NO CONFORME y levanta el no conforme (PL-FOR-30)');
-      if (a.disposicion === 'LIBERADO CON DESVIACIÓN' && !a.autorizo_cliente) throw httpError(400, 'Anota quién autorizó la desviación por parte del cliente');
-      const entrega = entregaDe(a, libera);
-      Object.assign(a, { cliente: lot.client, parte: lot.part, rec: lot.rec, pct: insp ? String(Math.round(acc / insp * 1000) / 10) : '0' });
-      const status = nok || a.disposicion.startsWith('RETENIDO') ? 'RETENIDO' : a.disposicion === 'RETRABAJO INTERNO' ? 'RETRABAJO' : entrega ? 'ENTREGADO' : 'LIBERADO';
+      if (disp === 'LIBERADO' && sinCorregir.length) throw httpError(400, 'Hay criterios NOK sin corregir: no se puede liberar todo. Usa LIBERADO PARCIAL (se retienen las no OK), RETENIDO / NO CONFORME o RETRABAJO INTERNO');
+      if (disp === 'LIBERADO' && noConf) throw httpError(400, `Hay ${noConf} piezas no aceptadas: para liberar solo las aceptadas usa LIBERADO PARCIAL y marca NOK sin corregir el criterio que fallaron`);
+      if (disp === PARCIAL) {
+        if (!sinCorregir.length) throw httpError(400, 'LIBERADO PARCIAL es para cuando hay piezas NOK sin corregir: marca el criterio que fallaron');
+        if (!acc) throw httpError(400, 'Sin piezas aceptadas no hay nada que liberar: elige RETENIDO / NO CONFORME');
+        const max = Math.max(...sinCorregir.map(c => num(c.piezas_nok)));
+        if (noConf < max) throw httpError(400, `Las no conformes (inspeccionadas − aceptadas = ${noConf}) no pueden ser menos que las piezas NOK sin corregir de un criterio (${max})`);
+      }
+      if (disp === 'LIBERADO CON DESVIACIÓN') {
+        if (!a.autorizo_cliente) throw httpError(400, 'Anota quién autorizó la desviación por parte del cliente');
+        if (noConf) throw httpError(400, 'Con desviación el cliente acepta todas las inspeccionadas: si hay piezas que no se aceptan usa LIBERADO PARCIAL');
+      }
+      // Entrega: si con ella quedan piezas de la remisión sin entregar (incluye las retenidas), pide el aviso previo al cliente.
+      const pendRec = libera ? (await recepcionesAbiertas(plant)).find(x => x.folio === lot.rec)?.total || 0 : 0;
+      const entrega = entregaDe(a, libera, pendRec - acc);
+      Object.assign(a, { cliente: lot.client, parte: lot.part, rec: lot.rec, rechazadas: String(noConf), pct: insp ? String(Math.round(acc / insp * 1000) / 10) : '0' });
+      const status = disp.startsWith('RETENIDO') ? 'RETENIDO' : disp === 'RETRABAJO INTERNO' ? 'RETRABAJO' : entrega ? 'ENTREGADO' : 'LIBERADO';
       const folio = await nextFolio('LIB');
       await saveRecord(folio, 'LIB', plant, a.fecha, user, status, a);
       await db.run('UPDATE lots SET status = ?, lib = ?, delivered = COALESCE(?, delivered) WHERE code = ?',
         status === 'RETENIDO' ? 'RETENIDO' : 'EN PLANTA', folio, entrega ? a.entrega_fecha : null, lot.code);
       const estado = status === 'RETENIDO' ? 'RETENIDO' : await estadoLote(lot.code, plant); // parcial: sigue EN PLANTA
-      return json(200, { ...a, folio, status, estadoLote: estado, quedan: quedan - (['LIBERADO', 'ENTREGADO'].includes(status) ? insp : 0), requiereNC: status === 'RETENIDO' });
+      return json(200, { ...a, folio, status, estadoLote: estado, quedan: quedan - (libera ? insp : 0), retenidas: disp === PARCIAL ? noConf : 0,
+        requiereNC: status === 'RETENIDO' || disp === PARCIAL });
     },
 
     // Registrar la entrega de un lote ya LIBERADO (no se puede entregar sin liberación LIBERADO).
@@ -1223,7 +1282,8 @@ export function createApp({ db, files, env = {} }) {
       const b = await body(req), r = await getRecord(b.folio, user), lot = r.kind === 'LIB' && await db.get('SELECT * FROM lots WHERE code = ?', r.data.lote);
       if (r.status !== 'LIBERADO' || !lot || lot.status === 'RETENIDO') throw httpError(400, 'Solo se puede entregar una liberación LIBERADO');
       const e = clean(b.answers || {}, [{ n: 5, title: 'Entrega', fields: ENTREGA }]);
-      if (!entregaDe(e, true)) throw httpError(400, 'Para la entrega anota fecha, remisión POLAR y quién recibió');
+      const pendRec = (await recepcionesAbiertas(r.plant)).find(x => x.folio === r.data.rec)?.total || 0; // incluye las de esta liberación
+      if (!entregaDe(e, true, pendRec - num(r.data.aceptadas))) throw httpError(400, 'Para la entrega anota fecha, remisión POLAR y quién recibió');
       await db.run("UPDATE qrecords SET status = 'ENTREGADO', data = ? WHERE folio = ?", JSON.stringify({ ...r.data, ...e }), r.folio);
       await db.run('UPDATE lots SET delivered = ? WHERE code = ?', e.entrega_fecha, lot.code);
       await estadoLote(lot.code, r.plant); // ENTREGADO solo cuando ya se entregó todo el lote

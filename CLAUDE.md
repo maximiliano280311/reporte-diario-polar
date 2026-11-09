@@ -110,13 +110,24 @@ Especificación: `Modificaciones App Polar/MOD_APP_POLAR_SGC_ISO9001.md` (pedido
   **abierta** hasta entregar todo lo recibido (lo rechazado no cuenta): `recepcionesAbiertas`, lista "Piezas pendientes por entregar"
   en Calidad, chip "Abierta" en registros, renglón "Entrega" del documento y luz en el semáforo del admin. Lo entregado del día
   (sección 7) sale de cada PL-FOR-29 entregado (`movimientos`).
-- Reglas: REC con diferencia o algún "No" → aviso + botón "Crear no conforme" precargado. LIB: un criterio **NOK** abre (y exige)
-  piezas no OK, "¿Qué se va a hacer?" y "¿Se corrigió?" (columnas `nok: true`; la app las muestra solo con NOK). NOK **corregido** ya no
-  detiene la liberación; NOK **sin corregir** no permite LIBERADO (la app desactiva esas opciones de la disposición) → lote RETENIDO y pide NC
-  (pedido del 2026-11-08). RETENIDO → lote RETENIDO y pide NC. No se entrega sin LIBERADO (`entregaDe`). NC abierto retiene sus lotes; al cerrarlo
-  (con fecha) vuelven a EN PLANTA (`syncLots`). 8D sugerido: lo detectó el cliente, >1 lote, daño con costo, o mismo cliente + tipo en 90 días.
+- Reglas: REC con diferencia o algún "No" → aviso + botón "Crear no conforme" precargado.
+- **PL-FOR-29 apegado a ISO 9001 8.6 / 8.7** (pedido del 2026-11-08): un criterio **NOK** abre y exige piezas no OK, "¿Se corrigió y se volvió a
+  revisar OK?" y "¿Qué se va a hacer?" (columnas `nok: true`). Aceptadas = OK + corregidas; **no conformes** = inspeccionadas − aceptadas
+  (`rechazadas`, la calcula el servidor). Disposición:
+  - **LIBERADO**: sin NOK sin corregir y sin no conformes.
+  - **LIBERADO PARCIAL** (`PARCIAL`): hay NOK sin corregir; salen las aceptadas y las no conformes quedan **retenidas** (`avanceLotes().retenidas`)
+    hasta cerrar su PL-FOR-30 (origen = folio LIB). Al cerrarlo con Retrabajo / Usar como está regresan a liberarse con otro PL-FOR-29; con
+    Desecho / Reposición (`NC_BAJA`) salen como rechazadas. Ese NC **no retiene todo el lote** (`syncLots` lo excluye); el lote queda RETENIDO
+    solo si ya no le queda otra cosa que las retenidas (`estadoLote`). Alerta si un parcial no tiene su NC.
+  - **CON DESVIACIÓN**: concesión del cliente (quién autorizó); se aceptan todas las inspeccionadas.
+  - **RETENIDO / NO CONFORME**: lote RETENIDO y pide NC. **RETRABAJO INTERNO**: se reprocesa y se vuelve a inspeccionar (sin NC).
+- **Entrega incompleta** (POLAR sí entrega lotes incompletos con aviso previo): si con la entrega quedan piezas de la recepción/remisión sin
+  entregar (incluye las retenidas), se exigen `aviso_contacto`, `aviso_fecha` (≤ fecha de entrega) y `aviso_medio` (`entregaDe`, campos
+  `cond: 'incompleta'` que la app muestra solo entonces). No se entrega sin LIBERADO.
+- NC abierto (que no sea de un parcial) retiene sus lotes; al cerrarlo (con fecha) vuelven a EN PLANTA (`syncLots`). 8D sugerido: lo detectó
+  el cliente, >1 lote, daño con costo, o mismo cliente + tipo en 90 días.
 - Alertas dentro de la app (`alerts`, solo gerencia/admin, insignia en el menú "Calidad"): nuevo NC; además se calculan: lote > 7 días
-  EN PLANTA (`LOT_DAYS`) y lote RETENIDO sin NC abierto.
+  EN PLANTA (`LOT_DAYS`), lote RETENIDO sin NC abierto y liberación parcial sin su NC.
 - Catálogo de clientes por planta con especificación particular (criterio 7) y teléfono de gerencia (franja roja de emergencia):
   `settings.calidad`, se edita en Calidad (admin). Inicial: KH México y Mitchell (Querétaro), Summit Silao y Summit Guanajuato (Silao).
 - Encargado: solo su planta; admin (= gerencia): todas. Documento imprimible de cada registro con pie "Documento controlado".
