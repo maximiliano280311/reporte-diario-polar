@@ -110,8 +110,10 @@ Especificación: `Modificaciones App Polar/MOD_APP_POLAR_SGC_ISO9001.md` (pedido
   **abierta** hasta entregar todo lo recibido (lo rechazado no cuenta): `recepcionesAbiertas`, lista "Piezas pendientes por entregar"
   en Calidad, chip "Abierta" en registros, renglón "Entrega" del documento y luz en el semáforo del admin. Lo entregado del día
   (sección 7) sale de cada PL-FOR-29 entregado (`movimientos`).
-- Reglas: REC con diferencia o algún "No" → aviso + botón "Crear no conforme" precargado. LIB con algún NOK no permite LIBERADO;
-  NOK o RETENIDO → lote RETENIDO y pide NC. No se entrega sin LIBERADO (`entregaDe`). NC abierto retiene sus lotes; al cerrarlo
+- Reglas: REC con diferencia o algún "No" → aviso + botón "Crear no conforme" precargado. LIB: un criterio **NOK** abre (y exige)
+  piezas no OK, "¿Qué se va a hacer?" y "¿Se corrigió?" (columnas `nok: true`; la app las muestra solo con NOK). NOK **corregido** ya no
+  detiene la liberación; NOK **sin corregir** no permite LIBERADO (la app desactiva esas opciones de la disposición) → lote RETENIDO y pide NC
+  (pedido del 2026-11-08). RETENIDO → lote RETENIDO y pide NC. No se entrega sin LIBERADO (`entregaDe`). NC abierto retiene sus lotes; al cerrarlo
   (con fecha) vuelven a EN PLANTA (`syncLots`). 8D sugerido: lo detectó el cliente, >1 lote, daño con costo, o mismo cliente + tipo en 90 días.
 - Alertas dentro de la app (`alerts`, solo gerencia/admin, insignia en el menú "Calidad"): nuevo NC; además se calculan: lote > 7 días
   EN PLANTA (`LOT_DAYS`) y lote RETENIDO sin NC abierto.

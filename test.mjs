@@ -46,8 +46,10 @@ assert.equal((await call('POST', '/api/upload', new Uint8Array([1]), ana, { 'Con
 const hoy = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Mexico_City' }), dia = hoy.replaceAll('-', '');
 const estadoOK = { empaque: 'Sí', sin_danos: 'Sí', identificacion: 'Sí', cantidad_ok: 'Sí', fotos_ok: 'Sí', separado: 'Sí' };
 const rec = (a, who = ana) => call('POST', '/api/calidad/rec', { answers: { fecha: hoy, hora: '08:00', cliente: 'KH México', remision: 'R-1', fotos: [foto], ...estadoOK, ...a } }, who);
-const criterios = (nok = -1) => [...Array(8)].map((_, i) => ({ criterio: ['Recubrimiento 100 % removido', 'Sin residuos de proceso', 'Sin residuo químico',
-  'Sin daño por temperatura', 'Sin daño mecánico', 'Roscas y barrenos limpios', 'Especificación particular del cliente', 'Identificación conservada'][i], resultado: i === nok ? 'NOK' : 'OK' }));
+// Criterio nok sale NOK con su detalle (piezas, acción, ¿se corrigió?; por omisión NO corregido).
+const criterios = (nok = -1, det = {}) => [...Array(8)].map((_, i) => ({ criterio: ['Recubrimiento 100 % removido', 'Sin residuos de proceso', 'Sin residuo químico',
+  'Sin daño por temperatura', 'Sin daño mecánico', 'Roscas y barrenos limpios', 'Especificación particular del cliente', 'Identificación conservada'][i],
+  ...(i === nok ? { resultado: 'NOK', piezas_nok: '2', accion: 'Volver a hornear', corregido: 'No', ...det } : { resultado: 'OK' }) }));
 const lib = a => call('POST', '/api/calidad/lib', { answers: { fecha: hoy, proceso: 'Pirólisis', criterios: criterios(), inspeccionadas: '10', aceptadas: '10', disposicion: 'LIBERADO', ...a } }, ana);
 
 assert.equal((await rec({ fotos: [] })).status, 400); // foto obligatoria
@@ -77,6 +79,7 @@ assert.equal((await lib({ lote: `QRO-${dia}-01` })).status, 400); // ya no está
 const lib2 = (await ok('POST', '/api/calidad/lib', { answers: { fecha: hoy, proceso: 'Lavado', criterios: criterios(2), inspeccionadas: '8', aceptadas: '6',
   disposicion: 'RETENIDO / NO CONFORME', lote: `QRO-${dia}-02` } }, ana)).data;
 assert.deepEqual([lib2.status, lib2.requiereNC, lib2.pct], ['RETENIDO', true, '75']);
+assert.deepEqual([lib2.criterios[2].piezas_nok, lib2.criterios[2].corregido, lib2.criterios[2].accion, lib2.criterios[0].corregido], ['2', 'No', 'Volver a hornear', '']);
 assert.equal((await call('POST', '/api/calidad/entrega', { folio: lib2.folio, answers: { entrega_fecha: hoy, remision_polar: 'P', recibio: 'X' } }, ana)).status, 400);
 let cal = (await ok('GET', '/api/calidad', null, ana)).data;
 assert.equal(cal.lotes.find(l => l.code === `QRO-${dia}-02`).status, 'RETENIDO');
@@ -316,7 +319,10 @@ const lp1 = (await libP({ inspeccionadas: '6', aceptadas: '6', entrega_fecha: ho
 assert.deepEqual([lp1.status, lp1.estadoLote, lp1.quedan], ['ENTREGADO', 'EN PLANTA', 4]);
 assert.equal((await abierta()).total, 4);
 assert.equal((await libP({ inspeccionadas: '5', aceptadas: '5' })).status, 400); // solo quedan 4
-const lp2 = (await libP({ inspeccionadas: '4', aceptadas: '4' })).data; // liberado, falta entregarlo
+// NOK: piezas, acción y "¿se corrigió?" obligatorios; sin corregir no libera; corregido sí.
+for (const det of [{ piezas_nok: '' }, { piezas_nok: '9' }, { accion: '' }, { corregido: '' }, {}])
+  assert.equal((await libP({ inspeccionadas: '4', aceptadas: '4', criterios: criterios(1, det) })).status, 400);
+const lp2 = (await libP({ inspeccionadas: '4', aceptadas: '4', criterios: criterios(1, { corregido: 'Sí', accion: 'Se volvió a lavar' }) })).data; // NOK corregido: liberado, falta entregarlo
 assert.deepEqual([lp2.status, lp2.estadoLote], ['LIBERADO', 'LIBERADO']);
 assert.deepEqual((await abierta()).partidas[0].libsPorEntregar, [lp2.folio]);
 await ok('POST', '/api/calidad/entrega', { folio: lp2.folio, answers: { entrega_fecha: hoy, remision_polar: 'POL-P2', recibio: 'Juan' } }, beto2);

@@ -143,7 +143,7 @@ const rowHtml = (t, r = {}) => {
       <label><span class="sr-only">Observaciones</span>${f('obs').replace('<input ', '<input placeholder="Observaciones" ')}</label></div></div>`;
   return `
   <div data-row class="grid grid-cols-2 lg:grid-cols-4 gap-2 p-3 rounded-xl bg-surface-container-low">
-    ${cols.map(c => labeled(c, f(c.id))).join('')}
+    ${cols.map(c => c.nok ? labeled({ ...c, required: true }, f(c.id)).replace('<label ', '<label data-nok ') : labeled(c, f(c.id))).join('')}
     ${info ? `<p ${info} aria-live="polite"></p>` : ''}
     ${t.fixed ? '' : '<button type="button" data-del class="col-span-2 lg:col-span-4 justify-self-end text-label-sm text-error flex items-center gap-1"><span class="material-symbols-outlined text-[16px]">delete</span>Quitar</button>'}
   </div>`; };
@@ -1220,6 +1220,7 @@ const views = {
           ${sectionsHtml(secs, pre, t => t.fixed ? tableRows(t, pre) : pre[t.id] || (t.id === 'partidas' ? [{}] : []), (s, at) => at !== 'bottom' ? ''
             : kind === 'LIB' && s.n === 1 ? '<p data-lote-info class="p-3 rounded-xl bg-surface-container text-label-md"></p>'
             : kind === 'LIB' && s.n === 3 ? '<p data-pct class="p-3 rounded-xl bg-surface-container-high/60 text-label-lg text-primary"></p>'
+            : kind === 'LIB' && s.n === 4 ? '<p data-dispo class="hidden p-3 rounded-xl bg-error-container text-on-error-container text-label-md"></p>'
             : kind === 'REC' && s.n === 3 ? '<p data-anomalia class="hidden p-3 rounded-xl bg-tertiary-fixed text-on-tertiary-fixed text-label-md">⚠ Hay diferencia de conteo o algo en "No": anótalo en la remisión antes de firmar. Al guardar podrás levantar el no conforme.</p>' : '')}
           <p id="err" class="text-sm text-error hidden" role="alert"></p>
           <button class="btn btn-primary w-full"><span class="material-symbols-outlined">save</span>${edit ? 'Guardar cambios' : 'Guardar ' + KIND[kind][1].toLowerCase()}</button>
@@ -1249,6 +1250,21 @@ const views = {
             : selR.value ? 'Elige el lote de esta remisión para ver cliente, no. de parte y folio REC.' : 'Elige la remisión y el lote para ver cliente, no. de parte y folio REC.';
           const ins = Number(form.elements.inspeccionadas.value) || 0, acc = Number(form.elements.aceptadas.value) || 0;
           form.querySelector('[data-pct]').textContent = `% de aceptación: ${ins ? Math.round(acc / ins * 1000) / 10 : 0} %`;
+          // Criterio NOK: se abren piezas no OK, ¿se corrigió? y qué se va a hacer (obligatorias). Si alguno no se corrigió, no se puede liberar.
+          const sinCorregir = [];
+          form.querySelectorAll('[data-table="criterios"] [data-row]').forEach(row => {
+            const nok = row.querySelector('[name$=".resultado"]').value === 'NOK';
+            row.querySelectorAll('[data-nok]').forEach(box => {
+              box.classList.toggle('hidden', !nok);
+              box.querySelectorAll('input, select, textarea').forEach(x => { x.disabled = !nok; x.required = nok; });
+            });
+            if (nok && row.querySelector('[name$=".corregido"]').value === 'No') sinCorregir.push(row.querySelector('[name$=".criterio"]').value);
+          });
+          const dispo = form.elements.disposicion, aviso = form.querySelector('[data-dispo]');
+          for (const o of dispo.options) if (o.value.startsWith('LIBERADO')) o.disabled = sinCorregir.length > 0;
+          if (dispo.selectedOptions[0]?.disabled) dispo.value = '';
+          aviso.classList.toggle('hidden', !sinCorregir.length);
+          aviso.textContent = sinCorregir.length ? `NOK sin corregir (${sinCorregir.join(', ')}): no se puede liberar. Elige la disposición; el lote queda RETENIDO y hay que levantar el no conforme (PL-FOR-30).` : '';
         }
       };
       form.onclick = e => {

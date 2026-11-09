@@ -123,9 +123,13 @@ const QFORMS = {
         { id: 'lote', label: 'Lote POLAR', type: 'select', options: [], src: 'lotes', required: true, wide: true },
         { id: 'fecha', label: 'Fecha', type: 'date', required: true }, { id: 'proceso', label: 'Proceso', type: 'select', options: PROCESOS, required: true },
         { id: 'horno', label: 'Horno #' }] },
-    { n: 2, title: 'Criterios de inspección', hint: 'Con un criterio NOK no se puede liberar: el lote queda RETENIDO y hay que levantar el no conforme (PL-FOR-30).',
+    { n: 2, title: 'Criterios de inspección', hint: 'Si un criterio sale NOK anota cuántas piezas, qué se va a hacer y si se corrigió. Si no se corrigió no se puede liberar: ' +
+      'en la disposición el lote queda RETENIDO y hay que levantar el no conforme (PL-FOR-30).',
+      // Columnas nok: solo se ven y se exigen cuando el criterio es NOK (la app las abre; el servidor las valida en POST /api/calidad/lib).
       table: { id: 'criterios', fixed: CRITERIOS, cols: [{ id: 'criterio', label: 'Criterio', readonly: true, wide: true },
-        { id: 'resultado', label: 'Resultado', type: 'select', options: ['OK', 'NOK'], required: true }, { id: 'piezas_nok', label: 'Piezas NOK', type: 'number' }] } },
+        { id: 'resultado', label: 'Resultado', type: 'select', options: ['OK', 'NOK'], required: true },
+        { id: 'piezas_nok', label: 'Piezas no OK', type: 'number', nok: true }, { id: 'corregido', label: '¿Se corrigió?', type: 'select', options: SN, nok: true },
+        { id: 'accion', label: '¿Qué se va a hacer?', nok: true, wide: true }] } },
     { n: 3, title: 'Cantidades', hint: '% de aceptación = aceptadas ÷ inspeccionadas (se calcula solo).',
       fields: [{ id: 'inspeccionadas', label: 'Inspeccionadas', type: 'number', required: true }, { id: 'aceptadas', label: 'Aceptadas', type: 'number', required: true },
         { id: 'rechazadas', label: 'Rechazadas', type: 'number' }, { id: 'retrabajo', label: 'A retrabajo', type: 'number' }] },
@@ -1177,7 +1181,7 @@ export function createApp({ db, files, env = {} }) {
       return json(200, { folio, anomalia, ...a });
     },
 
-    // PL-FOR-29: NOK o RETENIDO → lote RETENIDO (hay que levantar NC); LIBERADO (+ entrega) → LIBERADO / ENTREGADO.
+    // PL-FOR-29: NOK sin corregir o RETENIDO → lote RETENIDO (hay que levantar NC); LIBERADO (+ entrega) → LIBERADO / ENTREGADO.
     'POST /api/calidad/lib': async (req, user) => {
       const b = await body(req), plant = plantFor(user, b.planta), ans = { ...b.answers }, code = String(ans.lote ?? '').trim();
       const lot = code ? await db.get(`${LOT_SQL} WHERE l.code = ? AND l.plant = ?`, code, plant) : null;
@@ -1188,11 +1192,20 @@ export function createApp({ db, files, env = {} }) {
       const a = clean(ans, (await qform('LIB', plant)).sections);
       if (a.criterios.length !== CRITERIOS.length || a.criterios.some((c, i) => c.criterio !== CRITERIOS[i] || !c.resultado))
         throw httpError(400, 'Marca OK o NOK en los 8 criterios de inspección');
-      const nok = a.criterios.some(c => c.resultado === 'NOK'), insp = num(a.inspeccionadas), acc = num(a.aceptadas), libera = a.disposicion.startsWith('LIBERADO');
+      const insp = num(a.inspeccionadas), acc = num(a.aceptadas), libera = a.disposicion.startsWith('LIBERADO');
+      // NOK: cuántas piezas, qué se va a hacer y si se corrigió. OK: esas celdas van vacías.
+      for (const c of a.criterios) {
+        if (c.resultado !== 'NOK') { Object.assign(c, { piezas_nok: '', corregido: '', accion: '' }); continue; }
+        if (!(num(c.piezas_nok) > 0)) throw httpError(400, `"${c.criterio}" salió NOK: anota cuántas piezas no OK`);
+        if (num(c.piezas_nok) > insp) throw httpError(400, `"${c.criterio}": las piezas no OK no pueden ser más que las inspeccionadas`);
+        if (!c.accion) throw httpError(400, `"${c.criterio}" salió NOK: anota qué se va a hacer`);
+        if (!c.corregido) throw httpError(400, `"${c.criterio}" salió NOK: indica si se corrigió`);
+      }
+      const nok = a.criterios.some(c => c.resultado === 'NOK' && c.corregido === 'No'); // NOK corregido ya no detiene la liberación
       if (acc > insp) throw httpError(400, 'Las piezas aceptadas no pueden ser más que las inspeccionadas');
       const quedan = lot.qty - ((await avanceLotes(plant))[lot.code] || AV0).inspeccionadas; // se puede liberar por partes
       if (insp > quedan) throw httpError(400, `Del lote ${lot.code} quedan ${quedan} piezas por liberar`);
-      if (nok && libera) throw httpError(400, 'Con un criterio NOK no se puede liberar: elige RETENIDO / NO CONFORME y levanta el no conforme (PL-FOR-30)');
+      if (nok && libera) throw httpError(400, 'Hay criterios NOK sin corregir: no se puede liberar. Elige RETENIDO / NO CONFORME y levanta el no conforme (PL-FOR-30)');
       if (a.disposicion === 'LIBERADO CON DESVIACIÓN' && !a.autorizo_cliente) throw httpError(400, 'Anota quién autorizó la desviación por parte del cliente');
       const entrega = entregaDe(a, libera);
       Object.assign(a, { cliente: lot.client, parte: lot.part, rec: lot.rec, pct: insp ? String(Math.round(acc / insp * 1000) / 10) : '0' });
