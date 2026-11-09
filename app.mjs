@@ -72,7 +72,19 @@ const FORM = [
       { id: 'factura', label: '¿Factura?', type: 'select', options: SN }] },
     fields: [{ id: 'fotos_gastos', label: 'Fotos de tickets / facturas', type: 'photos', wide: true, after: true }] },
   { n: 13, title: 'Pendientes para mañana', fields: [{ id: 'manana', label: 'Pendientes para mañana', type: 'textarea', required: true, wide: true }] },
+  // lunes: true → solo existe (se ve, se exige y se imprime) en el reporte de un lunes. Lo que pasó el domingo y el personal le avisó al
+  // encargado. Va al final con número nuevo para no mover la numeración ni la configuración del formulario (pedido del 2026-11-08).
+  { n: 14, title: 'Domingo: actividades y novedades', lunes: true,
+    hint: 'Solo en el reporte del lunes. Anota lo que el personal te comunicó que se hizo o pasó el domingo: trabajos, entregas, fallas, incidentes, visitas…',
+    fields: [{ id: 'domingo_hubo', label: '¿Se trabajó o pasó algo el domingo?', type: 'select', options: SN, required: true },
+      { id: 'domingo_actividades', label: 'Actividades que se hicieron el domingo', type: 'textarea', padre: 'domingo_hubo', cuando: 'Sí', wide: true },
+      { id: 'domingo_novedades', label: 'Novedades / incidencias del domingo', type: 'textarea', padre: 'domingo_hubo', cuando: 'Sí', wide: true },
+      { id: 'domingo_quien', label: '¿Quién del personal te lo comunicó?', required: true, padre: 'domingo_hubo', cuando: 'Sí', wide: true },
+      { id: 'domingo_fotos', label: 'Fotos que te enviaron (opcional)', type: 'photos', wide: true }] },
 ];
+// Formulario de un día: la sección "lunes" solo va en los reportes de lunes (fecha AAAA-MM-DD en hora de México).
+const esLunes = s => new Date(s + 'T12:00:00Z').getUTCDay() === 1;
+const formDelDia = (form, date) => form.filter(s => !s.lunes || esLunes(date));
 const num = v => Number(v) || 0;
 const PHOTO = /^[a-f0-9]{32}\.jpg$/; // clave de una foto subida (R2 en Cloudflare, uploads/ en la compu)
 const DAY = 86_400_000, SESSION_MS = 30 * DAY;
@@ -570,7 +582,9 @@ export function createApp({ db, files, env = {} }) {
   } };
   // Limpia las respuestas y calcula los campos automáticos (para guardar o para corregir; before = el reporte que se corrige).
   async function prepare(plant, answers, before = null, date = ymd()) {
-    const form = await currentForm(), a = clean(answers, form), { saldos } = await carry(plant, before);
+    const form = formDelDia(await currentForm(), date), a = clean(answers, form), { saldos } = await carry(plant, before);
+    // Lunes: si el domingo hubo algo, hay que decir qué (actividades o novedades).
+    if (a.domingo_hubo === 'Sí' && !a.domingo_actividades && !a.domingo_novedades) throw httpError(400, 'Anota qué se hizo o qué pasó el domingo (actividades o novedades)');
     // Sección 7: recibido / entregado salen de Calidad (no se capturan). Cada pieza con movimiento ese día lleva su renglón.
     if (a.material) {
       // ponytail: los movimientos del día cuentan solo en el primer reporte de la planta ese día (si no, el saldo los sumaría dos veces).
@@ -1537,7 +1551,7 @@ export function createApp({ db, files, env = {} }) {
         'Escribe en español, texto plano (sin markdown), con estas secciones: Panorama general, Personal (faltas, permisos, reportes), ' +
         'Material por cliente y producción, Gas y gastos (con totales), Químicos por pedir, Incidencias y mantenimiento pendiente, ' +
         'Desempeño por encargado (incluye su calidad promedio de reporte), Check list del líder (días enviados y puntos que más salieron en NO), Recomendaciones.',
-        rows.map(r => `### ${r.name} — planta ${r.plant ?? '—'} — ${r.date} (calidad: ${r.score ?? 'sin evaluar'})\n${formatAnswers(r.answers, form)}`).join('\n\n') + '\n\n### Check list del líder de grupo\n' + cllTxt,
+        rows.map(r => `### ${r.name} — planta ${r.plant ?? '—'} — ${r.date} (calidad: ${r.score ?? 'sin evaluar'})\n${formatAnswers(r.answers, formDelDia(form, r.date))}`).join('\n\n') + '\n\n### Check list del líder de grupo\n' + cllTxt,
         false, 300_000);
       await db.run('INSERT INTO weekly(start, end, text) VALUES (?, ?, ?)', start, ymd(), text);
       return json(200, { ok: true });

@@ -112,6 +112,9 @@ async function upload(file) {
 }
 const photoThumb = (name, k) => `<div data-photo class="relative w-20 h-20"><a href="/api/files/${esc(k)}" target="_blank"><img src="/api/files/${esc(k)}" alt="Foto" class="w-full h-full object-cover rounded-lg"></a>
   <input type="hidden" name="${name}" value="${esc(k)}"><button type="button" data-del-photo class="absolute -top-2 -right-2 w-7 h-7 rounded-full bg-error text-white flex items-center justify-center" aria-label="Quitar foto"><span class="material-symbols-outlined text-[16px]">close</span></button></div>`;
+// Secciones del reporte de un día: la del domingo (lunes: true) solo va en los reportes de lunes.
+const esLunes = s => new Date(s + 'T12:00:00Z').getUTCDay() === 1;
+const seccionesDel = date => questions.filter(s => !s.lunes || esLunes(date));
 // Claves de todas las fotos de un reporte, con el nombre de su pregunta (y las de visitas de reportes de antes del Registro de visitantes).
 const photosOf = r => [...questions.flatMap(s => (s.fields || []).filter(f => f.type === 'photos').flatMap(f => [].concat(r.answers[f.id] || []).map(k => [`${s.n}. ${f.label}`, k]))),
   ...[].concat(r.answers.fotos_visitas || []).map(k => ['9. Visitas — fotos de documentos', k])];
@@ -300,7 +303,7 @@ function plDoc(r) {
     <table class="head"><tr><td rowspan="3" class="logo">POLAR</td><td rowspan="2" class="t">RETRABAJOS INDUSTRIALES Y LIMPIEZAS ESPECIALIZADAS POLAR</td><td class="k">Número de control</td><td>PL-FOR-26</td></tr>
       <tr><td class="k">Revisión</td><td>06</td></tr>
       <tr><td class="bar">REPORTE DIARIO DE OPERACIÓN E INCIDENCIAS</td><td class="k">Fecha emisión</td><td>OCT-2026</td></tr></table>
-    ${questions.map(s => {
+    ${seccionesDel(r.date).map(s => {
       const t = s.table, rows = t ? a[t.id] || [] : [], fs = s.fields || [];
       const plain = fs.filter(f => !['checks', 'photos'].includes(f.type) && f.id !== 'pedir'), after = plain.filter(f => f.after).map(f => [f.label, a[f.id]]);
       const pairs = [...(s.n === 1 ? [['Fecha', dmy(r.date)], ['Planta', r.plant], ['Elaboró', r.name]] : []),
@@ -594,8 +597,9 @@ const views = {
     ${cll ? `<div class="mb-4">${cllPanel(cll.registro, true)}</div>` : ''}
     ${Object.entries(d.lists).map(([k, xs]) => `<datalist id="dl-${k}">${xs.map(x => `<option value="${esc(x)}">`).join('')}</datalist>`).join('')}
     <form id="report" class="flex flex-col gap-4">
-      ${sectionsHtml(questions, pre, rowsOf, (s, at) => at === 'top'
+      ${sectionsHtml(seccionesDel(edit?.date || ymd()), pre, rowsOf, (s, at) => at === 'top'
         ? (s.table?.id === 'vehiculos' && !d.trucks.length ? '<p class="text-body-sm text-error">Tu planta no tiene camiones registrados. Pide al administrador que los agregue.</p>' : '')
+          + (s.lunes ? '<p class="text-body-sm font-semibold text-tertiary flex items-center gap-1"><span class="material-symbols-outlined text-[18px]">event</span>Reporte de lunes: incluye lo que el personal te avisó del domingo.</p>' : '')
           + (s.n === 1 && !me.plant && !edit ? `<div class="grid grid-cols-2 lg:grid-cols-4 gap-3">${labeled({ label: 'Planta', required: true, wide: true }, plantSelect('name="planta" required', pre?.planta))}</div>` : '')
         : s.table?.id === 'hornos' ? '<p data-total-hornos class="p-3 rounded-xl bg-surface-container-high/60 text-label-lg text-primary" aria-live="polite"></p>' : '')}
       <p id="err" class="text-sm text-error hidden" role="alert"></p>

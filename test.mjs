@@ -34,7 +34,7 @@ await ok('POST', '/api/users', { name: 'Ana', email: 'ana@polar.test', password:
 await ok('POST', '/api/users', { name: 'Beto', email: 'beto@polar.test', password: pass, plant: 'Querétaro' }, admin);
 const ana = await login('ana@polar.test'), beto = await login('beto@polar.test');
 
-const base = { turno: 'Matutino', presentes: '5', hubo_reportes: 'No', manana: 'Nada' };
+const base = { turno: 'Matutino', presentes: '5', hubo_reportes: 'No', manana: 'Nada', domingo_hubo: 'No' }; // domingo_hubo: solo cuenta si la prueba corre en lunes
 // Foto: sube y se puede descargar con sesión; sin sesión no.
 const foto = (await ok('POST', '/api/upload', new Uint8Array([255, 216, 255, 1]), ana, { 'Content-Type': 'image/jpeg' })).data.key;
 assert.match(foto, /^[a-f0-9]{32}\.jpg$/);
@@ -484,11 +484,25 @@ assert.equal((await call('POST', '/api/cll/catalogo', { puntos: [] }, admin)).st
 await ok('POST', '/api/form-config', { config: { fields: { turno: { hidden: true }, 'vehiculos.vehiculo': { hidden: true } },
   extra: { 8: [{ id: 'x_visita', label: '¿Hubo visita?', type: 'sino', required: true }, { id: 'x_quien', label: '¿Quién?', type: 'text', required: true, padre: 'x_visita', cuando: 'Sí' }] } } }, admin);
 await ok('POST', '/api/users', { name: 'Zoe', email: 'zoe@polar.test', password: pass, plant: 'Silao' }, admin);
-const zoe = await login('zoe@polar.test'), rep0 = { presentes: '3', hubo_reportes: 'No', manana: 'Nada', vehiculos: [{ km_ini: '10', km_fin: '20' }] };
+const zoe = await login('zoe@polar.test'), rep0 = { presentes: '3', hubo_reportes: 'No', manana: 'Nada', domingo_hubo: 'No', vehiculos: [{ km_ini: '10', km_fin: '20' }] };
 assert.equal((await call('POST', '/api/reports', { answers: { ...rep0, x_visita: 'Sí' } }, zoe)).status, 400); // con "Sí" pide ¿Quién?
 const rz = (await ok('POST', '/api/reports', { answers: { ...rep0, x_visita: 'No', x_quien: 'se ignora' } }, zoe)).data;
 assert.deepEqual([rz.answers.turno, rz.answers.x_quien, rz.answers.vehiculos[0].recorrido], [undefined, '', '10']);
 await ok('POST', '/api/form-config', { config: {} }, admin);
+
+// Reporte del lunes: pide lo que pasó el domingo y el personal le comunicó al encargado; los demás días esa sección no existe.
+assert.ok((await ok('GET', '/api/questions')).data.find(s => s.n === 14).lunes);
+const lunesId = Number(sqlite.prepare('INSERT INTO reports(user_id, date, answers, plant) VALUES (?, ?, ?, ?)').run(betoId, '2026-10-05', JSON.stringify(base), 'Querétaro').lastInsertRowid);
+const editLunes = a => call('POST', '/api/reports/edit', { id: lunesId, answers: { ...base, domingo_hubo: '', ...a } }, admin);
+assert.equal((await editLunes({})).status, 400); // el lunes es obligatorio contestar
+assert.equal((await editLunes({ domingo_hubo: 'Sí', domingo_quien: 'Don Chuy' })).status, 400); // ¿qué se hizo o qué pasó?
+assert.equal((await editLunes({ domingo_hubo: 'Sí', domingo_novedades: 'Se fue la luz' })).status, 400); // ¿quién lo comunicó?
+const rl = await editLunes({ domingo_hubo: 'Sí', domingo_actividades: 'Se descargó un tráiler de KH', domingo_quien: 'Don Chuy' });
+assert.equal(rl.status, 200, JSON.stringify(rl.data));
+assert.deepEqual([rl.data.answers.domingo_actividades, rl.data.answers.domingo_quien, rl.data.answers.domingo_novedades], ['Se descargó un tráiler de KH', 'Don Chuy', '']);
+const martesId = Number(sqlite.prepare('INSERT INTO reports(user_id, date, answers, plant) VALUES (?, ?, ?, ?)').run(betoId, '2026-10-06', JSON.stringify(base), 'Querétaro').lastInsertRowid);
+const rnl = (await ok('POST', '/api/reports/edit', { id: martesId, answers: { ...base, domingo_hubo: 'Sí', domingo_actividades: 'x' } }, admin)).data; // martes: no existe
+assert.deepEqual([rnl.answers.domingo_hubo, rnl.answers.domingo_actividades], [undefined, undefined]);
 
 // Sesiones vencidas (más de 30 días) ya no sirven.
 sqlite.prepare('UPDATE sessions SET created = 0').run();

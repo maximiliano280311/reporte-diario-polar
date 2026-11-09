@@ -35,7 +35,10 @@ App web para **Retrabajos Industriales y Limpiezas Especializadas Polar**: los e
 ## Funcionalidad clave
 - **Formulario PL-FOR-26** (12 secciones: la **9, visitas, salió** el 2026-11-08 y ahora es el Registro de visitantes; se dejó el hueco
   en la numeración para no mover la configuración del formulario, que va por número de sección) definido en `FORM` (`app.mjs`).
-  Los reportes viejos con visitas las siguen imprimiendo (`plDoc` / `VISITAS_ANT`) y al corregirlos se conservan. Campos `auto: true` los calcula el servidor:
+  Los reportes viejos con visitas las siguen imprimiendo (`plDoc` / `VISITAS_ANT`) y al corregirlos se conservan.
+  **Sección 14 "Domingo: actividades y novedades"** (`lunes: true`, pedido del 2026-11-08): solo existe en reportes de **lunes**
+  (`formDelDia` / `esLunes` en el servidor, `seccionesDel` en la app; se ve, se valida, se califica con IA y se imprime solo ese día).
+  Lo que el personal le comunicó al encargado: ¿hubo algo? → actividades / novedades (al menos una) y quién lo comunicó. Campos `auto: true` los calcula el servidor:
   - Vehículos: km inicial = km final anterior de la unidad; recorrido = final − inicial. Solo se aceptan **camiones registrados de la planta**.
   - Gas: casillas N/A (tanque que no aplica / "no hubo carga") vía `disables`.
   - Material (sección 7): **recibido y entregado del día salen de Calidad** (REC y entregas de LIB, `movimientos()`), no se capturan;
