@@ -336,6 +336,21 @@ assert.equal(mt2.folio, 'MT-0002');
 assert.ok(!(await ok('GET', '/api/defaults', null, beto2)).data.pendientes.some(m => m.equipo === 'Bomba Rotoplas'));
 sem = (await ok('GET', '/api/semana', null, beto2)).data.formatos;
 assert.deepEqual(sem.filter(x => x.faltan.length).map(x => x.kind), ['CL22', 'CL23']);
+// PL-FOR-22: el cuerpo del tanque es un solo punto; los críticos (fugas, válvulas, presión) piden foto de evidencia si fallan.
+const cl22 = await qf('CL22'), g1gas = cl22.sections[1].table;
+assert.deepEqual([g1gas.fixed.length, g1gas.fixed.includes('Tanque sin golpes, corrosión, fugas ni daños en pintura'), g1gas.criticos],
+  [5, true, ['No hay olor a gas en el área', 'Válvulas de servicio, llenado y de alivio sin fugas (agua jabonosa)', 'Manómetros con lectura normal y sin fugas']]);
+const falla = punto => (s, i) => s.table.fixed[i] === punto ? 'REQUIERE ATENCIÓN' : 'BUENO';
+const gas = pts => call('POST', '/api/calidad/cl22', { answers: { fecha: hoy, hora: '07:30', resultado: 'APROBADA CON OBSERVACIONES', ...pts } }, beto2);
+const olor = puntos(cl22, falla('No hay olor a gas en el área'), 'Huele a gas cerca del manifold');
+assert.equal((await gas(olor)).status, 400); // punto crítico con falla, sin foto
+olor.g1.find(x => x.punto === 'No hay olor a gas en el área').evidencia = [foto];
+const g22 = await gas(olor);
+assert.equal(g22.status, 200, JSON.stringify(g22.data));
+assert.deepEqual([g22.data.g1[1].evidencia, g22.data.g1[0].evidencia], [[foto], []]); // la foto se queda en su punto; en los demás va vacía
+assert.equal((await gas(puntos(cl22, falla('Nivel de gas (medidor / flotador) dentro de 10 %'), 'Nivel bajo'))).status, 200); // no crítico: basta la observación
+sem = (await ok('GET', '/api/semana', null, beto2)).data.formatos;
+assert.deepEqual(sem.filter(x => x.faltan.length).map(x => x.kind), ['CL23']);
 
 // ---------- Entregas parciales: la recepción sigue abierta hasta entregar todo ----------
 const recP = (await ok('POST', '/api/calidad/rec', { answers: { fecha: hoy, hora: '09:00', cliente: 'KH México', remision: 'R-PARCIAL', fotos: [foto], ...estadoOK,

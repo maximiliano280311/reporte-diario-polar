@@ -256,14 +256,25 @@ const chkCols = opciones => [{ id: 'punto', label: 'Punto', readonly: true, wide
 const CHK_VEH = ['OK', 'OK CON OBSERVACIONES', 'NOK'];
 const chkColsVeh = [{ id: 'punto', label: 'Punto', readonly: true, wide: true }, { id: 'res', label: 'Resultado', type: 'select', options: CHK_VEH, required: true },
   { id: 'obs', label: 'Observaciones', wide: true, cuando: ['OK CON OBSERVACIONES', 'NOK'] }, { id: 'accion', label: '¿Qué hay que hacer?', wide: true, cuando: ['NOK'] }];
+// PL-FOR-22 (gas), pedido del 2026-11-11: los puntos críticos (fugas, válvulas y presión) piden foto de evidencia si salen con falla.
+// soloCriticos: la columna aplica solo en los renglones de table.criticos.
+const GAS_MAL = ['REQUIERE ATENCIÓN', 'FUERA DE SERVICIO'];
+const GAS_CRITICOS = ['No hay olor a gas en el área', 'Válvulas de servicio, llenado y de alivio sin fugas (agua jabonosa)', 'Manómetros con lectura normal y sin fugas',
+  'Fugas en conexiones y roscas (agua jabonosa, nunca con flama)', 'Manómetros con lectura dentro del rango normal de operación',
+  'Presión dentro de rango normal (manómetro)', 'Sin fugas en válvulas y uniones', 'Válvula de alivio opera correctamente',
+  'Recorrido visible sin fugas, golpes o corrosión', 'Conducto de gas líquido (tubo blanco) sin fugas'];
+const chkColsGas = [...chkCols(['BUENO', ...GAS_MAL]), { id: 'evidencia', label: 'Foto de evidencia', type: 'photos', wide: true, cuando: GAS_MAL, soloCriticos: true }];
 const RESULTADO_CHK = ['APROBADA', 'APROBADA CON OBSERVACIONES', 'RECHAZADA (NO SALE)'];
 // Check list: datos + un grupo por sección (renglones fijos) + resultado. bad: respuestas que son falla (piden observación).
-const checklist = (code, title, opciones, bad, datos, grupos, cols = chkCols(opciones)) => ({ code, title, bad, sections: [
+// criticos: puntos críticos (se marcan ⚠ en la app; ver soloCriticos).
+const checklist = (code, title, opciones, bad, datos, grupos, cols = chkCols(opciones), criticos = []) => ({ code, title, bad, sections: [
   { n: 1, title: 'Datos', fields: datos },
-  ...grupos.map(([t, items], i) => ({ n: i + 2, title: t, table: { id: 'g' + (i + 1), fixed: items, cols } })),
-  { n: grupos.length + 2, title: 'Resultado de la inspección', hint: cols.some(c => c.cuando)
+  ...grupos.map(([t, items], i) => ({ n: i + 2, title: t, table: { id: 'g' + (i + 1), fixed: items, cols,
+    ...(criticos.length && { criticos: items.filter(x => criticos.includes(x)) }) } })),
+  { n: grupos.length + 2, title: 'Resultado de la inspección', hint: cols.some(c => c.id === 'accion')
       ? 'OK CON OBSERVACIONES: anota la observación. NOK: anota qué falla (y de qué lado, si aplica) y qué hay que hacer.'
-      : `Si marcas ${bad.join(' o ')} en algún punto, anota en observaciones qué falla (y de qué lado, si aplica).`,
+      : `Si marcas ${bad.join(' o ')} en algún punto, anota en observaciones qué falla (y de qué lado, si aplica).`
+        + (criticos.length ? ' En los puntos críticos (⚠) que fallen, toma foto de evidencia.' : ''),
     fields: [{ id: 'resultado', label: 'Resultado', type: 'select', options: RESULTADO_CHK, required: true, wide: true },
       { id: 'pendientes', label: 'Pendientes / reparaciones a realizar', type: 'textarea', wide: true },
       { id: 'fotos', label: 'Fotos (de lo que está mal)', type: 'photos', wide: true }] }] });
@@ -289,13 +300,14 @@ const FORMATOS = {
     ['Plataforma', ['Plataforma bien sujeta al chasis', 'Argollas y puntos de amarre completos', 'Eslingas y matracas sin daño', 'Piso sin hoyos ni piezas sueltas']],
     ['Equipo de seguridad y documentos', ['Extintor (vigente y cargado)', 'Triángulos de seguridad', 'Gato y llave de cruz', 'Botiquín de primeros auxilios',
       'Licencia del operador vigente', 'Tarjeta de circulación (original o copia)', 'Póliza de seguro vigente', 'Limpieza de la unidad']]], chkColsVeh),
-  CL22: checklist('PL-FOR-22', 'Check list de área de gas', ['BUENO', 'REQUIERE ATENCIÓN', 'FUERA DE SERVICIO'], ['REQUIERE ATENCIÓN', 'FUERA DE SERVICIO'], hoyHora, [
-    ['Inspección del tanque principal', ['Nivel de gas (medidor / flotador) dentro de 10 %', 'No hay olor a gas en el área', 'Tanques sin golpes, corrosión o fugas',
-      'Válvulas de servicio, llenado y de alivio sin fugas (agua jabonosa)', 'Cuerpo del tanque sin corrosión, golpes o daños en pintura', 'Manómetros con lectura normal y sin fugas']],
+  // 2026-11-11: "Tanques sin golpes, corrosión o fugas" y "Cuerpo del tanque sin corrosión, golpes o daños en pintura" quedaron en un solo punto.
+  CL22: checklist('PL-FOR-22', 'Check list de área de gas', ['BUENO', ...GAS_MAL], GAS_MAL, hoyHora, [
+    ['Inspección del tanque principal', ['Nivel de gas (medidor / flotador) dentro de 10 %', 'No hay olor a gas en el área',
+      'Tanque sin golpes, corrosión, fugas ni daños en pintura', 'Válvulas de servicio, llenado y de alivio sin fugas (agua jabonosa)', 'Manómetros con lectura normal y sin fugas']],
     ['Vaporizador', ['Fugas en conexiones y roscas (agua jabonosa, nunca con flama)', 'Válvulas de venteo del regulador no obstruidas', 'Carcasa sin corrosión, golpes ni tornillería floja',
       'Manómetros con lectura dentro del rango normal de operación', 'Sin escarcha excesiva ni sobrecalentamiento anormal']],
     ['Tanque pulmón', ['Presión dentro de rango normal (manómetro)', 'Sin fugas en válvulas y uniones', 'Válvula de alivio opera correctamente']],
-    ['Tubería y trayectoria', ['Recorrido visible sin fugas, golpes o corrosión', 'Conducto de gas líquido (tubo blanco) sin fugas']]]),
+    ['Tubería y trayectoria', ['Recorrido visible sin fugas, golpes o corrosión', 'Conducto de gas líquido (tubo blanco) sin fugas']]], chkColsGas, GAS_CRITICOS),
   CL23: checklist('PL-FOR-23', 'Check list de horno de pirólisis', ['BIEN', 'REGULAR', 'FALLA'], ['REGULAR', 'FALLA'],
     [{ id: 'horno', label: 'Horno', required: true, list: 'hornos' }, ...hoyHora], [
     ['Inspección previa al arranque', ['Puerta de cámara cierra y sella correctamente (sin fugas visibles ni humo)', 'Aislamiento cerámico interior sin daños mayores, desprendimientos o huecos',
@@ -475,8 +487,9 @@ function clean(answers, form) {
     if (!s.table) continue;
     const cols = s.table.cols.filter(c => !c.auto), keys = s.table.fixed ? cols.slice(1) : cols;
     out[s.table.id] = [].concat(answers[s.table.id] ?? []).slice(0, 50)
-      .map(r => Object.fromEntries(cols.map(c => [c.id, pick(s, c, str(r?.[c.id]))])))
-      .filter(r => keys.some(c => r[c.id]));
+      // Columna de fotos en una tabla (p. ej. evidencia del PL-FOR-22): lista de claves, como un campo de fotos.
+      .map(r => Object.fromEntries(cols.map(c => [c.id, c.type === 'photos' ? [].concat(r?.[c.id] ?? []).map(str).filter(k => PHOTO.test(k)).slice(0, 10) : pick(s, c, str(r?.[c.id]))])))
+      .filter(r => keys.some(c => c.type === 'photos' ? r[c.id].length : r[c.id]));
     out[s.table.id].forEach((r, i) => { const c = cols.find(c => c.required && !r[c.id]); if (c) throw missing(s, `${c.label} (renglón ${i + 1})`); });
     // Casillas N/A: marcan como N/A los campos que desactivan (p. ej. tanque que no aplica, sin carga de gas).
     for (const r of out[s.table.id]) for (const c of cols) if (c.disables && r[c.id]) {
@@ -786,13 +799,16 @@ export function createApp({ db, files, env = {} }) {
       for (const s of F.sections.filter(s => s.table)) {
         if (a[s.table.id].length !== s.table.fixed.length || a[s.table.id].some((r, i) => r.punto !== s.table.fixed[i]))
           throw httpError(400, `Contesta todos los puntos de "${s.title}"`);
-        // Columnas con "cuando" (PL-FOR-21): obligatorias con esas respuestas; con las demás van vacías.
-        for (const r of a[s.table.id]) for (const c of s.table.cols.filter(c => c.cuando)) {
-          if (!c.cuando.includes(r.res)) r[c.id] = '';
-          else if (!r[c.id]) throw httpError(400, c.id === 'accion' ? `Anota qué hay que hacer en "${r.punto}"` : `Anota la observación de "${r.punto}"`);
-        }
         const r = a[s.table.id].find(r => fx.bad.includes(r.res) && !r.obs);
         if (r) throw httpError(400, `Anota en observaciones qué falla: "${r.punto}"`);
+        // Columnas con "cuando" (PL-FOR-21 observaciones / acción, PL-FOR-22 foto de evidencia en puntos críticos): obligatorias con esas
+        // respuestas (y, si es soloCriticos, solo en los puntos críticos); en lo demás van vacías.
+        for (const r of a[s.table.id]) for (const c of s.table.cols.filter(c => c.cuando)) {
+          const aplica = c.cuando.includes(r.res) && (!c.soloCriticos || !!s.table.criticos?.includes(r.punto));
+          if (!aplica) r[c.id] = c.type === 'photos' ? [] : '';
+          else if (!r[c.id]?.length) throw httpError(400, c.type === 'photos' ? `Toma foto de evidencia de "${r.punto}" (punto crítico con falla)`
+            : c.id === 'accion' ? `Anota qué hay que hacer en "${r.punto}"` : `Anota la observación de "${r.punto}"`);
+        }
       }
       const malos = F.sections.filter(s => s.table).flatMap(s => a[s.table.id]).filter(r => fx.bad.includes(r.res));
       if (malos.length && a.resultado === 'APROBADA') throw httpError(400, 'Hay puntos con falla: el resultado no puede ser APROBADA. Elige "con observaciones" o "rechazada".');

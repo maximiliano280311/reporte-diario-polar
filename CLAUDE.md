@@ -164,6 +164,10 @@ Especificación: `Modificaciones App Polar/MOD_APP_POLAR_SGC_ISO9001.md` (pedido
   Columnas con `cuando`: "Observaciones" con OK CON OBSERVACIONES o NOK, y "¿Qué hay que hacer?" (`accion`) solo con NOK; la app las muestra
   (`syncCuando`) y `saveFormato` las exige o las limpia. NOK es falla (no deja APROBADA). Los PL-FOR-22 / 23 siguen con sus opciones.
   Los PL-FOR-21 viejos traen BIEN / MAL / N/A: se imprimen igual, pero para corregirlos el admin tiene que volver a contestar los puntos.
+  **PL-FOR-22 (gas)**, pedido del 2026-11-11: "Tanques sin golpes, corrosión o fugas" y "Cuerpo del tanque sin corrosión, golpes o daños en
+  pintura" quedaron en un solo punto. **Puntos críticos** (`GAS_CRITICOS`: fugas, válvulas y presión; se marcan ⚠ en la app): si salen
+  REQUIERE ATENCIÓN o FUERA DE SERVICIO piden **foto de evidencia** (columna `evidencia`, `type: 'photos'`, `cuando` + `soloCriticos`;
+  `table.criticos`). Las fotos dentro de tablas las aceptan `clean` y `collect`, y `qDoc` las manda a los anexos con el nombre del punto.
 - **Documentos**: PDF vigentes en `public/docs` (de la carpeta de Drive "Modificaciones App Polar"); solo con sesión (`worker.mjs` / `server.mjs`).
 - **Pendiente (etapas 2 y 3):** quejas PL-FOR-31, PL-FOR-24 (no está en los archivos), calibración PL-FOR-36, tablero de
   indicadores, lista maestra de documentos (consulta de PDF), formatos de gerencia (8D, auditorías, proveedores, revisión por la dirección),

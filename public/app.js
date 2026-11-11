@@ -150,12 +150,17 @@ const rowHtml = (t, r = {}) => {
   if (cols[0].id === 'punto') {
     const cu = id => { const c = cols.find(x => x.id === id); return c?.cuando ? ` data-cuando="${esc(c.cuando.join('|'))}"` : ''; };
     const ph = id => f(id).replace('<input ', `<input placeholder="${esc(cols.find(x => x.id === id).label)}" `);
-    const apilado = cols.some(c => c.cuando); // PL-FOR-21: resultado, observaciones y qué hay que hacer, uno debajo de otro
+    // Uno debajo de otro si hay "qué hay que hacer" (PL-FOR-21) o si las respuestas son largas (PL-FOR-22): si no, la observación queda aplastada.
+    const apilado = cols.some(c => c.id === 'accion') || cols.find(c => c.id === 'res').options.some(o => o.length > 12);
+    // PL-FOR-22: punto crítico (⚠) → si falla, foto de evidencia obligatoria (columna "evidencia", solo en esos renglones).
+    const critico = t.criticos?.includes(r.punto), ev = critico && cols.find(c => c.id === 'evidencia');
     return `<div data-row class="flex flex-col gap-1.5 p-3 rounded-xl bg-surface-container-low">
-    <p class="text-body-md font-medium text-on-surface">${esc(r.punto)}</p><input type="hidden" name="${t.id}.${i}.punto" value="${esc(r.punto)}">
+    <p class="text-body-md font-medium text-on-surface">${esc(r.punto)}${critico ? ' <span class="chip bg-error-container text-on-error-container !py-0.5" title="Si falla, toma foto de evidencia">⚠ crítico</span>' : ''}</p>
+    <input type="hidden" name="${t.id}.${i}.punto" value="${esc(r.punto)}">
     <div class="${apilado ? 'flex flex-col' : 'grid grid-cols-[minmax(110px,auto)_1fr]'} gap-2"><label><span class="sr-only">Resultado</span>${f('res')}</label>
       <label${cu('obs')}><span class="sr-only">Observaciones</span>${ph('obs')}</label>
-      ${cols.some(c => c.id === 'accion') ? `<label${cu('accion')}><span class="sr-only">¿Qué hay que hacer?</span>${ph('accion')}</label>` : ''}</div></div>`;
+      ${cols.some(c => c.id === 'accion') ? `<label${cu('accion')}><span class="sr-only">¿Qué hay que hacer?</span>${ph('accion')}</label>` : ''}</div>
+    ${ev ? `<div${cu('evidencia')}><p class="text-label-md text-error font-semibold">Foto de evidencia (obligatoria: punto crítico con falla)</p>${f('evidencia')}</div>` : ''}</div>`;
   }
   return `
   <div data-row class="grid grid-cols-2 lg:grid-cols-4 gap-2 p-3 rounded-xl bg-surface-container-low">
@@ -169,7 +174,7 @@ function collect(form, secs = questions) {
   const answers = {};
   for (const [k, v] of new FormData(form)) {
     const [id, i, col] = k.split('.');
-    if (col) ((answers[id] ??= {})[i] ??= {})[col] = v;
+    if (col) { const row = ((answers[id] ??= {})[i] ??= {}); row[col] = col in row ? [].concat(row[col], v) : v; } // fotos en una tabla: varios valores
     else answers[id] = id in answers ? [].concat(answers[id], v) : v; // casillas y fotos: varios valores
   }
   for (const s of secs) if (s.table) answers[s.table.id] = Object.values(answers[s.table.id] || {});
@@ -216,7 +221,8 @@ function syncCuando(root) {
     row.querySelectorAll('[data-cuando]').forEach(box => {
       const on = box.dataset.cuando.split('|').includes(res);
       box.classList.toggle('hidden', !on);
-      box.querySelectorAll('input, select, textarea').forEach(x => { x.disabled = !on; x.required = on; });
+      // Las fotos no llevan "required" (el archivo se vacía al subirlo; el servidor exige la foto).
+      box.querySelectorAll('input, select, textarea').forEach(x => { x.disabled = !on; x.required = on && !['file', 'hidden'].includes(x.type); });
     });
   });
 }
@@ -355,7 +361,10 @@ function qDoc(r) {
     || [['Folio', r.folio], ['Planta', r.plant], ['Elaboró / revisó', r.name], ['Resultado', r.status],
       ...(a.fallas ? [['Puntos con falla', a.fallas]] : []), ...(a.duracion ? [['Duración (min)', a.duracion], ['Total de asistentes', a.total]] : []),
       ...(r.kind === 'MT' ? [['Costo total', money(Number(a.total) || 0)], ...(a.sin_respaldo === 'Sí' ? [['⚠ Software', 'Sin respaldo previo']] : [])] : [])];
-  const fotos = r.sections.flatMap(s => (s.fields || []).filter(f => f.type === 'photos').flatMap(f => (a[f.id] || []).map(k => [f.label, k])));
+  const fotos = [...r.sections.flatMap(s => (s.fields || []).filter(f => f.type === 'photos').flatMap(f => (a[f.id] || []).map(k => [f.label, k]))),
+    // Fotos dentro de una tabla (evidencia de puntos críticos del PL-FOR-22): van a los anexos con el nombre del punto.
+    ...r.sections.filter(s => s.table?.cols.some(c => c.type === 'photos')).flatMap(s => (a[s.table.id] || []).flatMap(x =>
+      s.table.cols.filter(c => c.type === 'photos').flatMap(c => [].concat(x[c.id] || []).map(k => [`${c.label}: ${x[s.table.cols[0].id] || ''}`, k]))))];
   return `<div class="pl">
     <table class="head"><tr><td rowspan="3" class="logo">POLAR</td><td rowspan="2" class="t">RETRABAJOS INDUSTRIALES Y LIMPIEZAS ESPECIALIZADAS POLAR</td><td class="k">Número de control</td><td>${r.code}</td></tr>
       <tr><td class="k">Revisión</td><td>00</td></tr>
@@ -366,7 +375,8 @@ function qDoc(r) {
       return `<div class="bar">${s.n}. ${esc(s.title.toUpperCase())}</div>
         ${fs.length ? kv(fs.map(f => [f.label, f.type === 'date' ? dmy(a[f.id]) : [].concat(a[f.id] ?? '').join(', ')])) : ''}
         ${t ? `<table><thead><tr>${t.cols.map(c => `<th>${esc(c.label)}</th>`).join('')}</tr></thead><tbody>${rows.length
-          ? rows.map(x => `<tr>${t.cols.map(c => `<td>${esc(x[c.id])}</td>`).join('')}</tr>`).join('') : `<tr><td colspan="${t.cols.length}" class="c">—</td></tr>`}</tbody></table>` : ''}
+          ? rows.map(x => `<tr>${t.cols.map(c => `<td>${c.type === 'photos' ? ([].concat(x[c.id] || []).length ? `📷 ${[].concat(x[c.id]).length} (en anexos)` : '') : esc(x[c.id])}</td>`).join('')}</tr>`).join('')
+          : `<tr><td colspan="${t.cols.length}" class="c">—</td></tr>`}</tbody></table>` : ''}
         ${r.kind === 'LIB' && s.n === 3 ? kv([['Total inspeccionadas', a.inspeccionadas], ['Total aceptadas', a.aceptadas], ['% de aceptación', `${a.pct} %`],
           ['No conformes (inspeccionadas − aceptadas)', a.rechazadas || '0']]) : ''}
         ${r.kind === 'LIB' && s.n === 5 && a.aviso_contacto ? kv([['Aviso previo al cliente (registro anterior)', `${a.aviso_contacto} · ${dmy(a.aviso_fecha)} · ${a.aviso_medio}`]]) : ''}`;
