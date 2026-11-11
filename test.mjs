@@ -295,7 +295,7 @@ assert.equal(prop[2].ingreso, undefined);
 
 // ---------- Formatos semanales: check lists, plática y mantenimiento ----------
 const qf = async kind => (await ok('GET', `/api/calidad/form?tipo=${kind}`, null, beto2)).data;
-const puntos = (f, res = () => 'BIEN', obs = '') => Object.fromEntries(f.sections.filter(s => s.table).map(s => [s.table.id, s.table.fixed.map((p, i) => ({ punto: p, res: res(s, i), obs }))]));
+const puntos = (f, res = () => 'OK', obs = '', accion = '') => Object.fromEntries(f.sections.filter(s => s.table).map(s => [s.table.id, s.table.fixed.map((p, i) => ({ punto: p, res: res(s, i), obs, accion }))]));
 let sem = (await ok('GET', '/api/semana', null, beto2)).data.formatos;
 assert.deepEqual(sem.find(x => x.kind === 'CL21').faltan, ['NP300']); // camión registrado de Querétaro
 assert.ok(sem.every(x => x.plant === 'Querétaro' && x.faltan.length));
@@ -303,12 +303,16 @@ const cl21 = await qf('CL21');
 assert.deepEqual(cl21.sections[0].fields[0].options, ['NP300']);
 const chk = (answers) => call('POST', '/api/calidad/cl21', { answers: { unidad: 'NP300', fecha: hoy, hora: '07:00', km: '1000', operador: 'Juan', resultado: 'APROBADA', ...answers } }, beto2);
 assert.equal((await chk({ g1: [] })).status, 400); // faltan puntos
-const conMal = puntos(cl21, (s, i) => s.table.id === 'g1' && i === 0 ? 'MAL' : 'BIEN');
-assert.equal((await chk(conMal)).status, 400); // MAL sin observación
-assert.equal((await chk({ ...puntos(cl21, (s, i) => s.table.id === 'g1' && i === 0 ? 'MAL' : 'BIEN', 'Fuga') })).status, 400); // APROBADA con falla
+// PL-FOR-21: OK / OK CON OBSERVACIONES / NOK. Con observaciones pide la observación; NOK además qué hay que hacer.
+assert.deepEqual(cl21.sections[1].table.cols.find(c => c.id === 'res').options, ['OK', 'OK CON OBSERVACIONES', 'NOK']);
+const unNok = (s, i) => s.table.id === 'g1' && i === 0 ? 'NOK' : 'OK';
+assert.equal((await chk(puntos(cl21, unNok))).status, 400); // NOK sin observación
+assert.equal((await chk(puntos(cl21, unNok, 'Fuga'))).status, 400); // NOK sin qué hay que hacer
+assert.equal((await chk(puntos(cl21, unNok, 'Fuga', 'Cambiar manguera'))).status, 400); // APROBADA con falla
+assert.equal((await chk(puntos(cl21, (s, i) => s.table.id === 'g2' && i === 1 ? 'OK CON OBSERVACIONES' : 'OK'))).status, 400); // con observaciones, sin observación
 const c1 = (await ok('POST', '/api/calidad/cl21', { answers: { unidad: 'NP300', fecha: hoy, hora: '07:00', km: '1000', operador: 'Juan',
-  resultado: 'RECHAZADA (NO SALE)', ...puntos(cl21, (s, i) => s.table.id === 'g1' && i === 0 ? 'MAL' : 'BIEN', 'Fuga') } }, beto2)).data;
-assert.deepEqual([c1.folio, c1.status, c1.fallas], ['CL21-0001', 'RECHAZADA (NO SALE)', '1']);
+  resultado: 'RECHAZADA (NO SALE)', ...puntos(cl21, unNok, 'Fuga', 'Cambiar manguera') } }, beto2)).data;
+assert.deepEqual([c1.folio, c1.status, c1.fallas, c1.g1[0].accion, c1.g1[1].obs, c1.g1[1].accion], ['CL21-0001', 'RECHAZADA (NO SALE)', '1', 'Cambiar manguera', '', '']); // OK: sin observación ni acción
 assert.ok((await ok('GET', '/api/calidad', null, admin)).data.alertas.some(a => a.folio === 'CL21-0001')); // rechazada avisa a gerencia
 // Corregir un formato: solo el admin; conserva folio y vuelve a validar.
 const fix = { unidad: 'NP300', fecha: hoy, hora: '07:00', km: '1001', operador: 'Juan', resultado: 'APROBADA', ...puntos(cl21) };

@@ -160,6 +160,10 @@ Especificación: `Modificaciones App Polar/MOD_APP_POLAR_SGC_ISO9001.md` (pedido
   FUNCIONANDO; un trabajo nuevo que NO FUNCIONA abre pendiente — ver `pendientesAbiertos`). **Obligatorios 1 vez por semana** (lunes a hoy)
   por planta; el PL-FOR-21 por cada unidad que no es montacargas (`GET /api/semana`, botones del inicio y semáforo del admin).
   El último check list de cada unidad sale solo del PL-FOR-21. Check list RECHAZADO → alerta a gerencia.
+  **PL-FOR-21 (vehículos)**, pedido del 2026-11-11: cada punto es **OK / OK CON OBSERVACIONES / NOK** (sin N/A; `CHK_VEH`, `chkColsVeh`).
+  Columnas con `cuando`: "Observaciones" con OK CON OBSERVACIONES o NOK, y "¿Qué hay que hacer?" (`accion`) solo con NOK; la app las muestra
+  (`syncCuando`) y `saveFormato` las exige o las limpia. NOK es falla (no deja APROBADA). Los PL-FOR-22 / 23 siguen con sus opciones.
+  Los PL-FOR-21 viejos traen BIEN / MAL / N/A: se imprimen igual, pero para corregirlos el admin tiene que volver a contestar los puntos.
 - **Documentos**: PDF vigentes en `public/docs` (de la carpeta de Drive "Modificaciones App Polar"); solo con sesión (`worker.mjs` / `server.mjs`).
 - **Pendiente (etapas 2 y 3):** quejas PL-FOR-31, PL-FOR-24 (no está en los archivos), calibración PL-FOR-36, tablero de
   indicadores, lista maestra de documentos (consulta de PDF), formatos de gerencia (8D, auditorías, proveedores, revisión por la dirección),

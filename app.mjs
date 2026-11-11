@@ -251,12 +251,19 @@ export function cleanNomCambios(cambios, emps) {
 // (el PL-FOR-21, por cada unidad que no es montacargas). Puntos tomados de los Excel de "Modificaciones App Polar".
 const chkCols = opciones => [{ id: 'punto', label: 'Punto', readonly: true, wide: true }, { id: 'res', label: 'Resultado', type: 'select', options: opciones, required: true },
   { id: 'obs', label: 'Observaciones', wide: true }];
+// PL-FOR-21 (vehículos), pedido del 2026-11-11: OK / OK CON OBSERVACIONES / NOK (sin N/A). cuando: la columna solo aplica —y se
+// exige— con esas respuestas (la app la abre; saveFormato la valida y la limpia si no aplica).
+const CHK_VEH = ['OK', 'OK CON OBSERVACIONES', 'NOK'];
+const chkColsVeh = [{ id: 'punto', label: 'Punto', readonly: true, wide: true }, { id: 'res', label: 'Resultado', type: 'select', options: CHK_VEH, required: true },
+  { id: 'obs', label: 'Observaciones', wide: true, cuando: ['OK CON OBSERVACIONES', 'NOK'] }, { id: 'accion', label: '¿Qué hay que hacer?', wide: true, cuando: ['NOK'] }];
 const RESULTADO_CHK = ['APROBADA', 'APROBADA CON OBSERVACIONES', 'RECHAZADA (NO SALE)'];
-// Check list: datos + un grupo por sección (renglones fijos) + resultado. bad: respuestas que piden observación.
-const checklist = (code, title, opciones, bad, datos, grupos) => ({ code, title, bad, sections: [
+// Check list: datos + un grupo por sección (renglones fijos) + resultado. bad: respuestas que son falla (piden observación).
+const checklist = (code, title, opciones, bad, datos, grupos, cols = chkCols(opciones)) => ({ code, title, bad, sections: [
   { n: 1, title: 'Datos', fields: datos },
-  ...grupos.map(([t, items], i) => ({ n: i + 2, title: t, table: { id: 'g' + (i + 1), fixed: items, cols: chkCols(opciones) } })),
-  { n: grupos.length + 2, title: 'Resultado de la inspección', hint: `Si marcas ${bad.join(' o ')} en algún punto, anota en observaciones qué falla (y de qué lado, si aplica).`,
+  ...grupos.map(([t, items], i) => ({ n: i + 2, title: t, table: { id: 'g' + (i + 1), fixed: items, cols } })),
+  { n: grupos.length + 2, title: 'Resultado de la inspección', hint: cols.some(c => c.cuando)
+      ? 'OK CON OBSERVACIONES: anota la observación. NOK: anota qué falla (y de qué lado, si aplica) y qué hay que hacer.'
+      : `Si marcas ${bad.join(' o ')} en algún punto, anota en observaciones qué falla (y de qué lado, si aplica).`,
     fields: [{ id: 'resultado', label: 'Resultado', type: 'select', options: RESULTADO_CHK, required: true, wide: true },
       { id: 'pendientes', label: 'Pendientes / reparaciones a realizar', type: 'textarea', wide: true },
       { id: 'fotos', label: 'Fotos (de lo que está mal)', type: 'photos', wide: true }] }] });
@@ -269,7 +276,7 @@ const VIS_TIPOS = ['Proveedor', 'Cliente', 'Dependencia de gobierno', 'Solicitud
 const VIS_GOB = 'Dependencia de gobierno'; // avisa a gerencia de inmediato
 const RESULTADO_MT = ['FUNCIONANDO', 'FUNCIONA PARCIALMENTE', 'NO FUNCIONA (SIGUE PENDIENTE)'];
 const FORMATOS = {
-  CL21: checklist('PL-FOR-21', 'Check list de camión', ['BIEN', 'MAL', 'N/A'], ['MAL'], [
+  CL21: checklist('PL-FOR-21', 'Check list de camión', CHK_VEH, ['NOK'], [
     { id: 'unidad', label: 'Unidad / placas', type: 'select', options: [], src: 'unidades', required: true, wide: true }, ...hoyHora,
     { id: 'km', label: 'Kilometraje', type: 'number', required: true }, { id: 'operador', label: 'Operador', required: true }], [
     ['Frenos', ['Nivel de líquido de frenos', 'Pedal de freno (recorrido y firmeza)', 'Freno de mano', 'Mangueras y conexiones de freno sin fugas', 'Sistema de aire / compresor (si aplica)']],
@@ -281,7 +288,7 @@ const FORMATOS = {
     ['Cabina', ['Tablero sin testigos de falla encendidos', 'Claxon', 'Limpiaparabrisas', 'Parabrisas y vidrios sin estrellar', 'Espejos', 'Cinturón de seguridad', 'Aire acondicionado']],
     ['Plataforma', ['Plataforma bien sujeta al chasis', 'Argollas y puntos de amarre completos', 'Eslingas y matracas sin daño', 'Piso sin hoyos ni piezas sueltas']],
     ['Equipo de seguridad y documentos', ['Extintor (vigente y cargado)', 'Triángulos de seguridad', 'Gato y llave de cruz', 'Botiquín de primeros auxilios',
-      'Licencia del operador vigente', 'Tarjeta de circulación (original o copia)', 'Póliza de seguro vigente', 'Limpieza de la unidad']]]),
+      'Licencia del operador vigente', 'Tarjeta de circulación (original o copia)', 'Póliza de seguro vigente', 'Limpieza de la unidad']]], chkColsVeh),
   CL22: checklist('PL-FOR-22', 'Check list de área de gas', ['BUENO', 'REQUIERE ATENCIÓN', 'FUERA DE SERVICIO'], ['REQUIERE ATENCIÓN', 'FUERA DE SERVICIO'], hoyHora, [
     ['Inspección del tanque principal', ['Nivel de gas (medidor / flotador) dentro de 10 %', 'No hay olor a gas en el área', 'Tanques sin golpes, corrosión o fugas',
       'Válvulas de servicio, llenado y de alivio sin fugas (agua jabonosa)', 'Cuerpo del tanque sin corrosión, golpes o daños en pintura', 'Manómetros con lectura normal y sin fugas']],
@@ -779,6 +786,11 @@ export function createApp({ db, files, env = {} }) {
       for (const s of F.sections.filter(s => s.table)) {
         if (a[s.table.id].length !== s.table.fixed.length || a[s.table.id].some((r, i) => r.punto !== s.table.fixed[i]))
           throw httpError(400, `Contesta todos los puntos de "${s.title}"`);
+        // Columnas con "cuando" (PL-FOR-21): obligatorias con esas respuestas; con las demás van vacías.
+        for (const r of a[s.table.id]) for (const c of s.table.cols.filter(c => c.cuando)) {
+          if (!c.cuando.includes(r.res)) r[c.id] = '';
+          else if (!r[c.id]) throw httpError(400, c.id === 'accion' ? `Anota qué hay que hacer en "${r.punto}"` : `Anota la observación de "${r.punto}"`);
+        }
         const r = a[s.table.id].find(r => fx.bad.includes(r.res) && !r.obs);
         if (r) throw httpError(400, `Anota en observaciones qué falla: "${r.punto}"`);
       }

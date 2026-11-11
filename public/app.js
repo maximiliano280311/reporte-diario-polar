@@ -146,10 +146,17 @@ const rowHtml = (t, r = {}) => {
     partidas: 'data-dif class="col-span-2 self-end p-2 rounded-lg bg-surface-container text-label-md"',
     modelos: 'data-mod class="col-span-2 self-end p-2 rounded-lg bg-surface-container text-label-md"' }[t.id];
   // Check lists (PL-FOR-21/22/23): renglón compacto — el punto arriba y en una línea el resultado y la observación.
-  if (cols[0].id === 'punto') return `<div data-row class="flex flex-col gap-1.5 p-3 rounded-xl bg-surface-container-low">
+  // Columnas con "cuando" (PL-FOR-21): solo se ven con esas respuestas (syncCuando); "¿Qué hay que hacer?" va en su propio renglón.
+  if (cols[0].id === 'punto') {
+    const cu = id => { const c = cols.find(x => x.id === id); return c?.cuando ? ` data-cuando="${esc(c.cuando.join('|'))}"` : ''; };
+    const ph = id => f(id).replace('<input ', `<input placeholder="${esc(cols.find(x => x.id === id).label)}" `);
+    const apilado = cols.some(c => c.cuando); // PL-FOR-21: resultado, observaciones y qué hay que hacer, uno debajo de otro
+    return `<div data-row class="flex flex-col gap-1.5 p-3 rounded-xl bg-surface-container-low">
     <p class="text-body-md font-medium text-on-surface">${esc(r.punto)}</p><input type="hidden" name="${t.id}.${i}.punto" value="${esc(r.punto)}">
-    <div class="grid grid-cols-[minmax(110px,auto)_1fr] gap-2"><label><span class="sr-only">Resultado</span>${f('res')}</label>
-      <label><span class="sr-only">Observaciones</span>${f('obs').replace('<input ', '<input placeholder="Observaciones" ')}</label></div></div>`;
+    <div class="${apilado ? 'flex flex-col' : 'grid grid-cols-[minmax(110px,auto)_1fr]'} gap-2"><label><span class="sr-only">Resultado</span>${f('res')}</label>
+      <label${cu('obs')}><span class="sr-only">Observaciones</span>${ph('obs')}</label>
+      ${cols.some(c => c.id === 'accion') ? `<label${cu('accion')}><span class="sr-only">¿Qué hay que hacer?</span>${ph('accion')}</label>` : ''}</div></div>`;
+  }
   return `
   <div data-row class="grid grid-cols-2 lg:grid-cols-4 gap-2 p-3 rounded-xl bg-surface-container-low">
     ${cols.map(c => c.nok ? labeled({ ...c, required: true }, f(c.id)).replace('<label ', '<label data-nok ') : labeled(c, f(c.id))).join('')}
@@ -202,6 +209,17 @@ const syncCond = (root, cond, on) => root.querySelectorAll(`[data-cond="${cond}"
   box.classList.toggle('hidden', !on);
   box.querySelectorAll('input, select, textarea').forEach(x => { x.disabled = !on; x.required = on; });
 });
+// Check lists con columnas "cuando" (PL-FOR-21): cada una se ve y se exige solo si el resultado del punto es uno de sus valores.
+function syncCuando(root) {
+  root.querySelectorAll('[data-row]').forEach(row => {
+    const res = row.querySelector('[name$=".res"]')?.value || '';
+    row.querySelectorAll('[data-cuando]').forEach(box => {
+      const on = box.dataset.cuando.split('|').includes(res);
+      box.classList.toggle('hidden', !on);
+      box.querySelectorAll('input, select, textarea').forEach(x => { x.disabled = !on; x.required = on; });
+    });
+  });
+}
 // Subpreguntas: se ven solo si su pregunta padre tiene respuesta (y es la de "cuando", si la hay). Las ocultas se desactivan:
 // no se envían ni se exigen (el servidor hace lo mismo).
 function syncSubs(root) {
@@ -1278,6 +1296,7 @@ const views = {
       let loteTabla = null; // PL-FOR-29: lote cuyos modelos están en la tabla de cantidades (se rehace al cambiar de lote)
       // En vivo: diferencia por partida y aviso (REC); datos del lote y % de aceptación (LIB). El servidor lo recalcula al guardar.
       const live = () => {
+        syncCuando(form); // PL-FOR-21: observaciones / qué hay que hacer según el resultado de cada punto
         if (kind === 'REC') {
           let anom = estado.some(id => form.elements[id]?.value === 'No');
           form.querySelectorAll('[data-table="partidas"] [data-row]').forEach(r => {
