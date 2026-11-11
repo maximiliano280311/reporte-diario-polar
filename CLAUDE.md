@@ -88,6 +88,12 @@ App web para **Retrabajos Industriales y Limpiezas Especializadas Polar**: los e
   incidencias solo los ve el admin: `nomEmp` / `GET /api/nomina` no se los dan a nadie más (tampoco salen en la plática PL-FOR-25).
   **Dar de baja / Reactivar** (todos los que capturan nómina): pone o quita la fecha de baja; los dados de baja van en su propia lista.
   **Borrar empleado**: cualquier admin; se borran también sus incidencias sin pagar.
+  **CURP y fecha de nacimiento** (pedido del 2026-11-10): obligatorias al dar de alta (`POST /api/nomina/emp`); la CURP se valida con
+  `CURP_RE` y la fecha tiene que ser la que trae la CURP (`curpNacimiento`: posiciones 5-10 y siglo en la 17). La app llena la fecha sola al
+  escribir la CURP. Con fecha de nacimiento, "menor de edad" se calcula solo (`esMenor`). Los de antes sin CURP salen con aviso en Empleados.
+  Si un cambio no trae CURP / nacimiento / docs, se conservan los que tenía. **Expediente** (`DOCS_EMP`, en `app.mjs` y `public/app.js`):
+  check list de documentos que se marca con X (acta, NSS, comprobante de domicilio, solicitud de empleo, contrato, RFC, INE si aplica,
+  fotografía); la INE no cuenta como faltante.
 
 - **Registro de visitantes** (`#/visitas`, en el menú de encargado, líder y admin; pedido del 2026-11-08): formato `VIS` en `FORMATOS`
   (código `REG-VIS` mientras no tenga número de control oficial), uno por visita, en `qrecords`; folio `VIS-0001`. Lista `GET /api/visitas`

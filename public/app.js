@@ -1550,7 +1550,7 @@ function calcSemana(payday) {
       else if (i.tipo === 'te') { L.te += i._amt; L.teH += +i.cantidad || 0; }
       else if (i.tipo === 'descuento') L.desc += i._amt;
       else if (i._amt > 0) L.extras += i._amt;
-      if (e.menor && ['te', 'dia_extra'].includes(i.tipo)) L.menor = true;
+      if (esMenor(e) && ['te', 'dia_extra'].includes(i.tipo)) L.menor = true;
     }
     L.total = r2(L.base + L.faltas + L.te + L.extras + L.desc);
     return [L];
@@ -1583,6 +1583,16 @@ function vacInfo(e) {
 const incLabel = i => { const t = NT[i.tipo] || { l: i.tipo, u: '' };
   return `${t.l}${i.mes ? ' ' + mesL(i.mes) : ''}${i.cantidad == null ? '' : ' · ' + (t.u === '$' ? money(+i.cantidad) : `${+i.cantidad} ${t.u}`)}`; };
 const nChip = (txt, cls = 'bg-surface-container text-on-surface-variant') => `<span class="chip ${cls}">${esc(txt)}</span>`;
+// CURP (mismo formato que el servidor): la fecha de nacimiento va en las posiciones 5-10 (AAMMDD) y el siglo en la 17.
+const CURP_RE = /^[A-Z][AEIOUX][A-Z]{2}\d{6}[HMX][A-Z]{2}[B-DF-HJ-NP-TV-Z]{3}[A-Z\d]\d$/;
+const curpNac = c => `${/\d/.test(c[16]) ? '19' : '20'}${c.slice(4, 6)}-${c.slice(6, 8)}-${c.slice(8, 10)}`;
+const edadDe = f => { const [y, m, d] = f.split('-').map(Number), [Y, M, D] = ymd().split('-').map(Number); return Y - y - (M < m || (M === m && D < d) ? 1 : 0); };
+// Expediente del empleado (mismo catálogo que DOCS_EMP en app.mjs): se marca con X. La INE es "si aplica": no cuenta como faltante.
+const DOCS_EMP = [['acta', 'Acta de nacimiento'], ['nss', 'NSS'], ['domicilio', 'Comprobante de domicilio'], ['solicitud', 'Solicitud de empleo'],
+  ['contrato', 'Contrato'], ['rfc', 'RFC'], ['ine', 'INE (si aplica)'], ['foto', 'Fotografía']];
+const docsFaltan = e => DOCS_EMP.filter(([k]) => k !== 'ine' && !(e.docs || []).includes(k)).map(([, l]) => l);
+// Menor de edad: con fecha de nacimiento se calcula (se mantiene al día); sin ella, la casilla que se marcó a mano.
+const esMenor = e => e?.nacimiento ? edadDe(e.nacimiento) < 18 : !!e?.menor;
 const OKC = 'bg-secondary-container text-on-secondary-container', WARN = 'bg-tertiary-fixed text-on-tertiary-fixed', BAD = 'bg-error-container text-on-error-container';
 const tbl = (head, rows, empty) => `<div class="card overflow-x-auto"><table class="w-full text-sm"><thead><tr class="text-left text-[11px] uppercase tracking-wide text-on-surface-variant">${head.map(h => `<th class="px-3 py-2 font-semibold whitespace-nowrap ${h.startsWith('#') ? 'text-right' : ''}">${esc(h.replace('#', ''))}</th>`).join('')}</tr></thead>
   <tbody>${rows || `<tr><td colspan="${head.length}" class="px-3 py-6 text-center text-on-surface-variant">${empty}</td></tr>`}</tbody></table></div>`;
@@ -1738,7 +1748,7 @@ const nomTabs = {
         if (!ls.length) return '';
         return `<div class="flex flex-wrap items-baseline gap-2 mt-4 mb-2"><h3 class="text-label-lg text-primary">${esc(a)}</h3><span class="text-body-sm text-on-surface-variant">Periodo ${fc(ls[0].p.ini)} – ${fc(ls[0].p.fin)}</span><span class="ml-auto font-semibold tabular-nums">${money(r2(ls.reduce((s, l) => s + l.total, 0)))}</span></div>`
           + tbl(cols, ls.map(l => { const op = N.open.has(l.e.id); return `<tr data-act="toggle" data-id="${l.e.id}" class="cursor-pointer hover:bg-surface-container-low" aria-expanded="${op}">
-            ${td(`<span class="font-semibold">${op ? '▾' : '▸'} ${esc(l.e.nombre)}</span> ${l.arr ? nChip('arrastra ' + money(l.arr), WARN) : ''} ${l.items.some(i => i.diferido) ? nChip('pago diferido') : ''} ${l.e.menor ? nChip('menor', l.menor ? BAD : undefined) : ''} ${l.e.pago === 'dia' ? nChip('por día') : ''}`)}
+            ${td(`<span class="font-semibold">${op ? '▾' : '▸'} ${esc(l.e.nombre)}</span> ${l.arr ? nChip('arrastra ' + money(l.arr), WARN) : ''} ${l.items.some(i => i.diferido) ? nChip('pago diferido') : ''} ${esMenor(l.e) ? nChip('menor', l.menor ? BAD : undefined) : ''} ${l.e.pago === 'dia' ? nChip('por día') : ''}`)}
             ${td(money(l.base), 1)}${td(l.faltas ? `<span class="text-error">${money(l.faltas)}</span>` : '—', 1)}${td(l.te ? `${money(l.te)}<br><span class="text-[11px] text-on-surface-variant">${l.teH} h</span>` : '—', 1)}
             ${td(l.extras ? money(l.extras) : '—', 1)}${td(l.desc ? `<span class="text-error">${money(l.desc)}</span>` : '—', 1)}${td(`<b>${money(l.total)}</b>`, 1)}</tr>
             ${op ? `<tr><td colspan="7" class="px-3 pb-3 bg-surface-container-low">${l.items.length ? `<ul class="flex flex-col gap-2 pt-2">${l.items.map(i => `<li class="flex flex-wrap items-center gap-2 text-body-md">
@@ -1754,10 +1764,10 @@ const nomTabs = {
 
   capturar() {
     if (N.cap.pay !== N.payday) { const q = periodo(navArea(), N.payday); N.cap.pay = N.payday; N.cap.fecha = ymd() >= q.ini && ymd() <= q.fin ? ymd() : q.ini; } // fecha dentro de la semana elegida
-    const c = N.cap, t = NT[c.tipo], menorSel = [...c.emps].some(id => empById(id)?.menor) && ['te', 'dia_extra'].includes(c.tipo);
+    const c = N.cap, t = NT[c.tipo], menorSel = [...c.emps].some(id => esMenor(empById(id))) && ['te', 'dia_extra'].includes(c.tipo);
     let last = null;
     const picker = nomEmps().map(e => (e.planta !== last ? `<p class="col-span-full text-[11px] uppercase tracking-wide text-on-surface-variant font-semibold mt-2">${esc(last = e.planta)}</p>` : '')
-      + `<label class="flex items-center gap-2 text-body-md py-1"><input type="checkbox" name="cemp" value="${e.id}" ${c.emps.has(e.id) ? 'checked' : ''} class="w-5 h-5 shrink-0 accent-[#2563eb]">${esc(e.nombre)}${e.menor ? ' ' + nChip('menor') : ''}${e.contrato && e.contrato !== 'planta' ? ' ' + nChip(e.contrato) : ''}</label>`).join('');
+      + `<label class="flex items-center gap-2 text-body-md py-1"><input type="checkbox" name="cemp" value="${e.id}" ${c.emps.has(e.id) ? 'checked' : ''} class="w-5 h-5 shrink-0 accent-[#2563eb]">${esc(e.nombre)}${esMenor(e) ? ' ' + nChip('menor') : ''}${e.contrato && e.contrato !== 'planta' ? ' ' + nChip(e.contrato) : ''}</label>`).join('');
     const nSem = N.d.incs.filter(enSemana).length;
     return perNav() + `<p class="text-body-md text-on-surface-variant mb-3">Cada incidencia se queda en la semana de su fecha (no se acumula). ${nSem ? `Esta semana: <a href="#/nomina/incidencias" class="text-primary font-semibold">${nSem} capturada${nSem > 1 ? 's' : ''}</a>.` : ''}</p>
     <form id="capForm" class="card p-4 flex flex-col gap-4">
@@ -1842,7 +1852,10 @@ const nomTabs = {
   empleados() {
     const admin = nomAdmin(), cfg = N.d.config, today = ymd();
     const list = L => tbl(['Nombre', 'Planta', ...(admin ? ['#Sueldo', '#Diario', '#Hora extra', '#Bono mes'] : []), 'Ingreso'], L.map(e => `<tr>
-      ${td(`<b>${esc(e.nombre)}</b> ${e.menor ? nChip('menor', BAD) : ''} ${e.baja && e.baja <= today ? nChip('baja ' + fcy(e.baja)) : ''}${e.notas ? `<br><span class="text-[11px] text-on-surface-variant">${esc(e.notas)}</span>` : ''}
+      ${td(`<b>${esc(e.nombre)}</b> ${esMenor(e) ? nChip('menor', BAD) : ''} ${e.baja && e.baja <= today ? nChip('baja ' + fcy(e.baja)) : ''}${!e.curp || !e.nacimiento ? nChip('falta CURP / nacimiento', WARN) : ''}
+        ${e.curp || e.nacimiento ? `<br><span class="text-[11px] text-on-surface-variant">${e.curp ? 'CURP ' + esc(e.curp) : ''}${e.curp && e.nacimiento ? ' · ' : ''}${e.nacimiento ? `nació ${fcy(e.nacimiento)} (${edadDe(e.nacimiento)} años)` : ''}</span>` : ''}
+        <br>${docsFaltan(e).length ? `${nChip(`expediente: faltan ${docsFaltan(e).length}`, WARN)} <span class="text-[11px] text-on-surface-variant">${esc(docsFaltan(e).join(', '))}</span>`
+          : nChip('expediente completo', 'bg-secondary-container text-on-secondary-container')}${e.notas ? `<br><span class="text-[11px] text-on-surface-variant">${esc(e.notas)}</span>` : ''}
         <span class="flex flex-wrap gap-x-4 mt-1 whitespace-nowrap"><button type="button" data-act="editemp" data-id="${e.id}" class="text-label-sm text-primary font-semibold py-1">Editar</button>
         ${e.baja && e.baja <= today ? `<button type="button" data-act="altaemp" data-id="${e.id}" class="text-label-sm text-secondary font-semibold py-1"><span>Reactivar</span></button>`
           : `<button type="button" data-act="bajaemp" data-id="${e.id}" class="text-label-sm text-tertiary font-semibold py-1" aria-label="Dar de baja a ${esc(e.nombre)}"><span>Dar de baja</span></button>`}
@@ -1854,8 +1867,12 @@ const nomTabs = {
     const grupos = [...CONTRATO.filter(([k]) => admin || k !== 'confianza').map(([k, l, txt]) => [k, l, txt, nomEmps(true).filter(e => activo(e) && (e.contrato || 'planta') === k)]),
       ['baja', 'Dados de baja', 'Ya no trabajan aquí. Se conserva su historial; "Reactivar" los regresa.', nomEmps(true).filter(e => !activo(e))]].filter(g => g[0] !== 'baja' || g[3].length);
     const num = (k, l, step = 0.5, v = cfg?.[k]) => labeled({ label: l }, `<input class="input" type="number" min="0" step="${step}" data-cfg="${k}" value="${esc(v)}">`);
+    const sinCurp = nomEmps(true).filter(e => activo(e) && (!e.curp || !e.nacimiento));
     return `<div class="flex flex-wrap items-center gap-3 mb-3"><p class="text-body-md text-on-surface-variant flex-1">${nomEmps(true).filter(e => !e.baja || e.baja >= today).length} activos${admin ? '' : ` · planta ${esc(me.plant || '')}`}</p>
       <button type="button" data-act="newemp" class="btn btn-primary"><span class="material-symbols-outlined">person_add</span>Agregar empleado</button></div>
+    ${sinCurp.length ? `<p class="p-3 rounded-xl bg-tertiary-fixed text-on-tertiary-fixed text-body-md mb-3 flex items-start gap-2"><span class="material-symbols-outlined">badge</span>
+      <span>${sinCurp.length} ${sinCurp.length === 1 ? 'empleado activo no tiene' : 'empleados activos no tienen'} CURP o fecha de nacimiento: dale "Editar" a cada uno para capturarla
+      (${sinCurp.slice(0, 8).map(e => esc(e.nombre)).join(', ')}${sinCurp.length > 8 ? '…' : ''}).</span></p>` : ''}
     ${grupos.map(([k, l, txt, L]) => `<h2 class="font-semibold flex flex-wrap items-center gap-2 mt-5 mb-1">${l} <span class="chip bg-surface-container text-on-surface-variant">${L.length}</span>
       ${k === 'confianza' ? '<span class="chip bg-surface-container-high text-primary">solo admin</span>' : ''}</h2><p class="text-body-sm text-on-surface-variant mb-2">${txt}</p>${list(L)}`).join('')}
     ${admin ? `<form id="cfgForm" class="card p-4 flex flex-col gap-3 mt-6">
@@ -1906,6 +1923,9 @@ function nomEditForm() {
   const e = x || { pago: 'semana', planta: admin ? 'Querétaro' : me.plant, sueldo: 2200, bono: +(N.d.config?.bonoDefault ?? 500), teModo: 'auto', diasBase: 1 };
   return `<form id="empForm" class="card p-4 grid grid-cols-2 lg:grid-cols-4 gap-3 items-end"><h2 class="col-span-2 lg:col-span-4 font-semibold">${x ? 'Editar empleado' : 'Nuevo empleado'}</h2>
     ${labeled({ label: 'Nombre completo', required: true, wide: true }, `<input class="input" name="nombre" required maxlength="80" value="${esc(e.nombre || '')}">`)}
+    ${labeled({ label: 'CURP', required: true }, `<input class="input uppercase" name="curp" required minlength="18" maxlength="18" autocomplete="off" autocapitalize="characters" spellcheck="false" value="${esc(e.curp || '')}">`)}
+    ${labeled({ label: 'Fecha de nacimiento', required: true }, `<input class="input" type="date" name="nacimiento" required value="${esc(e.nacimiento || '')}">`)}
+    <p id="enac" class="col-span-2 lg:col-span-4 text-body-sm text-on-surface-variant -mt-1">La fecha de nacimiento se llena sola con la CURP.</p>
     ${admin ? labeled({ label: 'Planta' }, sel('name="planta"', N.d.areas.map(a => [a, a]), e.planta)) : ''}
     ${labeled({ label: 'Tipo de empleado' }, sel('name="contrato"', [['planta', 'De planta'], ['provisional', 'Provisional'], ...(admin ? [['confianza', 'De confianza']] : [])], e.contrato || 'planta'))}
     ${labeled({ label: 'Forma de pago' }, sel('name="pago"', [['semana', 'Sueldo semanal'], ['dia', 'Por día (sabatinos)']], e.pago))}
@@ -1918,10 +1938,26 @@ function nomEditForm() {
     ${labeled({ label: 'Fecha de baja' }, `<input class="input" type="date" name="baja" value="${esc(e.baja || '')}">`)}
     ${labeled({ label: 'Vacaciones ya tomadas en el periodo actual' }, `<input class="input" type="number" name="vacAjuste" step="0.5" value="${esc(e.vacAjuste || 0)}">`)}
     ${labeled({ label: 'Notas', wide: true }, `<input class="input" name="notas" maxlength="240" value="${esc(e.notas || '')}">`)}
-    <label class="col-span-2 flex items-center gap-2 text-body-md h-12"><input type="checkbox" name="menor" ${e.menor ? 'checked' : ''} class="w-5 h-5 accent-[#2563eb]">Menor de 18 años (avisa si se le captura T.E. o domingo)</label>
+    <label class="col-span-2 flex items-center gap-2 text-body-md h-12"><input type="checkbox" name="menor" ${esMenor(e) ? 'checked' : ''} class="w-5 h-5 accent-[#2563eb]">Menor de 18 años (avisa si se le captura T.E. o domingo; con fecha de nacimiento se marca sola)</label>
+    <fieldset class="col-span-2 lg:col-span-4 p-3 rounded-xl bg-surface-container-low"><legend class="text-label-md text-on-surface-variant px-1">Documentos en el expediente — marca con X los que ya tenemos</legend>
+      <div class="grid grid-cols-2 lg:grid-cols-4 gap-2 pt-1">${DOCS_EMP.map(([k, l]) => `<label class="flex items-center gap-2 text-body-md"><input type="checkbox" name="docs" value="${k}" ${(e.docs || []).includes(k) ? 'checked' : ''} class="w-5 h-5 shrink-0 accent-[#2563eb]">${l}</label>`).join('')}</div></fieldset>
     ${admin ? '<p id="ederiv" class="col-span-2 lg:col-span-4 p-3 rounded-xl bg-surface-container-low text-body-md"></p>' : '<p class="col-span-2 lg:col-span-4 text-body-sm text-on-surface-variant">El sueldo y el bono los pone el administrador.</p>'}
     ${x ? `<input type="hidden" name="id" value="${x.id}">` : ''}
     <div class="col-span-2 lg:col-span-4 flex justify-end gap-2">${back}<button class="btn btn-primary">Guardar</button></div></form>`;
+}
+// CURP y fecha de nacimiento en vivo: la fecha sale de la CURP, avisa si no coinciden, muestra la edad y marca "menor" sola.
+function empNac(f) {
+  const c = f.elements.curp, n = f.elements.nacimiento, out = f.querySelector('#enac');
+  if (!c || !n || !out) return;
+  const cu = c.value.toUpperCase().replace(/\s+/g, ''), ok = CURP_RE.test(cu), deCurp = ok ? curpNac(cu) : '';
+  if (ok && !n.value) n.value = deCurp;
+  const malo = (cu.length >= 18 && !ok) ? 'La CURP no tiene el formato correcto: revisa letras y números.'
+    : ok && n.value && n.value !== deCurp ? `La fecha no coincide con la CURP (según la CURP: ${fcy(deCurp)}).` : '';
+  const ed = n.value ? edadDe(n.value) : null;
+  if (ed !== null) f.elements.menor.checked = ed < 18;
+  f.elements.menor.disabled = ed !== null;
+  out.textContent = malo || (ed !== null ? `Edad: ${ed} años${ed < 18 ? ' — menor de edad' : ''}.` : 'La fecha de nacimiento se llena sola con la CURP.');
+  out.classList.toggle('text-error', !!malo);
 }
 // Sueldo diario y hora extra en vivo mientras el admin edita un empleado.
 function empDeriv(f) {
@@ -1943,7 +1979,7 @@ function nomDraw() {
     <p id="err" class="text-sm text-error hidden mb-2" role="alert"></p>
     ${N.edit ? nomEditForm() : nomTabs[N.tab]()}</div>`;
   const root = $('#nom'), ef = $('#empForm');
-  if (ef) { empDeriv(ef); ef.oninput = ef.onchange = () => empDeriv(ef); }
+  if (ef) { const live = () => { empDeriv(ef); empNac(ef); }; live(); ef.oninput = ef.onchange = live; }
   root.onclick = nomClick; root.onchange = nomChange; root.oninput = nomInput; root.onsubmit = nomSubmit;
 }
 // Guarda y vuelve a cargar los datos (con lo que el servidor deja ver).
@@ -2039,7 +2075,7 @@ function nomSubmit(e) {
   if (fid === 'bonoForm') return nomSave('/api/nomina/inc', { emps: [+v.emp], tipo: 'bono', fecha: v.fecha, cantidad: +v.monto, nota: v.motivo.trim() },
     () => { N.bf = { emp: '', monto: '', motivo: '', fecha: ymd() }; });
   if (fid === 'incForm') return nomSave('/api/nomina/inc/edit', { ...v, id: N.edit.x.id, tipo: v.tipo || N.edit.x.tipo, cantidad: v.cantidad ?? N.edit.x.cantidad, aplicado: !!v.aplicado }, () => { N.edit = null; });
-  if (fid === 'empForm') return nomSave('/api/nomina/emp', { ...v, menor: !!v.menor }, () => { N.edit = null; });
+  if (fid === 'empForm') return nomSave('/api/nomina/emp', { ...v, menor: !!v.menor, docs: [...f.querySelectorAll('[name=docs]:checked')].map(x => x.value) }, () => { N.edit = null; });
   if (fid === 'cfgForm') {
     const config = { inicio: {} };
     f.querySelectorAll('[data-cfg]').forEach(x => { config[x.dataset.cfg] = x.value; });

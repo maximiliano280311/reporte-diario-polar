@@ -188,11 +188,21 @@ const NOM_PESOS = ['bono', 'bono_puntualidad', 'descuento']; // su cantidad es d
 const NOM_MONEY = ['sueldo', 'te', 'teModo', 'bono']; // campos del empleado que solo ve el admin
 // Tipo de empleado: de planta (el de siempre), provisional (temporal: albañiles, apoyos) o de confianza (jefes: solo el admin los ve).
 const CONTRATOS = ['planta', 'provisional', 'confianza'];
+// Expediente del empleado: check list que se marca con X (mismo catálogo en public/app.js). La INE es "si aplica" (p. ej. menores
+// de edad): no cuenta como faltante. Pedido del 2026-11-10.
+export const DOCS_EMP = [['acta', 'Acta de nacimiento'], ['nss', 'NSS'], ['domicilio', 'Comprobante de domicilio'], ['solicitud', 'Solicitud de empleo'],
+  ['contrato', 'Contrato'], ['rfc', 'RFC'], ['ine', 'INE (si aplica)'], ['foto', 'Fotografía']];
 const NOM_CONFIG = { porcentaje: 4, diasDivisor: 6, horasJornada: 8, factorTE: 2, bonoDefault: 500, inicio: { Querétaro: 6, Silao: 0, Administración: 1 } };
 const isDate = s => /^\d{4}-\d{2}-\d{2}$/.test(String(s ?? ''));
 // Propuestas del asistente de nómina: solo empleados (alta / cambio) e incidencias válidas; los nombres se ligan a su empleado.
 // La IA solo PROPONE: el admin las revisa, las edita y las aplica con las rutas normales (que vuelven a validar).
-const NOM_EMP_KEYS = ['nombre', 'planta', 'contrato', 'pago', 'sueldo', 'bono', 'te', 'teModo', 'diasBase', 'ingreso', 'baja', 'vacAjuste', 'menor', 'notas'];
+const NOM_EMP_KEYS = ['nombre', 'curp', 'nacimiento', 'planta', 'contrato', 'pago', 'sueldo', 'bono', 'te', 'teModo', 'diasBase', 'ingreso', 'baja', 'vacAjuste', 'menor', 'notas'];
+// CURP (RENAPO): 18 caracteres. Posiciones 5-10 = fecha de nacimiento AAMMDD; la 17 da el siglo (dígito = 1900s, letra = 2000s).
+export const CURP_RE = /^[A-Z][AEIOUX][A-Z]{2}\d{6}[HMX][A-Z]{2}[B-DF-HJ-NP-TV-Z]{3}[A-Z\d]\d$/;
+export const curpLimpia = v => String(v ?? '').toUpperCase().replace(/\s+/g, '').slice(0, 30);
+export const curpNacimiento = c => `${/\d/.test(c[16]) ? '19' : '20'}${c.slice(4, 6)}-${c.slice(6, 8)}-${c.slice(8, 10)}`;
+// Años cumplidos a una fecha (AAAA-MM-DD).
+export const edad = (f, hoy) => { const [y, m, d] = f.split('-').map(Number), [Y, M, D] = hoy.split('-').map(Number); return Y - y - (M < m || (M === m && D < d) ? 1 : 0); };
 // Día de pago (sábado) cuyo periodo de esa área contiene la fecha; mismo cálculo que periodo() / paydayOf() de public/app.js.
 // Se guarda en cada incidencia (data.payday) para que se quede en ese periodo aunque después cambien los parámetros.
 export function paydayDe(cfg, area, f) {
@@ -214,7 +224,8 @@ export function cleanNomCambios(cambios, emps) {
       const d = Object.fromEntries(NOM_EMP_KEYS.filter(k => c[k] !== undefined && c[k] !== null && c[k] !== '').map(k => [k, c[k]]));
       if (d.planta && !NOM_AREAS.includes(d.planta)) delete d.planta;
       if (d.contrato && !CONTRATOS.includes(d.contrato)) delete d.contrato;
-      for (const k of ['ingreso', 'baja']) if (d[k] && !isDate(d[k])) delete d[k];
+      for (const k of ['ingreso', 'baja', 'nacimiento']) if (d[k] && !isDate(d[k])) delete d[k];
+      if (d.curp !== undefined) { d.curp = curpLimpia(d.curp); if (!CURP_RE.test(d.curp)) delete d.curp; }
       for (const k of ['sueldo', 'bono', 'te', 'diasBase', 'vacAjuste']) if (d[k] !== undefined && !(Number(d[k]) >= 0)) delete d[k];
       if (!old && !d.nombre) return [];
       return [{ tipo: 'empleado', id: old?.id ?? null, nombre: String(d.nombre || old.nombre).slice(0, 80), ...d, planta: d.planta || old?.planta || 'Querétaro' }];
@@ -893,10 +904,21 @@ export function createApp({ db, files, env = {} }) {
       if (!NOM_AREAS.includes(area)) throw httpError(400, 'Elige planta: Querétaro, Silao o Administración');
       if (!s('nombre')) throw httpError(400, 'Escribe el nombre');
       for (const k of ['ingreso', 'baja']) if (b[k] && !isDate(b[k])) throw httpError(400, 'Revisa las fechas');
+      // CURP y fecha de nacimiento: obligatorias al dar de alta; la fecha tiene que coincidir con la que trae la CURP.
+      // Si el cambio no trae CURP / nacimiento (p. ej. otra pantalla o la API), se conservan los que tenía.
+      const curp = b.curp === undefined ? old?.curp || '' : curpLimpia(b.curp), nacimiento = b.nacimiento === undefined ? old?.nacimiento || '' : s('nacimiento', 10), hoy = ymd();
+      if (!old && (!curp || !nacimiento)) throw httpError(400, 'Escribe la CURP y la fecha de nacimiento del empleado');
+      if (curp && !CURP_RE.test(curp)) throw httpError(400, 'Revisa la CURP: son 18 letras y números, como aparece en el acta de nacimiento o en la constancia de RENAPO');
+      if (nacimiento && (!isDate(nacimiento) || nacimiento > hoy || edad(nacimiento, hoy) < 14 || edad(nacimiento, hoy) > 90)) throw httpError(400, 'Revisa la fecha de nacimiento');
+      if (curp && nacimiento && curpNacimiento(curp) !== nacimiento)
+        throw httpError(400, `La fecha de nacimiento no coincide con la CURP (según la CURP es ${curpNacimiento(curp).split('-').reverse().join('/')})`);
       const contrato = old?.contrato === 'confianza' && !admin ? 'confianza' : CONTRATOS.includes(b.contrato) ? b.contrato : old?.contrato || 'planta';
       if (contrato === 'confianza' && !admin) throw httpError(403, 'Solo el administrador da de alta empleados de confianza');
       const d = { nombre: s('nombre'), contrato, pago: b.pago === 'dia' ? 'dia' : 'semana', diasBase: Math.min(7, Math.max(1, n('diasBase') || 1)), ingreso: s('ingreso', 10),
-        baja: s('baja', 10), vacAjuste: Number(b.vacAjuste) || 0, menor: !!b.menor, notas: s('notas', 240) };
+        baja: s('baja', 10), vacAjuste: Number(b.vacAjuste) || 0, notas: s('notas', 240), curp, nacimiento,
+        // Documentos del expediente marcados (si el cambio no los trae, se conservan).
+        docs: b.docs === undefined ? old?.docs || [] : [...new Set([].concat(b.docs).map(String))].filter(k => DOCS_EMP.some(([d]) => d === k)),
+        menor: nacimiento ? edad(nacimiento, hoy) < 18 : !!b.menor }; // con fecha de nacimiento, "menor" sale sola
       Object.assign(d, admin ? { sueldo: n('sueldo'), te: n('te'), teModo: b.teModo === 'manual' ? 'manual' : 'auto', bono: n('bono') }
         : Object.fromEntries(NOM_MONEY.map(k => [k, old?.[k] ?? (k === 'teModo' ? 'auto' : 0)])));
       if (old) await db.run('UPDATE nom_emps SET area = ?, data = ? WHERE id = ?', area, JSON.stringify(d), old.id);
@@ -1002,12 +1024,13 @@ export function createApp({ db, files, env = {} }) {
         'Eres el asistente de nómina de POLAR (Retrabajos Industriales y Limpiezas Especializadas). Escribe en español de México. ' +
         'Ayudas al administrador a llenar la nómina: das de alta o cambias empleados y capturas incidencias a partir de lo que te dice o de un Excel/CSV. ' +
         'Responde SOLO un JSON con las claves "respuesta" (texto breve para el admin: qué entendiste, qué propones y qué dudas tienes) y "cambios" (lista). ' +
-        'Cada cambio es uno de: {"tipo":"empleado","id":<id si ya existe o null si es nuevo>,"nombre","planta","contrato","pago","sueldo","bono","te","teModo","diasBase","ingreso","baja","vacAjuste","menor","notas"} ' +
+        'Cada cambio es uno de: {"tipo":"empleado","id":<id si ya existe o null si es nuevo>,"nombre","curp","nacimiento","planta","contrato","pago","sueldo","bono","te","teModo","diasBase","ingreso","baja","vacAjuste","menor","notas"} ' +
         '(en un cambio a un empleado existente pon id, nombre y SOLO los campos que cambian) o ' +
         '{"tipo":"incidencia","empleadoId":<id o null>,"empleado":"<nombre>","clase","fecha","cantidad","nota"}. ' +
         'Plantas: Querétaro, Silao o Administración. contrato: "planta" (empleado normal), "provisional" (temporal: albañiles, apoyos por obra) o "confianza" (jefes). pago: "semana" (sueldo semanal) o "dia" (pago por día). teModo: "auto" (hora extra por fórmula) o "manual" (te = pago por hora extra). ' +
         'Clases de incidencia y su cantidad: falta (días), retardo (veces), permiso_sg = permiso sin goce (días), permiso_cg = permiso con goce (días), incapacidad (días), ' +
         'vacacion (días), te = tiempo extra (horas), dia_extra = día extra o domingo (días), bono (pesos, la nota con el motivo es obligatoria), descuento (pesos). ' +
+        'curp: la CURP de 18 caracteres; nacimiento: fecha de nacimiento. Para dar de alta a alguien hacen falta su CURP y su fecha de nacimiento: si no vienen, dilo en la respuesta. ' +
         'Fechas en AAAA-MM-DD; si en el Excel vienen como número de serie, conviértelas (número de días desde 1899-12-30). ' +
         'Usa el id del empleado cuando el nombre coincida con uno existente (aunque varíen mayúsculas o acentos); si no existe, propón darlo de alta antes. ' +
         'No inventes datos ni dupliques lo que ya está capturado. Si algo no está claro, pregúntalo en "respuesta" y no lo propongas. Si solo te hacen una pregunta, responde con "cambios": [].',

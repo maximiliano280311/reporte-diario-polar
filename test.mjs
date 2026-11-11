@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
-import { createApp, cleanNomCambios, paydayDe } from './app.mjs';
+import { createApp, cleanNomCambios, paydayDe, edad } from './app.mjs';
 
 const sqlite = new DatabaseSync(':memory:');
 sqlite.exec(readFileSync(new URL('./schema.sql', import.meta.url), 'utf8'));
@@ -204,8 +204,10 @@ await ok('POST', '/api/users/nomina', { id: betoId, nomina: false }, admin);
 assert.equal((await call('GET', '/api/nomina', null, beto2)).status, 403); // el admin se lo quitó
 await ok('POST', '/api/users/nomina', { id: betoId, nomina: true }, admin);
 assert.equal((await call('POST', '/api/users/nomina', { id: betoId, nomina: true }, beto2)).status, 403); // asignar es solo del admin
-await ok('POST', '/api/nomina/emp', { nombre: 'Luis', planta: 'Querétaro', sueldo: 2400, bono: 500, ingreso: '2024-01-15' }, admin);
-await ok('POST', '/api/nomina/emp', { nombre: 'Rosa', planta: 'Silao', sueldo: 2600 }, admin);
+// CURP ficticias con formato válido (la fecha de nacimiento va en la CURP).
+const doc = { curp: 'LUPE900115HQTRRS05', nacimiento: '1990-01-15' };
+await ok('POST', '/api/nomina/emp', { nombre: 'Luis', planta: 'Querétaro', sueldo: 2400, bono: 500, ingreso: '2024-01-15', ...doc }, admin);
+await ok('POST', '/api/nomina/emp', { nombre: 'Rosa', planta: 'Silao', sueldo: 2600, ...doc }, admin);
 let nom = (await ok('GET', '/api/nomina', null, beto2)).data;
 assert.deepEqual(nom.emps.map(e => e.nombre), ['Luis']); // solo su planta
 const luis = nom.emps[0];
@@ -228,6 +230,27 @@ await ok('POST', '/api/nomina/emp', { id: luis.id, nombre: 'Luis P.', sueldo: 1,
 let nomA = (await ok('GET', '/api/nomina', null, admin)).data;
 const luisA = nomA.emps.find(e => e.id === luis.id);
 assert.deepEqual([luisA.nombre, luisA.sueldo, luisA.planta], ['Luis P.', 2400, 'Querétaro']);
+assert.deepEqual([luisA.curp, luisA.nacimiento, luisA.menor], [doc.curp, doc.nacimiento, false]); // el cambio sin CURP la conserva
+// CURP y fecha de nacimiento: obligatorias al dar de alta, con formato de CURP y la fecha que trae la CURP; "menor" sale sola.
+const altaE = d => call('POST', '/api/nomina/emp', { nombre: 'Nuevo', planta: 'Querétaro', ...d }, admin);
+assert.equal((await altaE({})).status, 400); // sin CURP ni nacimiento
+assert.equal((await altaE({ curp: doc.curp })).status, 400); // sin fecha de nacimiento
+assert.equal((await altaE({ curp: 'ABC123', nacimiento: '1990-01-15' })).status, 400); // CURP mal escrita
+assert.equal((await altaE({ ...doc, nacimiento: '1991-01-15' })).status, 400); // no coincide con la CURP
+assert.equal((await altaE({ curp: 'MEPA120101MQTRRNA3', nacimiento: '2012-01-02' })).status, 400); // siglo 2000 (letra): la CURP dice 2012-01-01
+await ok('POST', '/api/nomina/emp', { nombre: 'Menor Q', planta: 'Querétaro', curp: 'mepa 120101 mqtrrna3', nacimiento: '2012-01-01',
+  docs: ['acta', 'nss', 'acta', 'pasaporte'] }, admin);
+nomA = (await ok('GET', '/api/nomina', null, admin)).data;
+const menorQ = nomA.emps.find(e => e.nombre === 'Menor Q');
+assert.deepEqual([menorQ.curp, menorQ.menor, menorQ.docs], ['MEPA120101MQTRRNA3', edad('2012-01-01', hoy) < 18, ['acta', 'nss']]); // documentos válidos, sin repetir
+// Expediente: el encargado lo marca; si el cambio no trae docs se conservan; con [] se desmarcan.
+await ok('POST', '/api/nomina/emp', { id: menorQ.id, nombre: 'Menor Q', docs: ['acta', 'nss', 'domicilio', 'foto'] }, beto2);
+await ok('POST', '/api/nomina/emp', { id: menorQ.id, nombre: 'Menor Q' }, beto2);
+assert.deepEqual((await ok('GET', '/api/nomina', null, beto2)).data.emps.find(e => e.id === menorQ.id).docs, ['acta', 'nss', 'domicilio', 'foto']);
+await ok('POST', '/api/nomina/emp', { id: menorQ.id, nombre: 'Menor Q', docs: [] }, beto2);
+assert.deepEqual((await ok('GET', '/api/nomina', null, beto2)).data.emps.find(e => e.id === menorQ.id).docs, []);
+await ok('POST', '/api/nomina/emp/delete', { id: menorQ.id }, admin); // no estorba en las cuentas de nómina de abajo
+assert.equal(cleanNomCambios([{ tipo: 'empleado', nombre: 'IA', curp: 'mala', nacimiento: '1990-01-15' }], [])[0].curp, undefined); // la IA no propone CURP inválidas
 assert.equal(nomA.incs.find(i => i.id === bono.id).cantidad, 300);
 // Bono de puntualidad: monto del empleado, uno por mes.
 await ok('POST', '/api/nomina/bono', { emps: [luis.id], mes: '2026-09' }, beto2);
@@ -247,7 +270,7 @@ assert.equal((await call('GET', '/api/nomina', null, beto2)).status, 403); // se
 // Borrar empleado: cualquier admin; se van sus incidencias sin pagar.
 await ok('POST', '/api/users', { name: 'Admin 2', email: 'admin2@polar.test', password: pass, role: 'admin' }, admin);
 const admin2 = await login('admin2@polar.test');
-await ok('POST', '/api/nomina/emp', { nombre: 'Temporal', planta: 'Querétaro', sueldo: 100 }, admin);
+await ok('POST', '/api/nomina/emp', { nombre: 'Temporal', planta: 'Querétaro', sueldo: 100, ...doc }, admin);
 const tmpEmp = (await ok('GET', '/api/nomina', null, admin)).data.emps.find(e => e.nombre === 'Temporal');
 await ok('POST', '/api/nomina/inc', { emps: [tmpEmp.id], tipo: 'falta', fecha: hoy, cantidad: 1 }, admin);
 assert.equal((await call('POST', '/api/nomina/emp/delete', { id: tmpEmp.id }, beto2)).status, 403); // encargado no
@@ -394,9 +417,9 @@ assert.equal((await call('POST', '/api/nomina/config', { config: {} }, beto)).st
 
 // ---------- Nómina: empleados provisionales y de confianza (estos solo los ve el admin) ----------
 await ok('POST', '/api/users/nomina', { id: betoId, nomina: true }, admin);
-await ok('POST', '/api/nomina/emp', { nombre: 'Jefe Q', planta: 'Querétaro', contrato: 'confianza', sueldo: 9000 }, admin);
-await ok('POST', '/api/nomina/emp', { nombre: 'Albañil Q', contrato: 'provisional' }, beto2);
-assert.equal((await call('POST', '/api/nomina/emp', { nombre: 'Otro jefe', contrato: 'confianza' }, beto2)).status, 403);
+await ok('POST', '/api/nomina/emp', { nombre: 'Jefe Q', planta: 'Querétaro', contrato: 'confianza', sueldo: 9000, ...doc }, admin);
+await ok('POST', '/api/nomina/emp', { nombre: 'Albañil Q', contrato: 'provisional', ...doc }, beto2);
+assert.equal((await call('POST', '/api/nomina/emp', { nombre: 'Otro jefe', contrato: 'confianza', ...doc }, beto2)).status, 403);
 const empsA = (await ok('GET', '/api/nomina', null, admin)).data.emps, jefe = empsA.find(e => e.nombre === 'Jefe Q');
 assert.deepEqual([jefe.contrato, empsA.find(e => e.nombre === 'Albañil Q').contrato], ['confianza', 'provisional']);
 await ok('POST', '/api/nomina/inc', { emps: [jefe.id], tipo: 'falta', fecha: hoy, cantidad: 1 }, admin);
