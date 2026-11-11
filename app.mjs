@@ -106,6 +106,8 @@ const CRITERIOS = ['Recubrimiento 100 % removido', 'Sin residuos de proceso', 'S
 // LIBERADO PARCIAL (ISO 9001 8.7): salen las aceptadas; las no conformes quedan retenidas con su PL-FOR-30 sin detener el resto del lote.
 const DISPOS = ['LIBERADO', 'LIBERADO PARCIAL', 'LIBERADO CON DESVIACIÓN', 'RETENIDO / NO CONFORME', 'RETRABAJO INTERNO'];
 const PARCIAL = 'LIBERADO PARCIAL';
+// Piezas por modelo de una liberación. Las de antes del 2026-11-11 (sin "modelos") eran de un lote de un solo modelo: sus totales.
+const libModelos = d => d.modelos?.length ? d.modelos : [{ parte: d.parte, inspeccionadas: d.inspeccionadas, aceptadas: d.aceptadas }];
 const NC_DISPOS = ['Retrabajo', 'Usar como está (autoriza cliente)', 'Desecho (autoriza cliente)', 'Reposición o pago'];
 const NC_BAJA = NC_DISPOS.slice(2); // al cerrar el NC esas piezas ya no regresan a liberarse (no se entregan)
 const NC_TIPOS = ['Proceso incompleto', 'Daño por temperatura', 'Daño mecánico', 'Residuo químico', 'Faltante / pérdida', 'Pieza mezclada', 'Otro'];
@@ -125,7 +127,7 @@ const QFORMS = {
       { id: 'cliente', label: 'Cliente', type: 'select', options: [], src: 'clientes', required: true, wide: true },
       { id: 'remision', label: 'Remisión / folio del cliente', required: true, wide: true },
       { id: 'transporte', label: 'Transporte', type: 'select', options: ['POLAR', 'Cliente', 'Fletera'] }, { id: 'placas', label: 'Placas' }] },
-    { n: 2, title: 'Partidas', hint: 'Una por cada no. de parte. Diferencia = contada − remisión. El lote POLAR se asigna solo al guardar.',
+    { n: 2, title: 'Partidas', hint: 'Una por cada no. de parte (modelo de rack). Diferencia = contada − remisión. Toda la remisión queda como un solo lote POLAR, que se asigna al guardar.',
       table: { id: 'partidas', item: 'partida', cols: [{ id: 'parte', label: 'No. de parte / pieza', required: true, list: 'piezas', wide: true },
         { id: 'descripcion', label: 'Descripción', wide: true }, { id: 'remision', label: 'Cantidad según remisión', type: 'number', required: true },
         { id: 'contada', label: 'Cantidad contada', type: 'number', required: true }, { id: 'diferencia', label: 'Diferencia', auto: true },
@@ -136,7 +138,7 @@ const QFORMS = {
       { id: 'danos', label: 'Daños / observaciones', type: 'textarea', wide: true }, { id: 'ubicacion', label: 'Ubicación en planta' },
       { id: 'compromiso', label: 'Fecha compromiso de entrega', type: 'date' }, { id: 'aviso', label: '¿Se avisó al cliente?', type: 'select', options: SN }] }] },
   LIB: { code: 'PL-FOR-29', title: 'Inspección y liberación de producto', sections: [
-    { n: 1, title: 'Lote', hint: 'Elige la remisión del cliente: solo aparecen sus lotes EN PLANTA. Cliente, no. de parte y folio REC se llenan solos.',
+    { n: 1, title: 'Lote', hint: 'Elige la remisión del cliente: cada remisión recibida es un lote POLAR con todos sus modelos y se elige solo. Cliente, modelos y folio REC se llenan solos.',
       // Remisión: la de la recepción (PL-FOR-28) del lote; el servidor la toma del lote, así cada liberación queda ligada a su remisión.
       fields: [{ id: 'remision', label: 'Remisión del cliente', type: 'select', options: [], src: 'remisiones', required: true, wide: true },
         { id: 'lote', label: 'Lote POLAR', type: 'select', options: [], src: 'lotes', required: true, wide: true },
@@ -151,9 +153,13 @@ const QFORMS = {
         { id: 'piezas_nok', label: 'Piezas no OK', type: 'number', nok: true },
         { id: 'corregido', label: '¿Se corrigió y se volvió a revisar OK?', type: 'select', options: SN, nok: true },
         { id: 'accion', label: '¿Qué se va a hacer?', nok: true, wide: true }] } },
-    { n: 3, title: 'Cantidades', hint: 'Aceptadas = las OK más las corregidas y vueltas a revisar. No conformes = inspeccionadas − aceptadas (se calcula solo).',
-      fields: [{ id: 'inspeccionadas', label: 'Inspeccionadas', type: 'number', required: true }, { id: 'aceptadas', label: 'Aceptadas', type: 'number', required: true },
-        { id: 'retrabajo', label: 'A retrabajo', type: 'number' }] },
+    // Piezas por modelo del lote (un renglón por cada no. de parte de la remisión; la app los pone con lo que falta liberar).
+    // Los totales inspeccionadas / aceptadas los suma el servidor. fixed: [] = renglones que no se agregan ni se quitan a mano.
+    { n: 3, title: 'Cantidades por modelo', hint: 'Ya vienen con todo lo que falta liberar de cada modelo: cámbialas si liberas solo una parte. ' +
+      'Aceptadas = las OK más las corregidas y vueltas a revisar. No conformes = inspeccionadas − aceptadas (se calcula solo).',
+      table: { id: 'modelos', fixed: [], cols: [{ id: 'parte', label: 'Modelo / no. de parte', readonly: true, wide: true },
+        { id: 'inspeccionadas', label: 'Inspeccionadas', type: 'number' }, { id: 'aceptadas', label: 'Aceptadas', type: 'number' }] },
+      fields: [{ id: 'retrabajo', label: 'A retrabajo', type: 'number', after: true }] },
     { n: 4, title: 'Disposición', hint: 'LIBERADO: todo OK o corregido. LIBERADO PARCIAL: salen las aceptadas y las no conformes quedan retenidas con su ' +
       'no conforme (PL-FOR-30). CON DESVIACIÓN: el cliente autorizó aceptarlas como están. RETRABAJO INTERNO: se reprocesan y se vuelven a inspeccionar.',
       fields: [{ id: 'disposicion', label: 'Disposición', type: 'select', options: DISPOS, required: true, wide: true },
@@ -580,7 +586,7 @@ export function createApp({ db, files, env = {} }) {
     }
     for (const r of await db.all("SELECT folio, data FROM qrecords WHERE kind = 'LIB' AND plant = ? AND status = 'ENTREGADO'", plant)) {
       const d = JSON.parse(r.data);
-      if (d.entrega_fecha === date) add(d.cliente, d.parte, 'entregado', num(d.aceptadas), r.folio);
+      if (d.entrega_fecha === date) for (const m of libModelos(d)) add(d.cliente, m.parte, 'entregado', num(m.aceptadas), r.folio); // por modelo
     }
     return m;
   }
@@ -670,19 +676,35 @@ export function createApp({ db, files, env = {} }) {
       const d = JSON.parse(r.data);
       if (d.origen) ncDe[d.origen] = { status: r.status, disposicion: d.disposicion }; // el más reciente de esa liberación
     }
+    // Mismo cálculo para el lote completo y para cada modelo (no. de parte) del lote: x.modelos[parte].
     for (const r of await db.all("SELECT folio, status, data FROM qrecords WHERE kind = 'LIB' AND plant = ? AND status IN ('LIBERADO', 'ENTREGADO')", plant)) {
-      const d = JSON.parse(r.data), x = out[d.lote] ??= { ...AV0, porEntregar: [] }, insp = num(d.inspeccionadas), acc = num(d.aceptadas);
-      if (d.disposicion === PARCIAL) {
-        const nc = ncDe[r.folio], n = insp - acc;
-        x.inspeccionadas += acc;
-        if (nc?.status !== 'CERRADO') x.retenidas += n;
-        else if (NC_BAJA.includes(nc.disposicion)) { x.inspeccionadas += n; x.rechazadas += n; }
-      } else { x.inspeccionadas += insp; x.rechazadas += insp - acc; }
-      if (r.status === 'ENTREGADO') x.entregadas += acc; else x.porEntregar.push(r.folio);
+      const d = JSON.parse(r.data), x = out[d.lote] ??= { ...AV0, porEntregar: [], modelos: {} }, nc = ncDe[r.folio];
+      for (const m of libModelos(d)) {
+        const y = x.modelos[m.parte] ??= { inspeccionadas: 0, entregadas: 0, rechazadas: 0, retenidas: 0 }, insp = num(m.inspeccionadas), acc = num(m.aceptadas), n = insp - acc;
+        for (const z of [x, y]) {
+          if (d.disposicion === PARCIAL) {
+            z.inspeccionadas += acc;
+            if (nc?.status !== 'CERRADO') z.retenidas += n;
+            else if (NC_BAJA.includes(nc.disposicion)) { z.inspeccionadas += n; z.rechazadas += n; }
+          } else { z.inspeccionadas += insp; z.rechazadas += n; }
+          if (r.status === 'ENTREGADO') z.entregadas += acc;
+        }
+      }
+      if (r.status !== 'ENTREGADO') x.porEntregar.push(r.folio);
     }
     return out;
   }
-  const AV0 = { inspeccionadas: 0, entregadas: 0, rechazadas: 0, retenidas: 0, porEntregar: [] };
+  const AV0 = { inspeccionadas: 0, entregadas: 0, rechazadas: 0, retenidas: 0, porEntregar: [], modelos: {} };
+  // Modelos (no. de parte) de cada lote con sus piezas recibidas, de las partidas de su recepción: { lote: [{ parte, qty }] }.
+  async function modelosDe(plant) {
+    const out = {};
+    for (const r of await db.all("SELECT data FROM qrecords WHERE kind = 'REC' AND plant = ?", plant))
+      for (const p of JSON.parse(r.data).partidas) {
+        const m = (out[p.lote] ??= []).find(x => x.parte === p.parte);
+        if (m) m.qty += num(p.contada); else out[p.lote].push({ parte: p.parte, qty: num(p.contada) });
+      }
+    return out;
+  }
   const porLiberarDe = (qty, a = AV0) => qty - a.inspeccionadas - a.retenidas;
   // Estatus de un lote que no está RETENIDO por un NC: EN PLANTA mientras le falten piezas por liberar; LIBERADO si falta entregar algo
   // liberado; RETENIDO si solo le quedan piezas retenidas de una liberación parcial; ENTREGADO al terminar.
@@ -697,9 +719,16 @@ export function createApp({ db, files, env = {} }) {
   async function recepcionesAbiertas(plant) {
     const av = await avanceLotes(plant), out = [];
     for (const r of await db.all("SELECT folio, date, data FROM qrecords WHERE kind = 'REC' AND plant = ? ORDER BY date, folio", plant)) {
-      const d = JSON.parse(r.data), partidas = d.partidas.map(x => { const a = av[x.lote] || AV0, recibidas = num(x.contada);
-        return { lote: x.lote, parte: x.parte, recibidas, entregadas: a.entregadas, rechazadas: a.rechazadas, retenidas: a.retenidas, porLiberar: Math.max(0, porLiberarDe(recibidas, a)),
-          porEntregar: Math.max(0, recibidas - a.entregadas - a.rechazadas), faltanLlegar: Math.max(0, num(x.remision) - recibidas), libsPorEntregar: a.porEntregar }; });
+      // Un renglón por lote (desde el 2026-11-11 la remisión entera es un lote; antes, uno por partida).
+      const d = JSON.parse(r.data), lotes = {};
+      for (const x of d.partidas) {
+        const g = lotes[x.lote] ??= { lote: x.lote, partes: [], recibidas: 0, faltanLlegar: 0 };
+        if (!g.partes.includes(x.parte)) g.partes.push(x.parte);
+        g.recibidas += num(x.contada); g.faltanLlegar += Math.max(0, num(x.remision) - num(x.contada));
+      }
+      const partidas = Object.values(lotes).map(({ lote, partes, recibidas, faltanLlegar }) => { const a = av[lote] || AV0;
+        return { lote, parte: partes.join(', '), recibidas, entregadas: a.entregadas, rechazadas: a.rechazadas, retenidas: a.retenidas, porLiberar: Math.max(0, porLiberarDe(recibidas, a)),
+          porEntregar: Math.max(0, recibidas - a.entregadas - a.rechazadas), faltanLlegar, libsPorEntregar: a.porEntregar }; });
       const total = partidas.reduce((t, x) => t + x.porEntregar, 0);
       if (total > 0) out.push({ folio: r.folio, plant, date: r.date, cliente: d.cliente, remision: d.remision, compromiso: d.compromiso, partidas, total });
     }
@@ -1245,9 +1274,12 @@ export function createApp({ db, files, env = {} }) {
       const q = new URL(req.url).searchParams, kind = q.get('tipo');
       if (!QFORMS[kind] || (user.role === 'lider' && kind !== 'VIS')) return json(404, { error: 'Formato no encontrado' });
       const plant = plantFor(user, q.get('planta')), cal = await getCalidad();
-      const av = await avanceLotes(plant), lotes = (await db.all(`${LOT_SQL} WHERE l.plant = ? AND (l.received >= ? OR l.status = 'EN PLANTA')`, plant, ymd(new Date(Date.now() - 180 * DAY))))
+      const av = await avanceLotes(plant), mods = await modelosDe(plant);
+      const lotes = (await db.all(`${LOT_SQL} WHERE l.plant = ? AND (l.received >= ? OR l.status = 'EN PLANTA')`, plant, ymd(new Date(Date.now() - 180 * DAY))))
         .map(({ code, client, part, qty, rec, status, proceso, remision }) => ({ code, client, part, qty, rec, status, proceso, remision,
-          porLiberar: porLiberarDe(qty, av[code]), entregadas: (av[code] || AV0).entregadas, retenidas: (av[code] || AV0).retenidas }));
+          porLiberar: porLiberarDe(qty, av[code]), entregadas: (av[code] || AV0).entregadas, retenidas: (av[code] || AV0).retenidas,
+          // Modelos del lote con lo que falta liberar de cada uno (la app arma con ellos la tabla de cantidades del PL-FOR-29).
+          modelos: (mods[code] || [{ parte: part, qty }]).map(m => ({ ...m, porLiberar: Math.max(0, porLiberarDe(m.qty, (av[code] || AV0).modelos[m.parte])) })) }));
       // Piezas por entregar de cada recepción: la app avisa si la entrega deja la remisión incompleta (pide el aviso al cliente).
       const pendRec = Object.fromEntries((await recepcionesAbiertas(plant)).map(r => [r.folio, r.total]));
       return json(200, { ...await qform(kind, plant), plant, lotes, pendRec, specs: Object.fromEntries(cal.clientes.filter(c => c.plant === plant).map(c => [c.name, c.spec])) });
@@ -1268,18 +1300,17 @@ export function createApp({ db, files, env = {} }) {
       return json(200, { ...r, lotes, ligados, avance, faltan, ...QFORMS[r.kind] }); // + code, title y sections (para imprimirlo)
     },
 
-    // PL-FOR-28: cada partida crea su lote EN PLANTA (suma al saldo de la sección 7 de ese día).
+    // PL-FOR-28: toda la remisión es UN lote POLAR EN PLANTA con todos sus modelos (partidas); suma al saldo de la sección 7 de ese día.
+    // Antes del 2026-11-11 cada partida creaba su propio lote (esos lotes se quedan así). Los modelos de un lote salen de sus partidas (modelosDe).
     // ponytail: varias escrituras sin transacción; si una falla a la mitad queda un folio o lote suelto. Usar db.batch de D1 si llega a pasar.
     'POST /api/calidad/rec': async (req, user) => {
       const b = await body(req), plant = plantFor(user, b.planta), a = clean(b.answers || {}, (await qform('REC', plant)).sections);
       if (!a.partidas.length) throw httpError(400, 'Agrega al menos una partida');
-      const folio = await nextFolio('REC');
-      for (const p of a.partidas) {
-        p.diferencia = String(num(p.contada) - num(p.remision));
-        p.lote = await lotCode(plant, a.fecha);
-        await db.run('INSERT INTO lots(code, plant, client, part, qty, proceso, rec, status, received, due) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-          p.lote, plant, a.cliente, p.parte, num(p.contada), p.proceso, folio, 'EN PLANTA', a.fecha, a.compromiso || null);
-      }
+      const folio = await nextFolio('REC'), lote = await lotCode(plant, a.fecha), uniq = xs => [...new Set(xs.filter(Boolean))].join(', ');
+      for (const p of a.partidas) Object.assign(p, { diferencia: String(num(p.contada) - num(p.remision)), lote });
+      await db.run('INSERT INTO lots(code, plant, client, part, qty, proceso, rec, status, received, due) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        lote, plant, a.cliente, uniq(a.partidas.map(p => p.parte)).slice(0, 500), a.partidas.reduce((t, p) => t + num(p.contada), 0),
+        uniq(a.partidas.map(p => p.proceso)), folio, 'EN PLANTA', a.fecha, a.compromiso || null);
       // Diferencia o algún "No" en el estado al recibir: la app avisa y ofrece levantar el no conforme precargado.
       const anomalia = a.partidas.some(p => num(p.diferencia)) || ESTADO_REC.some(([id]) => a[id] === 'No');
       await saveRecord(folio, 'REC', plant, a.fecha, user, anomalia ? 'CON OBSERVACIONES' : 'CONFORME', a);
@@ -1297,6 +1328,22 @@ export function createApp({ db, files, env = {} }) {
       const a = clean(ans, (await qform('LIB', plant)).sections);
       if (a.criterios.length !== CRITERIOS.length || a.criterios.some((c, i) => c.criterio !== CRITERIOS[i] || !c.resultado))
         throw httpError(400, 'Marca OK o NOK en los 8 criterios de inspección');
+      // Piezas por modelo del lote. Un lote de un solo modelo también acepta los totales (inspeccionadas / aceptadas) sin tabla.
+      const mods = (await modelosDe(plant))[lot.code] || [{ parte: lot.part, qty: lot.qty }], avL = (await avanceLotes(plant))[lot.code] || AV0;
+      if (!a.modelos.length && mods.length === 1 && (ans.inspeccionadas || ans.aceptadas))
+        a.modelos = [{ parte: mods[0].parte, inspeccionadas: String(ans.inspeccionadas ?? ''), aceptadas: String(ans.aceptadas ?? '') }];
+      for (const m of a.modelos) {
+        const mo = mods.find(x => x.parte === m.parte);
+        if (!mo) throw httpError(400, `El modelo "${m.parte}" no es del lote ${lot.code}`);
+        const i = num(m.inspeccionadas), ac = num(m.aceptadas), quedanM = porLiberarDe(mo.qty, avL.modelos[m.parte]);
+        if (i < 0 || ac < 0 || ac > i) throw httpError(400, `${m.parte}: las aceptadas no pueden ser más que las inspeccionadas`);
+        if (i > quedanM) throw httpError(400, `${m.parte}: quedan ${quedanM} piezas por liberar`);
+        Object.assign(m, { inspeccionadas: String(i), aceptadas: String(ac) });
+      }
+      a.modelos = a.modelos.filter(m => num(m.inspeccionadas) > 0);
+      if (!a.modelos.length) throw httpError(400, mods.length > 1 ? 'Anota cuántas piezas de cada modelo se inspeccionaron' : 'Anota cuántas piezas se inspeccionaron');
+      a.inspeccionadas = String(a.modelos.reduce((t, m) => t + num(m.inspeccionadas), 0));
+      a.aceptadas = String(a.modelos.reduce((t, m) => t + num(m.aceptadas), 0));
       const insp = num(a.inspeccionadas), acc = num(a.aceptadas), libera = a.disposicion.startsWith('LIBERADO');
       // NOK: cuántas piezas, qué se va a hacer y si se corrigió. OK: esas celdas van vacías.
       for (const c of a.criterios) {

@@ -410,6 +410,31 @@ calR = (await ok('GET', '/api/calidad', null, beto2)).data;
 assert.equal(calR.abiertas.find(x => x.folio === recD.folio), undefined);
 assert.equal(calR.lotes.find(l => l.code === recD.partidas[0].lote).status, 'ENTREGADO');
 
+// ---------- Una remisión = un lote, aunque traiga varios modelos de rack: se libera por modelo dentro del mismo lote ----------
+const recM = (await ok('POST', '/api/calidad/rec', { answers: { fecha: hoy, hora: '12:00', cliente: 'KH México', remision: 'R-MOD', fotos: [foto], ...estadoOK,
+  partidas: [{ parte: 'SUB RACK', remision: '6', contada: '6', proceso: 'Pirólisis' }, { parte: 'ESPIGA', remision: '4', contada: '4', proceso: 'Lavado' }] } }, beto2)).data;
+const loteM = recM.partidas[0].lote;
+assert.equal(recM.partidas[1].lote, loteM); // toda la remisión es un solo lote
+let lM = (await ok('GET', '/api/calidad/form?tipo=LIB', null, beto2)).data.lotes.find(l => l.code === loteM);
+assert.deepEqual([lM.qty, lM.part, lM.proceso, lM.modelos.map(m => [m.parte, m.qty, m.porLiberar])], [10, 'SUB RACK, ESPIGA', 'Pirólisis, Lavado', [['SUB RACK', 6, 6], ['ESPIGA', 4, 4]]]);
+assert.deepEqual((await ok('GET', '/api/calidad', null, beto2)).data.abiertas.find(x => x.folio === recM.folio).partidas.map(x => [x.lote, x.recibidas]), [[loteM, 10]]);
+const libM = a => call('POST', '/api/calidad/lib', { answers: { fecha: hoy, proceso: 'Pirólisis', lote: loteM, criterios: criterios(), disposicion: 'LIBERADO', ...a } }, beto2);
+assert.equal((await libM({ inspeccionadas: '10', aceptadas: '10' })).status, 400); // varios modelos: hay que decir cuántas de cada uno
+assert.equal((await libM({ modelos: [{ parte: 'SUB RACK', inspeccionadas: '7', aceptadas: '7' }] })).status, 400); // de ese modelo solo quedan 6
+assert.equal((await libM({ modelos: [{ parte: 'OTRO', inspeccionadas: '1', aceptadas: '1' }] })).status, 400); // no es del lote
+const lm1r = await libM({ modelos: [{ parte: 'SUB RACK', inspeccionadas: '6', aceptadas: '6' }, { parte: 'ESPIGA', inspeccionadas: '0', aceptadas: '0' }],
+  entrega_fecha: hoy, remision_polar: 'POL-M1', recibio: 'Juan', ...aviso });
+assert.equal(lm1r.status, 200, JSON.stringify(lm1r.data));
+assert.deepEqual([lm1r.data.inspeccionadas, lm1r.data.aceptadas, lm1r.data.modelos.length, lm1r.data.estadoLote, lm1r.data.quedan], ['6', '6', 1, 'EN PLANTA', 4]);
+lM = (await ok('GET', '/api/calidad/form?tipo=LIB', null, beto2)).data.lotes.find(l => l.code === loteM);
+assert.deepEqual(lM.modelos.map(m => m.porLiberar), [0, 4]);
+const movM = (await ok('GET', '/api/defaults', null, beto2)).data.mov; // sección 7: lo entregado se cuenta en su modelo
+assert.deepEqual([movM['kh méxico|sub rack'].entregado, movM['kh méxico|espiga'].entregado, movM['kh méxico|espiga'].recibido], [6, 0, 4]);
+await ok('POST', '/api/calidad/lib', { answers: { fecha: hoy, proceso: 'Lavado', lote: loteM, criterios: criterios(), disposicion: 'LIBERADO',
+  modelos: [{ parte: 'ESPIGA', inspeccionadas: '4', aceptadas: '4' }], entrega_fecha: hoy, remision_polar: 'POL-M2', recibio: 'Juan' } }, beto2); // ya completa: sin aviso
+const calM = (await ok('GET', '/api/calidad', null, beto2)).data;
+assert.deepEqual([calM.lotes.find(l => l.code === loteM).status, calM.abiertas.find(x => x.folio === recM.folio)], ['ENTREGADO', undefined]);
+
 // Periodo de pago por planta: día de inicio y desfase (Silao paga una semana atrás); solo admin.
 const cfgN = (await ok('POST', '/api/nomina/config', { config: { inicio: { Querétaro: 1, Silao: 1 }, desfase: { Querétaro: -1, Silao: 1, Administración: 9 } } }, admin)).data;
 assert.deepEqual([cfgN.inicio.Silao, cfgN.desfase.Silao, cfgN.desfase.Querétaro, cfgN.desfase.Administración], [1, 1, -1, undefined]);

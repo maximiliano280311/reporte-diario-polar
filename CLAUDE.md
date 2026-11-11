@@ -116,7 +116,13 @@ App web para **Retrabajos Industriales y Limpiezas Especializadas Polar**: los e
 Especificación: `Modificaciones App Polar/MOD_APP_POLAR_SGC_ISO9001.md` (pedido de Rodrigo, con etapas 1-3 y criterios de aceptación).
 - Formatos `QFORMS` en `app.mjs` (mismo esquema que `FORM`): **PL-FOR-28 Recepción (REC)**, **PL-FOR-29 Inspección y liberación (LIB)**,
   **PL-FOR-30 No conforme (NC)**. Folios `REC-0001`… consecutivos por tipo (`counters`, `INSERT … RETURNING`), no editables.
-- Cada partida de REC crea un **lote POLAR** `QRO|SIL-AAAAMMDD-NN` (tabla `lots`): EN PLANTA → LIBERADO / RETENIDO → ENTREGADO.
+- **Cada remisión (REC) es UN lote POLAR** `QRO|SIL-AAAAMMDD-NN` (tabla `lots`) con todos sus modelos de rack (partidas); `lots.part` y
+  `lots.proceso` llevan la lista y `qty` el total. Antes del 2026-11-11 cada partida era un lote (esos se quedan así). Estados:
+  EN PLANTA → LIBERADO / RETENIDO → ENTREGADO. Los modelos de un lote salen de las partidas de su recepción (`modelosDe`).
+  El PL-FOR-29 elige el lote solo al escoger la remisión y captura **piezas por modelo** (tabla `modelos`, ya llena con lo que falta liberar);
+  el servidor suma los totales `inspeccionadas` / `aceptadas`. El avance se lleva por lote y por modelo (`avanceLotes().modelos`,
+  `libModelos` para las liberaciones viejas) y la sección 7 cuenta lo entregado en cada modelo. Un lote de un solo modelo también
+  acepta los totales sin tabla (API / pruebas).
 - **Remisión del lote**: todo lote está ligado a la remisión del cliente de su recepción (`lots.rec` → `remision` del REC, consulta `LOT_SQL`;
   no hay columna en `lots`). El PL-FOR-29 pide primero la **remisión** (solo aparecen sus lotes EN PLANTA) y el servidor guarda en la liberación la
   remisión del lote (si mandan otra, error). Se ve en la lista de lotes de Calidad, en el dato del lote y en el PL-FOR-29 impreso

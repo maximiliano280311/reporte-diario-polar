@@ -143,7 +143,8 @@ let rowN = 0; // los renglones se nombran tabla.N.columna
 const rowHtml = (t, r = {}) => {
   const i = rowN++, cols = t.cols.filter(c => !c.auto), f = id => input(cols.find(c => c.id === id), `${t.id}.${i}.${id}`, r[id]);
   const info = { material: 'data-pend class="col-span-2 self-end p-2 rounded-lg bg-tertiary-fixed/50 text-label-md text-on-tertiary-fixed"',
-    partidas: 'data-dif class="col-span-2 self-end p-2 rounded-lg bg-surface-container text-label-md"' }[t.id];
+    partidas: 'data-dif class="col-span-2 self-end p-2 rounded-lg bg-surface-container text-label-md"',
+    modelos: 'data-mod class="col-span-2 self-end p-2 rounded-lg bg-surface-container text-label-md"' }[t.id];
   // Check lists (PL-FOR-21/22/23): renglón compacto — el punto arriba y en una línea el resultado y la observación.
   if (cols[0].id === 'punto') return `<div data-row class="flex flex-col gap-1.5 p-3 rounded-xl bg-surface-container-low">
     <p class="text-body-md font-medium text-on-surface">${esc(r.punto)}</p><input type="hidden" name="${t.id}.${i}.punto" value="${esc(r.punto)}">
@@ -348,7 +349,8 @@ function qDoc(r) {
         ${fs.length ? kv(fs.map(f => [f.label, f.type === 'date' ? dmy(a[f.id]) : [].concat(a[f.id] ?? '').join(', ')])) : ''}
         ${t ? `<table><thead><tr>${t.cols.map(c => `<th>${esc(c.label)}</th>`).join('')}</tr></thead><tbody>${rows.length
           ? rows.map(x => `<tr>${t.cols.map(c => `<td>${esc(x[c.id])}</td>`).join('')}</tr>`).join('') : `<tr><td colspan="${t.cols.length}" class="c">—</td></tr>`}</tbody></table>` : ''}
-        ${r.kind === 'LIB' && s.n === 3 ? kv([['% de aceptación', `${a.pct} %`], ['No conformes (inspeccionadas − aceptadas)', a.rechazadas || '0']]) : ''}`;
+        ${r.kind === 'LIB' && s.n === 3 ? kv([['Total inspeccionadas', a.inspeccionadas], ['Total aceptadas', a.aceptadas], ['% de aceptación', `${a.pct} %`],
+          ['No conformes (inspeccionadas − aceptadas)', a.rechazadas || '0']]) : ''}`;
     }).join('')}
     <table class="firmas"><tr><td>${esc(r.name)}<br><b>ELABORÓ</b></td><td><b>REVISÓ — GERENCIA</b></td></tr></table>
     ${fotos.length ? `<div class="bar">ANEXOS — FOTOS</div><div class="fotos">${fotos.map(([l, k]) => `<figure><img src="/api/files/${esc(k)}" alt="${esc(l)}"><figcaption>${esc(l)}</figcaption></figure>`).join('')}</div>` : ''}
@@ -1274,6 +1276,7 @@ const views = {
         </form>
       </div>`;
       const form = $('#qform'), estado = secs.find(s => s.n === 3)?.fields?.map(x => x.id) || [];
+      let loteTabla = null; // PL-FOR-29: lote cuyos modelos están en la tabla de cantidades (se rehace al cambiar de lote)
       // En vivo: diferencia por partida y aviso (REC); datos del lote y % de aceptación (LIB). El servidor lo recalcula al guardar.
       const live = () => {
         if (kind === 'REC') {
@@ -1292,10 +1295,24 @@ const views = {
           if (l && !selR.value) selR.value = l.remision || '';
           for (const o of selL.options) if (o.value) o.hidden = o.disabled = !!selR.value && remDe(o.value) !== selR.value;
           if (selL.selectedOptions[0]?.disabled) { selL.value = ''; l = null; }
+          // Cada remisión es un lote: al elegir la remisión su lote se elige solo (si hubiera dos recepciones con la misma remisión, se escoge).
+          const libres = [...selL.options].filter(o => o.value && !o.disabled);
+          if (!l && selR.value && libres.length === 1) { selL.value = libres[0].value; l = f.lotes.find(x => x.code === selL.value); }
           const spec = l && f.specs[l.client];
-          form.querySelector('[data-lote-info]').textContent = l ? `${l.client} · Remisión ${l.remision || '—'} · ${l.part} · quedan ${l.porLiberar} de ${l.qty} pza por liberar${l.entregadas ? ` (ya entregadas ${l.entregadas})` : ''} · ${l.rec}${spec ? ` · Especificación del cliente (criterio 7): ${spec}` : ''}`
-            : selR.value ? 'Elige el lote de esta remisión para ver cliente, no. de parte y folio REC.' : 'Elige la remisión y el lote para ver cliente, no. de parte y folio REC.';
-          const ins = Number(form.elements.inspeccionadas.value) || 0, acc = Number(form.elements.aceptadas.value) || 0;
+          form.querySelector('[data-lote-info]').textContent = l ? `${l.client} · Remisión ${l.remision || '—'} · ${l.code} · quedan ${l.porLiberar} de ${l.qty} pza por liberar${l.entregadas ? ` (ya entregadas ${l.entregadas})` : ''} · ${l.rec}${spec ? ` · Especificación del cliente (criterio 7): ${spec}` : ''}`
+            : selR.value ? 'Elige el lote de esta remisión para ver cliente, modelos y folio REC.' : 'Elige la remisión para ver su lote, cliente, modelos y folio REC.';
+          // Sección 3: un renglón por modelo del lote, ya con todo lo que falta liberar (se cambia si se libera solo una parte).
+          const tb = form.querySelector('[data-table="modelos"]');
+          if ((l?.code ?? '') !== loteTabla) {
+            loteTabla = l?.code ?? '';
+            const t = secs.find(s => s.table?.id === 'modelos').table, pend = l ? l.modelos.filter(m => m.porLiberar > 0) : [];
+            tb.innerHTML = pend.length ? pend.map(m => rowHtml(t, { parte: m.parte, inspeccionadas: String(m.porLiberar), aceptadas: String(m.porLiberar) })).join('')
+              : `<p class="text-body-sm text-on-surface-variant">${l ? 'A este lote ya no le quedan piezas por liberar.' : 'Elige la remisión: aquí aparecen sus modelos.'}</p>`;
+            tb.querySelectorAll('[data-row]').forEach(row => { const m = pend.find(x => x.parte === row.querySelector('[name$=".parte"]').value);
+              if (m) row.querySelector('[data-mod]').textContent = `Quedan ${m.porLiberar} de ${m.qty} por liberar de este modelo`; });
+          }
+          const suma = id => [...tb.querySelectorAll(`[name$=".${id}"]`)].reduce((t, x) => t + (Number(x.value) || 0), 0);
+          const ins = suma('inspeccionadas'), acc = suma('aceptadas');
           form.querySelector('[data-pct]').textContent = `% de aceptación: ${ins ? Math.round(acc / ins * 1000) / 10 : 0} % · No conformes: ${Math.max(0, ins - acc)}`;
           // Criterio NOK: se abren piezas no OK, ¿se corrigió? y qué se va a hacer (obligatorias). Si alguno no se corrigió, no se puede liberar.
           const sinCorregir = [];
@@ -1353,7 +1370,7 @@ const views = {
   qhecho(kind, r, edit) {
     const box = (cls, icon, html) => `<div class="rounded-xl p-4 flex items-start gap-3 ${cls}"><span class="material-symbols-outlined">${icon}</span><p class="text-body-md">${html}</p></div>`;
     const msg = kind === 'REC' ? (r.anomalia ? box('bg-tertiary-fixed text-on-tertiary-fixed', 'warning', 'Hay diferencia de conteo o algo en "No". Anótalo en la remisión antes de firmar y levanta el no conforme.') : '')
-        + `<p class="text-body-md">Lotes asignados: ${r.partidas.map(p => `<b>${esc(p.lote)}</b> (${esc(p.parte)}, ${esc(p.contada)} pza)`).join(', ')}</p>`
+        + `<p class="text-body-md">Lote POLAR de la remisión: <b>${esc(r.partidas[0]?.lote)}</b> · ${r.partidas.map(p => `${esc(p.parte)}: ${esc(p.contada)} pza`).join(', ')}</p>`
       : kind === 'LIB' ? (r.status === 'RETENIDO' ? box('bg-error-container text-on-error-container', 'block', `El lote ${esc(r.lote)} quedó <b>RETENIDO</b>. Levanta ahora el no conforme (PL-FOR-30).`)
         : `<p class="text-body-md">Lote <b>${esc(r.lote)}</b>: ${statusChip(r.status)} · aceptación ${esc(r.pct)} %</p>`
           + (r.retenidas ? box('bg-error-container text-on-error-container', 'block', `Liberación parcial: salieron <b>${esc(r.aceptadas)}</b> piezas y <b>${r.retenidas}</b> quedan <b>RETENIDAS</b>. Sepáralas, identifícalas y levanta ahora el no conforme (PL-FOR-30).`) : '')
