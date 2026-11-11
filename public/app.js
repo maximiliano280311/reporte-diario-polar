@@ -196,7 +196,7 @@ const sectionsHtml = (secs, pre, rows, extra = () => '') => secs.map(s => { cons
     ${extra(s, 'bottom')}
     ${(s.fields || []).filter(f => f.after).map(f => `<div class="grid grid-cols-2">${labeled(f, input(f, f.id, pre?.[f.id]))}</div>`).join('')}
   </section>`; }).join('');
-// Campo con cond (p. ej. el aviso de entrega incompleta): lleva data-cond y su asterisco; syncCond lo muestra y lo exige solo cuando aplica.
+// Campo con cond (p. ej. "¿A quién del cliente?" del aviso en la entrega): lleva data-cond y su asterisco; syncCond lo muestra y lo exige solo cuando aplica.
 const condField = (f, html) => f.cond ? labeled({ ...f, required: true }, html).replace(/^\s*<(\w+) /, `<$1 data-cond="${esc(f.cond)}" `) : labeled(f, html);
 const syncCond = (root, cond, on) => root.querySelectorAll(`[data-cond="${cond}"]`).forEach(box => {
   box.classList.toggle('hidden', !on);
@@ -350,7 +350,8 @@ function qDoc(r) {
         ${t ? `<table><thead><tr>${t.cols.map(c => `<th>${esc(c.label)}</th>`).join('')}</tr></thead><tbody>${rows.length
           ? rows.map(x => `<tr>${t.cols.map(c => `<td>${esc(x[c.id])}</td>`).join('')}</tr>`).join('') : `<tr><td colspan="${t.cols.length}" class="c">—</td></tr>`}</tbody></table>` : ''}
         ${r.kind === 'LIB' && s.n === 3 ? kv([['Total inspeccionadas', a.inspeccionadas], ['Total aceptadas', a.aceptadas], ['% de aceptación', `${a.pct} %`],
-          ['No conformes (inspeccionadas − aceptadas)', a.rechazadas || '0']]) : ''}`;
+          ['No conformes (inspeccionadas − aceptadas)', a.rechazadas || '0']]) : ''}
+        ${r.kind === 'LIB' && s.n === 5 && a.aviso_contacto ? kv([['Aviso previo al cliente (registro anterior)', `${a.aviso_contacto} · ${dmy(a.aviso_fecha)} · ${a.aviso_medio}`]]) : ''}`;
     }).join('')}
     <table class="firmas"><tr><td>${esc(r.name)}<br><b>ELABORÓ</b></td><td><b>REVISÓ — GERENCIA</b></td></tr></table>
     ${fotos.length ? `<div class="bar">ANEXOS — FOTOS</div><div class="fotos">${fotos.map(([l, k]) => `<figure><img src="/api/files/${esc(k)}" alt="${esc(l)}"><figcaption>${esc(l)}</figcaption></figure>`).join('')}</div>` : ''}
@@ -1268,9 +1269,7 @@ const views = {
           ${sectionsHtml(secs, pre, t => t.fixed ? tableRows(t, pre) : pre[t.id] || (t.id === 'partidas' ? [{}] : []), (s, at) => at !== 'bottom' ? ''
             : kind === 'LIB' && s.n === 1 ? '<p data-lote-info class="p-3 rounded-xl bg-surface-container text-label-md"></p>'
             : kind === 'LIB' && s.n === 3 ? '<p data-pct class="p-3 rounded-xl bg-surface-container-high/60 text-label-lg text-primary"></p>'
-            : kind === 'LIB' && s.n === 4 ? '<p data-dispo class="hidden p-3 rounded-xl bg-error-container text-on-error-container text-label-md"></p>'
-            : kind === 'LIB' && s.n === 5 ? '<p data-incompleta class="hidden p-3 rounded-xl bg-tertiary-fixed text-on-tertiary-fixed text-label-md"></p>'
-            : kind === 'REC' && s.n === 3 ? '<p data-anomalia class="hidden p-3 rounded-xl bg-tertiary-fixed text-on-tertiary-fixed text-label-md">⚠ Hay diferencia de conteo o algo en "No": anótalo en la remisión antes de firmar. Al guardar podrás levantar el no conforme.</p>' : '')}
+            : kind === 'LIB' && s.n === 4 ? '<p data-dispo class="hidden p-3 rounded-xl bg-error-container text-on-error-container text-label-md"></p>'            : kind === 'REC' && s.n === 3 ? '<p data-anomalia class="hidden p-3 rounded-xl bg-tertiary-fixed text-on-tertiary-fixed text-label-md">⚠ Hay diferencia de conteo o algo en "No": anótalo en la remisión antes de firmar. Al guardar podrás levantar el no conforme.</p>' : '')}
           <p id="err" class="text-sm text-error hidden" role="alert"></p>
           <button class="btn btn-primary w-full"><span class="material-symbols-outlined">save</span>${edit ? 'Guardar cambios' : 'Guardar ' + KIND[kind][1].toLowerCase()}</button>
         </form>
@@ -1331,13 +1330,8 @@ const views = {
           aviso.classList.toggle('hidden', !sinCorregir.length);
           aviso.textContent = sinCorregir.length ? `NOK sin corregir (${sinCorregir.join(', ')}): no se puede liberar todo. LIBERADO PARCIAL: salen las aceptadas y las no conformes quedan RETENIDAS ` +
             'con su no conforme (PL-FOR-30). CON DESVIACIÓN: si el cliente las acepta como están. O RETENIDO / RETRABAJO de todo lo inspeccionado.' : '';
-          // Entrega incompleta: si con esta entrega quedan piezas de la remisión sin entregar, pide el aviso previo al cliente.
-          const faltan = l ? (f.pendRec[l.rec] || 0) - acc : 0, entregaLlena = ['entrega_fecha', 'remision_polar', 'recibio'].some(k => form.elements[k].value);
-          const incompleta = faltan > 0 && entregaLlena && dispo.value.startsWith('LIBERADO');
-          syncCond(form, 'incompleta', incompleta);
-          const inc = form.querySelector('[data-incompleta]');
-          inc.classList.toggle('hidden', !incompleta);
-          inc.textContent = incompleta ? `Entrega incompleta: quedan ${faltan} piezas de la remisión ${l.remision || ''} sin entregar. Anota a quién del cliente se le avisó antes, la fecha y el medio.` : '';
+          // Aviso al cliente (opcional): "¿A quién?" solo aparece (y se pide) si hay que darle aviso.
+          syncCond(form, 'aviso', form.elements.aviso_requiere.value === 'Sí');
         }
       };
       form.onclick = e => {
@@ -1396,7 +1390,7 @@ const views = {
   // Registro de Calidad: documento imprimible + siguientes pasos (entregar, levantar o cerrar el no conforme).
   async q(folio) {
     const r = await api('/api/calidad/registro?folio=' + encodeURIComponent(decodeURIComponent(folio)));
-    const entrega = r.kind === 'LIB' && r.status === 'LIBERADO' ? r.sections.find(s => s.n === 5).fields.map(f => ({ ...f, required: f.type !== 'photos' && !f.cond })) : null;
+    const entrega = r.kind === 'LIB' && r.status === 'LIBERADO' ? r.sections.find(s => s.n === 5).fields.map(f => ({ ...f, required: ['entrega_fecha', 'remision_polar', 'recibio'].includes(f.id) })) : null;
     const needNC = !r.ligados.length && ((r.kind === 'REC' && r.status === 'CON OBSERVACIONES') || (r.kind === 'LIB' && (r.status === 'RETENIDO' || r.data.disposicion === 'LIBERADO PARCIAL')));
     $('#app').innerHTML = `
     <div class="no-print flex flex-wrap items-center justify-between gap-2 mb-4">
@@ -1413,15 +1407,15 @@ const views = {
       ${r.ligados.length ? `<p>No conformes ligados: ${r.ligados.map(n => `<a href="#/q/${esc(n.folio)}" class="text-primary font-semibold">${esc(n.folio)}</a> ${statusChip(n.status)}`).join(' ')}</p>` : ''}</div>` : ''}
     ${entrega ? `<form id="entrega" class="no-print card p-4 mb-4 flex flex-col gap-3">
       <h2 class="font-semibold flex items-center gap-2"><span class="material-symbols-outlined text-primary">local_shipping</span>Registrar entrega del lote ${esc(r.data.lote)}</h2>
-      ${r.faltan > 0 ? `<p class="p-3 rounded-xl bg-tertiary-fixed text-on-tertiary-fixed text-label-md">Entrega incompleta: con esta entrega quedan ${r.faltan} piezas de la remisión ${esc(r.data.remision || '')} sin entregar. Anota a quién del cliente se le avisó antes, la fecha y el medio.</p>` : ''}
       <div class="grid grid-cols-2 lg:grid-cols-4 gap-3">${entrega.map(f => condField(f, input(f, f.id, f.type === 'date' ? ymd() : ''))).join('')}</div>
       <button class="btn btn-primary"><span class="material-symbols-outlined">save</span>Guardar entrega</button></form>` : ''}
     ${r.kind === 'REC' && r.avance?.total ? `<div class="no-print mb-3">${pendientesHtml([r.avance], false)}</div>` : ''}
     ${qDoc(r)}`;
     const form = $('#entrega');
     if (!form) return;
-    syncCond(form, 'incompleta', r.faltan > 0);
-    form.onchange = e => handleUpload(e, () => {});
+    const aviso = () => syncCond(form, 'aviso', form.elements.aviso_requiere?.value === 'Sí'); // "¿A quién?" solo si hay que avisar
+    aviso();
+    form.onchange = e => { aviso(); handleUpload(e, () => {}); };
     form.onclick = e => { const d = e.target.closest('[data-del-photo]'); if (d) d.closest('[data-photo]').remove(); };
     form.onsubmit = async e => {
       e.preventDefault();

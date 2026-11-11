@@ -113,13 +113,12 @@ const NC_BAJA = NC_DISPOS.slice(2); // al cerrar el NC esas piezas ya no regresa
 const NC_TIPOS = ['Proceso incompleto', 'Daño por temperatura', 'Daño mecánico', 'Residuo químico', 'Faltante / pérdida', 'Pieza mezclada', 'Otro'];
 const ESTADO_REC = [['empaque', 'Empaque OK'], ['sin_danos', 'Piezas sin golpes / óxido'], ['identificacion', 'Identificación legible'],
   ['cantidad_ok', 'Cantidad coincide'], ['fotos_ok', 'Fotos tomadas'], ['separado', 'Material separado']];
-// cond 'incompleta': solo se piden si con esta entrega quedan piezas de la remisión sin entregar (aviso previo al cliente, ISO 9001 8.2).
-const AVISO = ['aviso_contacto', 'aviso_fecha', 'aviso_medio'];
+// Aviso al cliente: opcional; si hay que avisarle, a quién (cond 'aviso': la app pide "¿A quién?" solo con "Sí"). Pedido del 2026-11-11:
+// sustituye al aviso obligatorio de entrega incompleta (los registros de antes conservan aviso_contacto / aviso_fecha / aviso_medio).
 const ENTREGA = [{ id: 'entrega_fecha', label: 'Fecha de entrega', type: 'date' }, { id: 'remision_polar', label: 'Remisión POLAR' },
   { id: 'recibio', label: 'Recibió (cliente)' },
-  { id: 'aviso_contacto', label: 'Entrega incompleta: ¿a quién del cliente se le avisó antes?', cond: 'incompleta', wide: true },
-  { id: 'aviso_fecha', label: 'Fecha del aviso', type: 'date', cond: 'incompleta' },
-  { id: 'aviso_medio', label: 'Medio del aviso', type: 'select', options: ['Llamada', 'Correo', 'WhatsApp', 'En persona'], cond: 'incompleta' },
+  { id: 'aviso_requiere', label: '¿Se le tiene que dar aviso al cliente? (opcional)', type: 'select', options: SN },
+  { id: 'aviso_quien', label: '¿A quién del cliente?', cond: 'aviso', wide: true },
   { id: 'foto_remision', label: 'Foto de la remisión firmada', type: 'photos', wide: true }];
 const QFORMS = {
   REC: { code: 'PL-FOR-28', title: 'Recepción de material del cliente y trazabilidad', sections: [
@@ -352,16 +351,15 @@ const pendLabel = m => `${m.equipo || '(sin equipo)'} — ${m.falla || ''}`.slic
 const lunes = s => { const d = new Date(s + 'T12:00:00Z'); d.setUTCDate(d.getUTCDate() - (d.getUTCDay() + 6) % 7); return d.toISOString().slice(0, 10); };
 
 // Entrega de un lote: va completa (fecha, remisión POLAR, quién recibió) o vacía, y solo si el lote se libera.
-// faltan: piezas de la remisión que quedan sin entregar después de esta entrega. Entregar incompleto se permite con aviso previo al cliente.
-function entregaDe(a, libera, faltan = 0) {
+// Se puede entregar incompleto (quedan piezas de la remisión); el aviso al cliente es opcional: con "Sí" hay que decir a quién.
+function entregaDe(a, libera) {
   const err = m => Object.assign(new Error(m), { code: 400 });
   const entrega = !!(a.entrega_fecha || a.remision_polar || a.recibio || a.foto_remision?.length);
-  if (!entrega || faltan <= 0) for (const k of AVISO) a[k] = '';
-  if (!entrega) return false;
+  if (!entrega) { a.aviso_requiere = ''; a.aviso_quien = ''; return false; }
   if (!libera) throw err('Solo se puede registrar la entrega de un lote LIBERADO');
   if (!a.entrega_fecha || !a.remision_polar || !a.recibio) throw err('Para la entrega anota fecha, remisión POLAR y quién recibió');
-  if (faltan > 0 && AVISO.some(k => !a[k])) throw err(`Entrega incompleta: quedan ${faltan} piezas de la remisión sin entregar. Anota a quién del cliente se le avisó, la fecha y el medio del aviso`);
-  if (faltan > 0 && a.aviso_fecha > a.entrega_fecha) throw err('El aviso al cliente debe ser antes o el mismo día de la entrega');
+  if (a.aviso_requiere !== 'Sí') a.aviso_quien = '';
+  else if (!a.aviso_quien) throw err('Anota a quién del cliente hay que darle aviso');
   return true;
 }
 
@@ -1280,9 +1278,7 @@ export function createApp({ db, files, env = {} }) {
           porLiberar: porLiberarDe(qty, av[code]), entregadas: (av[code] || AV0).entregadas, retenidas: (av[code] || AV0).retenidas,
           // Modelos del lote con lo que falta liberar de cada uno (la app arma con ellos la tabla de cantidades del PL-FOR-29).
           modelos: (mods[code] || [{ parte: part, qty }]).map(m => ({ ...m, porLiberar: Math.max(0, porLiberarDe(m.qty, (av[code] || AV0).modelos[m.parte])) })) }));
-      // Piezas por entregar de cada recepción: la app avisa si la entrega deja la remisión incompleta (pide el aviso al cliente).
-      const pendRec = Object.fromEntries((await recepcionesAbiertas(plant)).map(r => [r.folio, r.total]));
-      return json(200, { ...await qform(kind, plant), plant, lotes, pendRec, specs: Object.fromEntries(cal.clientes.filter(c => c.plant === plant).map(c => [c.name, c.spec])) });
+      return json(200, { ...await qform(kind, plant), plant, lotes, specs: Object.fromEntries(cal.clientes.filter(c => c.plant === plant).map(c => [c.name, c.spec])) });
     },
 
     // Un registro con sus lotes (para verlo / imprimirlo).
@@ -1295,9 +1291,7 @@ export function createApp({ db, files, env = {} }) {
       const ligados = (await db.all("SELECT folio, kind, status, data FROM qrecords WHERE kind = 'NC' AND plant = ?", r.plant))
         .filter(n => JSON.parse(n.data).origen === r.folio).map(({ folio, status }) => ({ folio, status }));
       const avance = r.kind === 'REC' ? (await recepcionesAbiertas(r.plant)).find(x => x.folio === r.folio) || { total: 0, partidas: [] } : null;
-      // LIB por entregar: piezas que quedarían sin entregar de su remisión (si > 0 la entrega es incompleta y pide el aviso al cliente).
-      const faltan = r.kind === 'LIB' && r.status === 'LIBERADO' ? ((await recepcionesAbiertas(r.plant)).find(x => x.folio === r.data.rec)?.total || 0) - num(r.data.aceptadas) : 0;
-      return json(200, { ...r, lotes, ligados, avance, faltan, ...QFORMS[r.kind] }); // + code, title y sections (para imprimirlo)
+      return json(200, { ...r, lotes, ligados, avance, ...QFORMS[r.kind] }); // + code, title y sections (para imprimirlo)
     },
 
     // PL-FOR-28: toda la remisión es UN lote POLAR EN PLANTA con todos sus modelos (partidas); suma al saldo de la sección 7 de ese día.
@@ -1371,8 +1365,7 @@ export function createApp({ db, files, env = {} }) {
         if (noConf) throw httpError(400, 'Con desviación el cliente acepta todas las inspeccionadas: si hay piezas que no se aceptan usa LIBERADO PARCIAL');
       }
       // Entrega: si con ella quedan piezas de la remisión sin entregar (incluye las retenidas), pide el aviso previo al cliente.
-      const pendRec = libera ? (await recepcionesAbiertas(plant)).find(x => x.folio === lot.rec)?.total || 0 : 0;
-      const entrega = entregaDe(a, libera, pendRec - acc);
+      const entrega = entregaDe(a, libera);
       Object.assign(a, { cliente: lot.client, parte: lot.part, rec: lot.rec, rechazadas: String(noConf), pct: insp ? String(Math.round(acc / insp * 1000) / 10) : '0' });
       const status = disp.startsWith('RETENIDO') ? 'RETENIDO' : disp === 'RETRABAJO INTERNO' ? 'RETRABAJO' : entrega ? 'ENTREGADO' : 'LIBERADO';
       const folio = await nextFolio('LIB');
@@ -1389,8 +1382,7 @@ export function createApp({ db, files, env = {} }) {
       const b = await body(req), r = await getRecord(b.folio, user), lot = r.kind === 'LIB' && await db.get('SELECT * FROM lots WHERE code = ?', r.data.lote);
       if (r.status !== 'LIBERADO' || !lot || lot.status === 'RETENIDO') throw httpError(400, 'Solo se puede entregar una liberación LIBERADO');
       const e = clean(b.answers || {}, [{ n: 5, title: 'Entrega', fields: ENTREGA }]);
-      const pendRec = (await recepcionesAbiertas(r.plant)).find(x => x.folio === r.data.rec)?.total || 0; // incluye las de esta liberación
-      if (!entregaDe(e, true, pendRec - num(r.data.aceptadas))) throw httpError(400, 'Para la entrega anota fecha, remisión POLAR y quién recibió');
+      if (!entregaDe(e, true)) throw httpError(400, 'Para la entrega anota fecha, remisión POLAR y quién recibió');
       await db.run("UPDATE qrecords SET status = 'ENTREGADO', data = ? WHERE folio = ?", JSON.stringify({ ...r.data, ...e }), r.folio);
       await db.run('UPDATE lots SET delivered = ? WHERE code = ?', e.entrega_fecha, lot.code);
       await estadoLote(lot.code, r.plant); // ENTREGADO solo cuando ya se entregó todo el lote

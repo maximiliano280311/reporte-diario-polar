@@ -143,9 +143,10 @@ Especificación: `Modificaciones App Polar/MOD_APP_POLAR_SGC_ISO9001.md` (pedido
     solo si ya no le queda otra cosa que las retenidas (`estadoLote`). Alerta si un parcial no tiene su NC.
   - **CON DESVIACIÓN**: concesión del cliente (quién autorizó); se aceptan todas las inspeccionadas.
   - **RETENIDO / NO CONFORME**: lote RETENIDO y pide NC. **RETRABAJO INTERNO**: se reprocesa y se vuelve a inspeccionar (sin NC).
-- **Entrega incompleta** (POLAR sí entrega lotes incompletos con aviso previo): si con la entrega quedan piezas de la recepción/remisión sin
-  entregar (incluye las retenidas), se exigen `aviso_contacto`, `aviso_fecha` (≤ fecha de entrega) y `aviso_medio` (`entregaDe`, campos
-  `cond: 'incompleta'` que la app muestra solo entonces). No se entrega sin LIBERADO.
+- **Entrega** (sección 5): POLAR puede entregar lotes incompletos. **Aviso al cliente opcional** (pedido del 2026-11-11, quitó el aviso
+  obligatorio de entrega incompleta): "¿Se le tiene que dar aviso al cliente?" (`aviso_requiere`) y, con "Sí", "¿A quién?" (`aviso_quien`,
+  `cond: 'aviso'`; `entregaDe` lo exige). Los registros de antes conservan `aviso_contacto` / `aviso_fecha` / `aviso_medio` y se imprimen.
+  No se entrega sin LIBERADO.
 - NC abierto (que no sea de un parcial) retiene sus lotes; al cerrarlo (con fecha) vuelven a EN PLANTA (`syncLots`). 8D sugerido: lo detectó
   el cliente, >1 lote, daño con costo, o mismo cliente + tipo en 90 días.
 - Alertas dentro de la app (`alerts`, solo gerencia/admin, insignia en el menú "Calidad"): nuevo NC; además se calculan: lote > 7 días

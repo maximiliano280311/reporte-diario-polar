@@ -339,12 +339,11 @@ const recP = (await ok('POST', '/api/calidad/rec', { answers: { fecha: hoy, hora
 const loteP = recP.partidas[0].lote, libP = a => call('POST', '/api/calidad/lib', { answers: { fecha: hoy, proceso: 'Lavado', criterios: criterios(), disposicion: 'LIBERADO', lote: loteP, ...a } }, beto2);
 const abierta = async () => (await ok('GET', '/api/calidad', null, beto2)).data.abiertas.find(x => x.folio === recP.folio);
 assert.deepEqual([(await abierta()).total, (await abierta()).partidas[0].faltanLlegar], [10, 2]); // faltan 2 por llegar según remisión
-// Entrega incompleta (quedan piezas de la remisión): se permite solo con el aviso previo al cliente.
-const entregaP1 = { inspeccionadas: '6', aceptadas: '6', entrega_fecha: hoy, remision_polar: 'POL-P1', recibio: 'Juan' }, aviso = { aviso_contacto: 'Juan (KH)', aviso_fecha: hoy, aviso_medio: 'Llamada' };
-assert.equal((await libP(entregaP1)).status, 400); // sin aviso
-assert.equal((await libP({ ...entregaP1, ...aviso, aviso_fecha: '2099-01-01' })).status, 400); // el aviso no puede ser después de la entrega
+// Aviso al cliente en la entrega: opcional; si hay que darle aviso, a quién.
+const entregaP1 = { inspeccionadas: '6', aceptadas: '6', entrega_fecha: hoy, remision_polar: 'POL-P1', recibio: 'Juan' }, aviso = { aviso_requiere: 'Sí', aviso_quien: 'Juan (KH)' };
+assert.equal((await libP({ ...entregaP1, aviso_requiere: 'Sí' })).status, 400); // con "Sí" pide a quién
 const lp1 = (await libP({ ...entregaP1, ...aviso })).data; // entrega parcial
-assert.deepEqual([lp1.status, lp1.estadoLote, lp1.quedan, lp1.aviso_contacto], ['ENTREGADO', 'EN PLANTA', 4, 'Juan (KH)']);
+assert.deepEqual([lp1.status, lp1.estadoLote, lp1.quedan, lp1.aviso_requiere, lp1.aviso_quien], ['ENTREGADO', 'EN PLANTA', 4, 'Sí', 'Juan (KH)']);
 assert.equal((await abierta()).total, 4);
 assert.equal((await libP({ inspeccionadas: '5', aceptadas: '5' })).status, 400); // solo quedan 4
 // NOK: piezas, acción y "¿se corrigió?" obligatorios; sin corregir no libera; corregido sí.
@@ -372,7 +371,6 @@ assert.equal((await libR({ criterios: criterios() })).status, 400); // parcial s
 assert.equal((await libR({ aceptadas: '9' })).status, 400); // 1 no conforme < 2 piezas NOK
 assert.equal((await libR({ aceptadas: '0' })).status, 400); // nada que liberar
 assert.equal((await libR({ disposicion: 'LIBERADO CON DESVIACIÓN', autorizo_cliente: 'Ing. Pérez' })).status, 400); // con desviación se aceptan todas
-assert.equal((await libR(entregaR)).status, 400); // entrega incompleta (quedan las retenidas) sin aviso
 const lr1r = await libR({ ...entregaR, ...aviso });
 assert.equal(lr1r.status, 200, JSON.stringify(lr1r.data));
 const lr1 = lr1r.data;
@@ -395,7 +393,7 @@ assert.deepEqual([calR.lotes.find(l => l.code === loteR).status, abR().partidas[
 // Las retrabajadas se vuelven a inspeccionar: un NOK corregido y vuelto a revisar sí se libera; la entrega completa no pide aviso.
 const lr2 = (await ok('POST', '/api/calidad/lib', { answers: { fecha: hoy, proceso: 'Pirólisis', lote: loteR, inspeccionadas: '2', aceptadas: '2',
   criterios: criterios(4, { piezas_nok: '1', corregido: 'Sí' }), disposicion: 'LIBERADO', ...entregaR, remision_polar: 'POL-R2' } }, beto2)).data;
-assert.deepEqual([lr2.status, lr2.estadoLote, lr2.aviso_contacto], ['ENTREGADO', 'ENTREGADO', '']);
+assert.deepEqual([lr2.status, lr2.estadoLote, lr2.aviso_requiere, lr2.aviso_quien], ['ENTREGADO', 'ENTREGADO', '', '']);
 calR = (await ok('GET', '/api/calidad', null, beto2)).data;
 assert.equal(abR(), undefined); // la remisión ya se entregó completa
 // Si el NC de las retenidas se cierra con desecho, salen como rechazadas y la remisión se cierra sin ellas.
@@ -423,9 +421,9 @@ assert.equal((await libM({ inspeccionadas: '10', aceptadas: '10' })).status, 400
 assert.equal((await libM({ modelos: [{ parte: 'SUB RACK', inspeccionadas: '7', aceptadas: '7' }] })).status, 400); // de ese modelo solo quedan 6
 assert.equal((await libM({ modelos: [{ parte: 'OTRO', inspeccionadas: '1', aceptadas: '1' }] })).status, 400); // no es del lote
 const lm1r = await libM({ modelos: [{ parte: 'SUB RACK', inspeccionadas: '6', aceptadas: '6' }, { parte: 'ESPIGA', inspeccionadas: '0', aceptadas: '0' }],
-  entrega_fecha: hoy, remision_polar: 'POL-M1', recibio: 'Juan', ...aviso });
+  entrega_fecha: hoy, remision_polar: 'POL-M1', recibio: 'Juan', aviso_requiere: 'No', aviso_quien: 'se ignora' }); // incompleta y sin aviso: se permite
 assert.equal(lm1r.status, 200, JSON.stringify(lm1r.data));
-assert.deepEqual([lm1r.data.inspeccionadas, lm1r.data.aceptadas, lm1r.data.modelos.length, lm1r.data.estadoLote, lm1r.data.quedan], ['6', '6', 1, 'EN PLANTA', 4]);
+assert.deepEqual([lm1r.data.inspeccionadas, lm1r.data.aceptadas, lm1r.data.modelos.length, lm1r.data.estadoLote, lm1r.data.quedan, lm1r.data.aviso_quien], ['6', '6', 1, 'EN PLANTA', 4, '']);
 lM = (await ok('GET', '/api/calidad/form?tipo=LIB', null, beto2)).data.lotes.find(l => l.code === loteM);
 assert.deepEqual(lM.modelos.map(m => m.porLiberar), [0, 4]);
 const movM = (await ok('GET', '/api/defaults', null, beto2)).data.mov; // sección 7: lo entregado se cuenta en su modelo
