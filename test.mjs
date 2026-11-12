@@ -553,6 +553,20 @@ const zoe = await login('zoe@polar.test'), rep0 = { presentes: '3', hubo_reporte
 assert.equal((await call('POST', '/api/reports', { answers: { ...rep0, x_visita: 'Sí' } }, zoe)).status, 400); // con "Sí" pide ¿Quién?
 const rz = (await ok('POST', '/api/reports', { answers: { ...rep0, x_visita: 'No', x_quien: 'se ignora' } }, zoe)).data;
 assert.deepEqual([rz.answers.turno, rz.answers.x_quien, rz.answers.vehiculos[0].recorrido], [undefined, '', '10']);
+// Arreglo de una vez (2026-11-12): las preguntas de "Pruebas de cliente" (sección 8) pasan a ser subpreguntas de "Sí".
+sqlite.prepare("DELETE FROM settings WHERE key = 'mig:pruebas_cliente'").run();
+sqlite.prepare("INSERT INTO settings(key, value) VALUES ('form', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(JSON.stringify({ extra: { 8: [
+  { id: 'x_pruebas_de_cliente', label: 'Pruebas de cliente', type: 'sino', required: true }, { id: 'x_b3c28b35', label: 'Nombre del cliente', type: 'text', required: true },
+  { id: 'x_c93db93e', label: 'Comentarios', type: 'text' }] } }));
+const repPc = { turno: 'Matutino', presentes: '3', hubo_reportes: 'No', manana: 'Nada', domingo_hubo: 'No' }; // sin vehículos (Silao no tiene camiones)
+const subsPruebas = async () => (await ok('GET', '/api/questions')).data.find(s => s.n === 8).fields.filter(f => f.id.startsWith('x_')).map(f => [f.id, f.padre || '', f.cuando || '']);
+assert.deepEqual(await subsPruebas(), [['x_pruebas_de_cliente', '', ''], ['x_b3c28b35', 'x_pruebas_de_cliente', 'Sí'], ['x_c93db93e', 'x_pruebas_de_cliente', 'Sí']]);
+assert.equal((await call('POST', '/api/reports/edit', { id: rz.id, answers: { ...repPc, x_pruebas_de_cliente: 'Sí' } }, zoe)).status, 400); // con "Sí" pide el nombre
+const rpc = (await ok('POST', '/api/reports/edit', { id: rz.id, answers: { ...repPc, x_pruebas_de_cliente: 'No', x_b3c28b35: 'se ignora' } }, zoe)).data; // con "No" se guarda
+assert.deepEqual([rpc.answers.x_pruebas_de_cliente, rpc.answers.x_b3c28b35], ['No', '']);
+// Ya no se repite: si el admin las vuelve a dejar sueltas, se respeta.
+await ok('POST', '/api/form-config', { config: { extra: { 8: [{ id: 'x_pruebas_de_cliente', label: 'Pruebas de cliente', type: 'sino' }, { id: 'x_b3c28b35', label: 'Nombre del cliente', type: 'text' }] } } }, admin);
+assert.deepEqual(await subsPruebas(), [['x_pruebas_de_cliente', '', ''], ['x_b3c28b35', '', '']]);
 await ok('POST', '/api/form-config', { config: {} }, admin);
 
 // Reporte del lunes: pide lo que pasó el domingo y el personal le comunicó al encargado; los demás días esa sección no existe.

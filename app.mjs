@@ -566,7 +566,21 @@ export function createApp({ db, files, env = {} }) {
       }
     return out;
   }
-  const getConfig = async () => cleanConfig(JSON.parse((await db.get("SELECT value FROM settings WHERE key = 'form'"))?.value || '{}'));
+  // Arreglo de una sola vez (2026-11-12): en la sección 8 las preguntas de "Pruebas de cliente" se dieron de alta sueltas y obligatorias,
+  // así que con "No" no dejaban guardar el reporte. Se vuelven subpreguntas de "Sí" (igual que en la pestaña Formulario) y se guarda;
+  // la marca mig:pruebas_cliente evita repetirlo, así que lo que el admin cambie después se respeta.
+  const PRUEBAS = 'x_pruebas_de_cliente', PRUEBAS_SUBS = ['x_b3c28b35', 'x_a3742cfe', 'x_fda43151', 'x_7d21cd27', 'x_26329290', 'x_c93db93e'];
+  async function migrarPruebas(c) {
+    if (await db.get("SELECT 1 FROM settings WHERE key = 'mig:pruebas_cliente'")) return c;
+    const ex = c.extra[8] || [];
+    if (ex.some(x => x.id === PRUEBAS)) {
+      for (const x of ex) if (PRUEBAS_SUBS.includes(x.id) && !x.padre) Object.assign(x, { padre: PRUEBAS, cuando: 'Sí' });
+      await db.run("INSERT INTO settings(key, value) VALUES ('form', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value", JSON.stringify(c));
+    }
+    await db.run("INSERT INTO settings(key, value) VALUES ('mig:pruebas_cliente', '1') ON CONFLICT(key) DO NOTHING");
+    return cleanConfig(c);
+  }
+  const getConfig = async () => migrarPruebas(cleanConfig(JSON.parse((await db.get("SELECT value FROM settings WHERE key = 'form'"))?.value || '{}')));
   const currentForm = async () => formFor(await getConfig());
 
   async function ai(system, user, asJson, ms = 90_000) {

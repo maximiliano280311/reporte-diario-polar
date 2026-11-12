@@ -186,6 +186,10 @@ Lo que se fue decidiendo en las sesiones de trabajo; aplica a cualquier colabora
 - **IA**: modelo `claude-haiku-5.5` (en `wrangler.jsonc`). Si los reportes salen "Sin evaluar" seguido, regresar a `deepseek-v4-flash`.
 - **Rama `formulario-google-forms`**: editor del Formulario estilo Google Forms, terminado pero **sin publicar** a petición del dueño. No juntarla con
   `main` hasta que él lo pida.
+- **Pruebas de cliente (sección 8)**: las preguntas propias "Nombre del cliente", "Fecha de recepción", "Fecha de entrega", "Tipo de proceso",
+  "Responsable" y "Comentarios" son subpreguntas de "Pruebas de cliente = Sí" (con "No" no se piden y el reporte se guarda). Se corrigió el
+  2026-11-12 con un arreglo de una sola vez en `getConfig` (`migrarPruebas`, marca `mig:pruebas_cliente` en settings); lo que el admin
+  cambie después en Formulario se respeta. Al agregar preguntas que dependen de otra, hacerlas subpreguntas en Formulario.
 - **Periodo de pago** (configurado en Nómina → Empleados → Parámetros): Querétaro paga la semana en curso (lun–dom), Silao la última semana completa
   (lun–dom); el mismo sábado se pagan periodos desfasados una semana. No cambiar esos parámetros sin avisar: mueven las incidencias viejas sin periodo guardado.
 
