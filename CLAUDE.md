@@ -95,7 +95,9 @@ App web para **Retrabajos Industriales y Limpiezas Especializadas Polar**: los e
   (`facTE`, el factor de Parámetros no les aplica; la tarifa propia sí) y **no se les capturan vacaciones ni permiso con goce** (`NO_POR_DIA`
   en `app.mjs` y `public/app.js`; `sinLft` en el servidor al capturar o al cambiar tipo/empleado; Capturar los deja en gris). Ya no salían en
   Vacaciones ni en bono de puntualidad. Se decidió conservar el expediente y los avisos de menores.
-  **Incapacidad de varios días** (pedido del 2026-11-14): en Capturar se pone el primer día y los días que dio el IMSS (enteros, 1-90) y el
+  **Incapacidad de varios días** (pedido del 2026-11-14): en Capturar se elige **del día al día** (campos Del / Al y un calendario del mes,
+  `incCal`: se toca el primer día y luego el último; azul fuerte = se descuenta, claro = no le tocaba trabajar; estado `N.cap.hasta`,
+  `calMes`, `pick`, `syncIncap`). La app manda a la API el primer día y cuántos días son (enteros, 1-90; la API y el asistente IA siguen así) y el
   servidor guarda **una incidencia por cada día que le tocaba trabajar** (`diasIncap` en `app.mjs` y `public/app.js`), con cantidad 1,
   `data.incap = { desde, dias }` y su propio periodo de pago. Sueldo semanal: todos los días menos el domingo (descanso; con el ÷6 una semana
   completa descuenta la semana y no más). Por día (fin de semana): solo sábado y domingo. Si no queda ningún día, error. Editar una sigue

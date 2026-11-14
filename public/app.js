@@ -1551,6 +1551,35 @@ const facTE = e => e.pago === 'dia' ? 1 : P().fac;
 const INCAP_MAX = 90;
 const diasIncap = (e, desde, n) => Array.from({ length: Math.max(0, n) }, (_, k) => addD(desde, k))
   .filter(f => { const d = pdate(f).getDay(); return e.pago === 'dia' ? d === 0 || d === 6 : d !== 0; });
+// Capturar incapacidad: se elige del día (N.cap.fecha) al día (N.cap.hasta); la cantidad de días sale sola. calMes = mes que se ve
+// en el calendario; pick = ya se tocó el primer día y falta el último.
+function syncIncap() {
+  const c = N.cap;
+  if (!c.hasta || c.hasta < c.fecha) c.hasta = c.fecha;
+  if (!c.calMes) c.calMes = c.fecha.slice(0, 7);
+  c.cant = String(dBetween(c.fecha, c.hasta) + 1);
+}
+// Calendario del mes (lunes primero): azul fuerte = días que se descuentan; azul claro = dentro de la incapacidad pero no le tocaba
+// trabajar (domingo de descanso; entre semana para los de pago por día).
+function incCal() {
+  const c = N.cap, [y, m] = c.calMes.split('-').map(Number), lead = (new Date(y, m - 1, 1).getDay() + 6) % 7, dim = new Date(y, m, 0).getDate();
+  const ex = [...c.emps].map(empById).filter(Boolean), cuenta = f => (ex.length ? ex : [{}]).some(e => diasIncap(e, f, 1).length);
+  const dia = f => {
+    const on = f >= c.fecha && f <= c.hasta, edge = f === c.fecha || f === c.hasta;
+    const cls = on ? (cuenta(f) ? 'bg-primary text-white' : 'bg-primary/15 text-primary') : 'hover:bg-surface-container-low text-on-surface';
+    return `<button type="button" data-act="incdia" data-d="${f}" aria-pressed="${on}" aria-label="${esc(fdate(f))}" class="h-10 rounded-lg text-body-md tabular-nums ${cls} ${edge ? 'font-bold ring-2 ring-primary ring-offset-1' : ''} ${f === ymd() && !on ? 'border-[1.5px] border-primary' : ''}">${+f.slice(8)}</button>`;
+  };
+  const dias = dBetween(c.fecha, c.hasta) + 1;
+  return `<div class="rounded-xl border-[1.5px] border-[#cbd5e1] p-3 max-w-sm">
+    <div class="flex items-center justify-between mb-2">
+      <button type="button" data-act="incmes" data-d="-1" class="p-1 rounded-lg hover:bg-surface-container-low" aria-label="Mes anterior"><span class="material-symbols-outlined">chevron_left</span></button>
+      <b class="text-label-lg capitalize">${MESL[m - 1]} ${y}</b>
+      <button type="button" data-act="incmes" data-d="1" class="p-1 rounded-lg hover:bg-surface-container-low" aria-label="Mes siguiente"><span class="material-symbols-outlined">chevron_right</span></button></div>
+    <div class="grid grid-cols-7 gap-1 text-center text-[11px] font-semibold text-on-surface-variant mb-1">${['L', 'M', 'M', 'J', 'V', 'S', 'D'].map(d => `<span>${d}</span>`).join('')}</div>
+    <div class="grid grid-cols-7 gap-1">${'<span></span>'.repeat(lead)}${Array.from({ length: dim }, (_, k) => dia(ymd(new Date(y, m - 1, k + 1)))).join('')}</div>
+    <p class="text-body-sm text-on-surface-variant mt-2"><b class="text-on-surface">${c.pick ? 'Ahora toca el último día.' : `${dias} día${dias > 1 ? 's' : ''}: del ${fc(c.fecha)} al ${fc(c.hasta)}.`}</b>
+      ${c.pick ? '' : 'Toca el primer día y luego el último para cambiarlo.'} Azul fuerte: se descuenta; azul claro: no le tocaba trabajar.</p></div>`;
+}
 const teFormula = (e, f) => r2(salDiario(e, f) / P().hrs * facTE(e));
 const teRate = (e, f) => teManual(e) ? +e.te || 0 : teFormula(e, f);
 const amountOf = (i, e) => {
@@ -1821,7 +1850,8 @@ const nomTabs = {
   },
 
   capturar() {
-    if (N.cap.pay !== N.payday) { const q = periodo(navArea(), N.payday); N.cap.pay = N.payday; N.cap.fecha = ymd() >= q.ini && ymd() <= q.fin ? ymd() : q.ini; } // fecha dentro de la semana elegida
+    if (N.cap.pay !== N.payday) { const q = periodo(navArea(), N.payday); N.cap.pay = N.payday; N.cap.fecha = N.cap.hasta = ymd() >= q.ini && ymd() <= q.fin ? ymd() : q.ini; N.cap.calMes = ''; } // fecha dentro de la semana elegida
+    if (N.cap.tipo === 'incapacidad') syncIncap();
     const c = N.cap, t = NT[c.tipo], menorSel = [...c.emps].some(id => esMenor(empById(id))) && ['te', 'dia_extra'].includes(c.tipo);
     // Vacaciones y permiso con goce: los de pago por día (fin de semana) no se pueden elegir (no les aplica la LFT).
     const noAplica = e => NO_POR_DIA.includes(c.tipo) && e.pago === 'dia';
@@ -1836,10 +1866,12 @@ const nomTabs = {
       <div><p class="text-label-md text-on-surface-variant mb-1">Empleado(s) <span class="font-normal">— marca varios si aplica a más de uno</span></p>
         <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-x-4 max-h-72 overflow-auto p-3 rounded-xl border-[1.5px] border-[#cbd5e1]">${picker || '<p class="text-on-surface-variant">Agrega empleados primero.</p>'}</div></div>
       <div class="grid grid-cols-2 gap-3">
-        ${labeled({ label: `Fecha${['vacacion', 'incapacidad'].includes(c.tipo) ? ' (primer día)' : ''}`, required: true }, `<input class="input" type="date" name="fecha" value="${esc(c.fecha)}" required>`)}
-        ${c.tipo === 'incapacidad'
-          ? labeled({ label: 'Días de incapacidad', required: true }, `<input class="input" type="number" name="cant" min="1" max="${INCAP_MAX}" step="1" value="${esc(c.cant)}" required inputmode="numeric">`)
-          : labeled({ label: `Cantidad (${t.u === '$' ? 'pesos' : t.u})`, required: true }, `<input class="input" type="number" name="cant" min="0" step="${t.u === '$' ? 1 : 0.5}" value="${esc(c.cant)}" required inputmode="decimal">`)}
+        ${c.tipo === 'incapacidad' // del día al día: dos fechas con calendario y, abajo, el mes para tocar el primer y el último día
+          ? labeled({ label: 'Del (primer día)', required: true }, `<input class="input" type="date" name="fecha" value="${esc(c.fecha)}" required>`)
+            + labeled({ label: 'Al (último día)', required: true }, `<input class="input" type="date" name="hasta" min="${esc(c.fecha)}" value="${esc(c.hasta)}" required>`)
+            + `<div class="col-span-2">${incCal()}</div>`
+          : labeled({ label: `Fecha${c.tipo === 'vacacion' ? ' (primer día)' : ''}`, required: true }, `<input class="input" type="date" name="fecha" value="${esc(c.fecha)}" required>`)
+            + labeled({ label: `Cantidad (${t.u === '$' ? 'pesos' : t.u})`, required: true }, `<input class="input" type="number" name="cant" min="0" step="${t.u === '$' ? 1 : 0.5}" value="${esc(c.cant)}" required inputmode="decimal">`)}
         ${labeled({ label: c.tipo === 'bono' ? '¿Por qué se le da el bono?' : 'Nota', required: c.tipo === 'bono', wide: true }, `<input class="input" name="nota" maxlength="240" value="${esc(c.nota)}" ${c.tipo === 'bono' ? 'required' : ''} placeholder="${c.tipo === 'te' ? 'Ej. Procesando material de Summit Silao' : c.tipo === 'falta' ? 'Ej. Se reportó enfermo, no trajo receta' : c.tipo === 'incapacidad' ? 'Ej. Folio de la incapacidad del IMSS' : 'Detalle opcional'}">`)}
       </div>
       ${nomAdmin() && t.s > 0 ? `<label class="flex items-center gap-2 text-body-md"><input type="checkbox" name="efectivo" ${c.efectivo ? 'checked' : ''} class="w-5 h-5 accent-[#2563eb]">Ya se le pagó en efectivo (queda registrado, no suma a la nómina)</label>` : ''}
@@ -1968,13 +2000,13 @@ function capPreview() {
   // Incapacidad: qué días se guardan (uno por cada día que le tocaba trabajar) y en qué semanas de pago caen.
   if (c.tipo === 'incapacidad' && c.fecha) {
     const dias = +c.cant || 0;
-    if (!Number.isInteger(dias) || dias < 1 || dias > INCAP_MAX) return `Escribe los días de incapacidad (de 1 a ${INCAP_MAX}, días completos).`;
+    if (!Number.isInteger(dias) || dias < 1 || dias > INCAP_MAX) return `Elige del día al día de la incapacidad (máximo ${INCAP_MAX} días).`;
     const ex = [...c.emps].map(empById).filter(Boolean), grupos = [...new Map(ex.map(e => [e.pago === 'dia' ? 'dia' : 'semana', e])).values()];
     const lista = grupos.map(e => { const fs = diasIncap(e, c.fecha, dias);
       return `${grupos.length > 1 ? (e.pago === 'dia' ? 'Por día: ' : 'Semanales: ') : ''}${fs.length ? fs.map(fc).join(', ') : 'ningún día (no le tocaba trabajar)'}`; }).join(' · ');
     const pays = [...new Set(ex.flatMap(e => diasIncap(e, c.fecha, dias).map(f => paydayOf(e.planta, f))))].sort();
     const tot = ex.reduce((s, e) => s + diasIncap(e, c.fecha, dias).reduce((t2, f) => t2 + amountOf({ tipo: 'incapacidad', cantidad: 1, fecha: f }, e), 0), 0);
-    return `${n} · ${dias} día${dias > 1 ? 's' : ''} desde ${fc(c.fecha)}. Se guarda un día por cada uno que le tocaba trabajar `
+    return `${n} · ${dias} día${dias > 1 ? 's' : ''}${dias > 1 ? `, del ${fc(c.fecha)} al ${fc(c.hasta)}` : ` (${fc(c.fecha)})`}. Se guarda un día por cada uno que le tocaba trabajar `
       + `(${grupos.some(e => e.pago === 'dia') ? 'a los de pago por día solo sábado y domingo' : 'el domingo es descanso y no se descuenta'}): ${lista}.`
       + ` ${nomAdmin() ? `Descuenta ${money(Math.abs(tot))}` : 'Descuenta en la nómina'} y quita el bono de puntualidad del mes.`
       + (pays.length ? ` Queda en ${pays.length > 1 ? 'las semanas' : 'la semana'} del pago ${pays.map(fc).join(', ')}.` : '');
@@ -2083,7 +2115,12 @@ async function nomClick(e) {
   else if (a === 'toggle') N.open.has(id) ? N.open.delete(id) : N.open.add(id);
   else if (a === 'confirm') N.confirm = b.dataset.c;
   else if (a === 'cancel') { N.confirm = ''; N.edit = null; }
-  else if (a === 'ctipo') { N.cap.tipo = b.dataset.t; N.cap.cant = NT[b.dataset.t].u === '$' ? '' : '1'; N.cap.efectivo = false; }
+  else if (a === 'ctipo') { N.cap.tipo = b.dataset.t; N.cap.cant = NT[b.dataset.t].u === '$' ? '' : '1'; N.cap.efectivo = false;
+    if (b.dataset.t === 'incapacidad') Object.assign(N.cap, { hasta: N.cap.fecha, calMes: N.cap.fecha.slice(0, 7), pick: false }); }
+  // Calendario de la incapacidad: el primer toque pone el primer día; el segundo, el último (si es antes, vuelve a empezar desde ahí).
+  else if (a === 'incdia') { const c = N.cap, d = b.dataset.d;
+    if (c.pick && d >= c.fecha) Object.assign(c, { hasta: d, pick: false }); else Object.assign(c, { fecha: d, hasta: d, pick: true }); syncIncap(); }
+  else if (a === 'incmes') { const [y, m] = N.cap.calMes.split('-').map(Number); N.cap.calMes = ymd(new Date(y, m - 1 + Number(b.dataset.d), 1)).slice(0, 7); }
   else if (a === 'editinc') N.edit = { kind: 'inc', x: N.d.incs.find(i => i.id === id) };
   else if (a === 'editemp') N.edit = { kind: 'emp', x: empById(id) };
   else if (a === 'newemp') N.edit = { kind: 'emp', x: null };
@@ -2135,6 +2172,9 @@ function nomChange(e) {
   if (t.dataset.per !== undefined) { N.payday = t.value; N.confirm = ''; return nomDraw(); }
   if (t.name === 'cemp') { t.checked ? N.cap.emps.add(+t.value) : N.cap.emps.delete(+t.value); return nomDraw(); }
   if (t.name === 'efectivo') { N.cap.efectivo = t.checked; $('#cprev').textContent = capPreview(); }
+  // Incapacidad: al cambiar del / al con el calendario del navegador se vuelve a dibujar el mes con el nuevo rango.
+  if (t.closest('#capForm') && ['fecha', 'hasta'].includes(t.name) && N.cap.tipo === 'incapacidad' && t.value) {
+    N.cap[t.name] = t.value; N.cap.pick = false; N.cap.calMes = t.value.slice(0, 7); syncIncap(); return nomDraw(); }
   if (t.closest('#filtros')) { N.fil[t.name] = t.value; nomDraw(); }
   if (t.closest('#bonoForm')) N.bf[t.name] = t.value;
 }
@@ -2142,7 +2182,11 @@ function nomInput(e) {
   const t = e.target;
   if (t.dataset.ci && t.type !== 'checkbox') return iaSet(t);
   if (t.closest('#iaForm') && t.name === 'texto') N.chat.draft = t.value;
-  if (t.closest('#capForm') && ['fecha', 'cant', 'nota'].includes(t.name)) { N.cap[t.name] = t.value; $('#cprev').textContent = capPreview(); }
+  if (t.closest('#capForm') && ['fecha', 'hasta', 'cant', 'nota'].includes(t.name)) {
+    if (!['fecha', 'hasta'].includes(t.name) || t.value) N.cap[t.name] = t.value; // fecha a medio escribir: se queda la anterior
+    if (N.cap.tipo === 'incapacidad') syncIncap();
+    $('#cprev').textContent = capPreview();
+  }
   if (t.closest('#bonoForm')) N.bf[t.name] = t.value;
   if (t.id === 'calcSue') { N.calcSue = t.value; $('#calcOut').innerHTML = calcOut(t.value); }
 }
@@ -2154,6 +2198,7 @@ function nomSubmit(e) {
   if (fid === 'capForm') {
     const c = N.cap;
     if (!c.emps.size) return showErr(new Error('Elige al menos un empleado'));
+    if (c.tipo === 'incapacidad') { syncIncap(); if (+c.cant > INCAP_MAX) return showErr(new Error(`La incapacidad puede ser de máximo ${INCAP_MAX} días`)); }
     f.querySelector('.btn-primary').disabled = true;
     return nomSave('/api/nomina/inc', { emps: [...c.emps], tipo: c.tipo, fecha: c.fecha, cantidad: +c.cant, nota: c.nota.trim(), efectivo: c.efectivo },
       () => { N.cap = { ...N.cap, emps: new Set(), nota: '', efectivo: false }; });
