@@ -105,6 +105,11 @@ App web para **Retrabajos Industriales y Limpiezas Especializadas Polar**: los e
   **¿Trae comprobante?** (pedido del 2026-11-14): toda incapacidad nueva lleva `data.comprobante` = "Sí" (el día se paga al 50 %: se
   descuenta la mitad, `amountOf`) o "No" (no se paga, se descuenta completo). Obligatorio al capturar (`cleanInc`, también por el asistente IA);
   al corregir se puede cambiar (si lo trae después). Las de antes sin dato se quedan como "no se paga".
+  **Bono de puntualidad por aplicar** (pedido del 2026-11-14): `bonosPendientes()` = meses ya terminados (los últimos 3, y solo desde la
+  primera incidencia registrada) en que le toca (sin falta, retardo, permiso sin goce ni incapacidad) y aún no se aplica. Salen arriba en
+  Bonos con "Aplicar bono" / "Aplicar los N", en el aviso de la pestaña Nómina y en el contador de la pestaña; **siguen avisando hasta
+  aplicarlos** (a veces no se paga el día que toca por flujo). "No le toca" dice por qué ("Tuvo retardo el …, falta el …"). Aplicar = la ruta
+  de siempre (`POST /api/nomina/bono` con su mes); entra al periodo de pago que contiene el día en que se aplica.
   **Tipo de empleado** (`contrato`, `CONTRATOS`): de planta, provisional (temporales: albañiles…) o de confianza (jefes). Los de confianza y sus
   incidencias solo los ve el admin: `nomEmp` / `GET /api/nomina` no se los dan a nadie más (tampoco salen en la plática PL-FOR-25).
   **Dar de baja / Reactivar** (todos los que capturan nómina): pone o quita la fecha de baja; los dados de baja van en su propia lista.
