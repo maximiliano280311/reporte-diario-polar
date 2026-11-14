@@ -235,6 +235,16 @@ let nomA = (await ok('GET', '/api/nomina', null, admin)).data;
 const luisA = nomA.emps.find(e => e.id === luis.id);
 assert.deepEqual([luisA.nombre, luisA.sueldo, luisA.planta], ['Luis P.', 2400, 'Querétaro']);
 assert.deepEqual([luisA.curp, luisA.nacimiento, luisA.menor], [doc.curp, doc.nacimiento, false]); // el cambio sin CURP la conserva
+// Pago del domingo (por día, p. ej. los que vienen sábado y domingo): solo lo pone y lo ve el admin; el encargado lo conserva al editar.
+await ok('POST', '/api/nomina/emp', { nombre: 'Finde Q', planta: 'Querétaro', pago: 'dia', sueldo: 400, domingo: 500, diasBase: 2, ...doc }, admin);
+const finde = (await ok('GET', '/api/nomina', null, admin)).data.emps.find(e => e.nombre === 'Finde Q');
+assert.deepEqual([finde.sueldo, finde.domingo, finde.diasBase], [400, 500, 2]);
+assert.equal((await ok('GET', '/api/nomina', null, beto2)).data.emps.find(e => e.id === finde.id).domingo, undefined);
+await ok('POST', '/api/nomina/emp', { id: finde.id, nombre: 'Finde Q', pago: 'dia', diasBase: 2, domingo: 1 }, beto2);
+assert.equal((await ok('GET', '/api/nomina', null, admin)).data.emps.find(e => e.id === finde.id).domingo, 500);
+await ok('POST', '/api/nomina/emp', { ...finde, pago: 'semana' }, admin); // con sueldo semanal no hay pago del domingo
+assert.equal((await ok('GET', '/api/nomina', null, admin)).data.emps.find(e => e.id === finde.id).domingo, 0);
+await ok('POST', '/api/nomina/emp/delete', { id: finde.id }, admin);
 // CURP y fecha de nacimiento: obligatorias al dar de alta, con formato de CURP y la fecha que trae la CURP; "menor" sale sola.
 const altaE = d => call('POST', '/api/nomina/emp', { nombre: 'Nuevo', planta: 'Querétaro', ...d }, admin);
 assert.equal((await altaE({})).status, 400); // sin CURP ni nacimiento

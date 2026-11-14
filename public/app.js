@@ -1536,14 +1536,18 @@ const nomEmps = (all = false) => {
 const empById = id => N.d.emps.find(e => e.id === Number(id));
 // Cálculos en pesos: solo el admin tiene los datos (config y sueldos).
 const P = () => ({ div: +N.d.config.diasDivisor || 6, hrs: +N.d.config.horasJornada || 8, fac: +N.d.config.factorTE || 2 });
-const salDiario = e => e.pago === 'dia' ? +e.sueldo || 0 : (+e.sueldo || 0) / P().div;
+// Pago del domingo (solo los que cobran por día; p. ej. los que vienen sábado y domingo): si lo tienen, el domingo vale eso.
+const pagoDom = e => e.pago === 'dia' ? +e.domingo || 0 : 0;
+const esDomingo = f => !!f && pdate(f).getDay() === 0;
+// Sueldo de un día; con fecha, un domingo usa el pago del domingo (faltas, días extra y horas extra de ese día).
+const salDiario = (e, f) => e.pago === 'dia' ? (pagoDom(e) && esDomingo(f) ? pagoDom(e) : +e.sueldo || 0) : (+e.sueldo || 0) / P().div;
 const teManual = e => e.teModo === 'manual';
-const teFormula = e => r2(salDiario(e) / P().hrs * P().fac);
-const teRate = e => teManual(e) ? +e.te || 0 : teFormula(e);
+const teFormula = (e, f) => r2(salDiario(e, f) / P().hrs * P().fac);
+const teRate = (e, f) => teManual(e) ? +e.te || 0 : teFormula(e, f);
 const amountOf = (i, e) => {
   const t = NT[i.tipo];
   if (!t?.s) return 0;
-  return r2(t.s * (+i.cantidad || 0) * (t.b === 'dia' ? salDiario(e) : t.b === 'hora' ? teRate(e) : 1));
+  return r2(t.s * (+i.cantidad || 0) * (t.b === 'dia' ? salDiario(e, i.fecha) : t.b === 'hora' ? teRate(e, i.fecha) : 1));
 };
 // Periodo pagado: la semana del área que termina antes del sábado de pago.
 // Periodo que se paga en ese día de pago: la semana de la planta (según su día de inicio), menos su desfase en semanas.
@@ -1578,7 +1582,8 @@ function calcSemana(payday) {
     const p = periodo(e.planta, payday);
     if ((e.ingreso && e.ingreso > p.fin) || (e.baja && e.baja < p.ini)) return [];
     let base;
-    if (e.pago === 'dia') base = (+e.sueldo || 0) * (+e.diasBase || 1);
+    // Por día: sueldo × días que trabaja; con pago del domingo, uno de esos días es el domingo (sábado y domingo = sábado + domingo).
+    if (e.pago === 'dia') base = pagoDom(e) ? (+e.sueldo || 0) * ((+e.diasBase || 1) - 1) + pagoDom(e) : (+e.sueldo || 0) * (+e.diasBase || 1);
     else {
       const dias = dBetween(e.ingreso > p.ini ? e.ingreso : p.ini, e.baja && e.baja < p.fin ? e.baja : p.fin) + 1;
       base = dias >= 7 ? +e.sueldo || 0 : Math.min(P().div, dias) * salDiario(e);
@@ -1723,7 +1728,7 @@ const nomTabs = {
     // Campos editables de cada propuesta, con su etiqueta (L = etiqueta).
     const L = (label, html, wide) => `<label class="flex flex-col gap-1 text-label-sm text-on-surface-variant ${wide ? 'col-span-2' : ''}"><span>${label}</span>${html}</label>`;
     const inp = (i, k, v, type = 'text', attrs = '') => `<input class="input !py-2" data-ci="${i}" data-k="${k}" type="${type}" value="${esc(v ?? '')}" ${attrs}>`;
-    const extra = x => ['te', 'teModo', 'diasBase', 'baja', 'vacAjuste', 'menor', 'notas'].filter(k => x[k] !== undefined);
+    const extra = x => ['domingo', 'te', 'teModo', 'diasBase', 'baja', 'vacAjuste', 'menor', 'notas'].filter(k => x[k] !== undefined);
     const fila = (x, i) => `<div class="p-3 rounded-xl ${x.incluir ? 'bg-surface-container-low' : 'bg-surface-container-low/40 opacity-60'} flex flex-col gap-2">
       <label class="flex items-center gap-2 text-label-md"><input type="checkbox" data-ci="${i}" data-k="incluir" ${x.incluir ? 'checked' : ''} class="w-5 h-5 accent-[#2563eb]">
         ${x.tipo === 'empleado' ? nChip(x.id ? 'Cambio de empleado' : 'Empleado nuevo', x.id ? WARN : OKC) : nChip('Incidencia')}</label>
@@ -1798,7 +1803,7 @@ const nomTabs = {
               <span class="text-on-surface-variant">${fc(i.fecha)}</span><b>${esc(incLabel(i))}</b>${i._arr ? nChip('diferido de otra semana', WARN) : ''}${i.diferido ? nChip('se paga después') : ''}${i.nota ? `<span class="text-on-surface-variant">${esc(i.nota)}</span>` : ''}
               <span class="ml-auto tabular-nums ${i._amt < 0 ? 'text-error' : ''}">${i._amt ? money(i._amt) : ''}</span>${i._amt > 0 ? `<button type="button" data-act="diferir" data-id="${i.id}" class="text-label-sm text-primary font-semibold">${i.diferido ? 'Incluir esta semana' : 'Pagar después'}</button>` : ''}</li>`).join('')}</ul>`
               : '<p class="pt-2 text-body-md text-on-surface-variant">Sin incidencias. Se paga el sueldo base.</p>'}
-              <p class="text-[11px] text-on-surface-variant mt-2">Sueldo ${money(+l.e.sueldo || 0)} ${l.e.pago === 'dia' ? 'por día' : 'semanal'} · día ${money(salDiario(l.e))} · hora extra ${money(teRate(l.e))}${teManual(l.e) ? ' (tarifa propia)' : ''}</p></td></tr>` : ''}`; }).join(''));
+              <p class="text-[11px] text-on-surface-variant mt-2">Sueldo ${money(+l.e.sueldo || 0)} ${l.e.pago === 'dia' ? 'por día' : 'semanal'} · día ${money(salDiario(l.e))}${pagoDom(l.e) ? ` · domingo ${money(pagoDom(l.e))}` : ''} · ${l.e.pago === 'dia' ? `${+l.e.diasBase || 1} día(s) a la semana · ` : ''}hora extra ${money(teRate(l.e))}${teManual(l.e) ? ' (tarifa propia)' : ''}</p></td></tr>` : ''}`; }).join(''));
       }).join('')
       + `<div class="flex flex-wrap items-center gap-2 mt-4">${csvBtn}<span class="flex-1"></span>${N.confirm === 'cerrar'
         ? `<span class="text-body-sm">Se marcarán como pagadas ${L.reduce((s, l) => s + l.items.filter(i => !i.diferido).length, 0)} incidencias. Lo diferido sigue pendiente.</span><button type="button" data-act="cerrar" class="btn btn-primary">Sí, cerrar semana</button><button type="button" data-act="cancel" class="btn border-[1.5px] border-[#cbd5e1]">Cancelar</button>`
@@ -1903,7 +1908,8 @@ const nomTabs = {
         ${e.baja && e.baja <= today ? `<button type="button" data-act="altaemp" data-id="${e.id}" class="text-label-sm text-secondary font-semibold py-1"><span>Reactivar</span></button>`
           : `<button type="button" data-act="bajaemp" data-id="${e.id}" class="text-label-sm text-tertiary font-semibold py-1" aria-label="Dar de baja a ${esc(e.nombre)}"><span>Dar de baja</span></button>`}
         ${me.role === 'admin' ? `<button type="button" data-act="delemp" data-id="${e.id}" class="text-label-sm text-error font-semibold py-1" aria-label="Borrar a ${esc(e.nombre)}"><span>Borrar</span></button>` : ''}</span>`)}${td(esc(e.planta))}
-      ${admin ? td(`${money(+e.sueldo || 0)}<br><span class="text-[11px] text-on-surface-variant">${e.pago === 'dia' ? 'por día' : 'semanal'}</span>`, 1) + td(money(salDiario(e)), 1)
+      ${admin ? td(`${money(+e.sueldo || 0)}<br><span class="text-[11px] text-on-surface-variant">${e.pago === 'dia' ? 'por día' : 'semanal'}</span>`, 1)
+        + td(`${money(salDiario(e))}${pagoDom(e) ? `<br><span class="text-[11px] text-on-surface-variant">domingo ${money(pagoDom(e))}</span>` : ''}`, 1)
         + td(`${money(teRate(e))}<br><span class="text-[11px] text-on-surface-variant">${teManual(e) ? 'tarifa propia' : 'por fórmula'}</span>`, 1) + td(+e.bono ? money(+e.bono) : '—', 1) : ''}
       ${td(e.ingreso ? fcy(e.ingreso) : nChip('falta', WARN))}</tr>`).join(''), 'Sin empleados.');
     const activo = e => !e.baja || e.baja > today;
@@ -1973,10 +1979,11 @@ function nomEditForm() {
     ${labeled({ label: 'Tipo de empleado' }, sel('name="contrato"', [['planta', 'De planta'], ['provisional', 'Provisional'], ...(admin ? [['confianza', 'De confianza']] : [])], e.contrato || 'planta'))}
     ${labeled({ label: 'Forma de pago' }, sel('name="pago"', [['semana', 'Sueldo semanal'], ['dia', 'Por día (sabatinos)']], e.pago))}
     ${admin ? labeled({ label: 'Sueldo (semanal o por día)' }, `<input class="input" type="number" name="sueldo" step="0.01" min="0" value="${esc(e.sueldo ?? 0)}">`)
+      + `<div data-pdom class="${e.pago === 'dia' ? '' : 'hidden'}">${labeled({ label: 'Pago del domingo (si es distinto)' }, `<input class="input" type="number" name="domingo" step="0.01" min="0" placeholder="Igual que los demás días" value="${+e.domingo ? esc(e.domingo) : ''}">`)}</div>`
       + labeled({ label: 'Hora extra' }, sel('name="teModo"', [['auto', 'Por fórmula'], ['manual', 'Tarifa propia']], e.teModo))
       + labeled({ label: 'Pago por hora extra (tarifa propia)' }, `<input class="input" type="number" name="te" step="0.01" min="0" value="${esc(e.te ?? 0)}">`)
       + labeled({ label: 'Bono de puntualidad al mes' }, `<input class="input" type="number" name="bono" step="1" min="0" value="${esc(e.bono ?? 0)}">`) : ''}
-    ${labeled({ label: 'Días que trabaja (solo por día)' }, `<input class="input" type="number" name="diasBase" step="1" min="1" max="7" value="${esc(e.diasBase || 1)}">`)}
+    ${labeled({ label: 'Días que trabaja a la semana (solo por día)' }, `<input class="input" type="number" name="diasBase" step="1" min="1" max="7" value="${esc(e.diasBase || 1)}">`)}
     ${labeled({ label: 'Fecha de ingreso' }, `<input class="input" type="date" name="ingreso" value="${esc(e.ingreso || '')}">`)}
     ${labeled({ label: 'Fecha de baja' }, `<input class="input" type="date" name="baja" value="${esc(e.baja || '')}">`)}
     ${labeled({ label: 'Vacaciones ya tomadas en el periodo actual' }, `<input class="input" type="number" name="vacAjuste" step="0.5" value="${esc(e.vacAjuste || 0)}">`)}
@@ -2006,9 +2013,15 @@ function empNac(f) {
 function empDeriv(f) {
   const out = f.querySelector('#ederiv');
   if (!out) return;
-  const e = { pago: f.elements.pago.value, sueldo: +f.elements.sueldo.value || 0, teModo: f.elements.teModo.value, te: +f.elements.te.value || 0 };
+  const e = { pago: f.elements.pago.value, sueldo: +f.elements.sueldo.value || 0, teModo: f.elements.teModo.value, te: +f.elements.te.value || 0,
+    domingo: +f.elements.domingo?.value || 0, diasBase: +f.elements.diasBase.value || 1 };
   f.elements.te.disabled = e.teModo !== 'manual';
-  out.textContent = `${e.pago === 'dia' ? 'Pago por día' : `Sueldo diario (÷${P().div})`} ${money(salDiario(e))} · hora extra por fórmula (×${P().fac}) ${money(teFormula(e))} · se pagará ${money(teRate(e))} por hora extra`;
+  // Pago del domingo: solo con pago por día.
+  f.querySelector('[data-pdom]')?.classList.toggle('hidden', e.pago !== 'dia');
+  if (f.elements.domingo) f.elements.domingo.disabled = e.pago !== 'dia';
+  const dom = pagoDom(e), semana = dom ? e.sueldo * (e.diasBase - 1) + dom : e.sueldo * e.diasBase;
+  out.textContent = `${e.pago === 'dia' ? `Pago por día ${money(e.sueldo)}${dom ? ` · domingo ${money(dom)}` : ''} · a la semana ${money(semana)} (${e.diasBase} día${e.diasBase > 1 ? 's' : ''})` : `Sueldo diario (÷${P().div}) ${money(salDiario(e))}`}`
+    + ` · hora extra por fórmula (×${P().fac}) ${money(teFormula(e))} · se pagará ${money(teRate(e))} por hora extra`;
 }
 
 function nomDraw() {

@@ -193,7 +193,8 @@ const QFORMS = {
 const NOM_AREAS = [...PLANTS, 'Administración'];
 const NOM_TIPOS = ['falta', 'retardo', 'permiso_sg', 'permiso_cg', 'incapacidad', 'vacacion', 'te', 'dia_extra', 'bono', 'bono_puntualidad', 'descuento'];
 const NOM_PESOS = ['bono', 'bono_puntualidad', 'descuento']; // su cantidad es dinero
-const NOM_MONEY = ['sueldo', 'te', 'teModo', 'bono']; // campos del empleado que solo ve el admin
+// Campos del empleado que solo ve el admin. domingo: pago del domingo de los que cobran por día (0 = igual que los demás días; pedido del 2026-11-14).
+const NOM_MONEY = ['sueldo', 'te', 'teModo', 'bono', 'domingo'];
 // Tipo de empleado: de planta (el de siempre), provisional (temporal: albañiles, apoyos) o de confianza (jefes: solo el admin los ve).
 const CONTRATOS = ['planta', 'provisional', 'confianza'];
 // Expediente del empleado: check list que se marca con X (mismo catálogo en public/app.js). La INE es "si aplica" (p. ej. menores
@@ -204,7 +205,7 @@ const NOM_CONFIG = { porcentaje: 4, diasDivisor: 6, horasJornada: 8, factorTE: 2
 const isDate = s => /^\d{4}-\d{2}-\d{2}$/.test(String(s ?? ''));
 // Propuestas del asistente de nómina: solo empleados (alta / cambio) e incidencias válidas; los nombres se ligan a su empleado.
 // La IA solo PROPONE: el admin las revisa, las edita y las aplica con las rutas normales (que vuelven a validar).
-const NOM_EMP_KEYS = ['nombre', 'curp', 'nacimiento', 'planta', 'contrato', 'pago', 'sueldo', 'bono', 'te', 'teModo', 'diasBase', 'ingreso', 'baja', 'vacAjuste', 'menor', 'notas'];
+const NOM_EMP_KEYS = ['nombre', 'curp', 'nacimiento', 'planta', 'contrato', 'pago', 'sueldo', 'domingo', 'bono', 'te', 'teModo', 'diasBase', 'ingreso', 'baja', 'vacAjuste', 'menor', 'notas'];
 // CURP (RENAPO): 18 caracteres. Posiciones 5-10 = fecha de nacimiento AAMMDD; la 17 da el siglo (dígito = 1900s, letra = 2000s).
 export const CURP_RE = /^[A-Z][AEIOUX][A-Z]{2}\d{6}[HMX][A-Z]{2}[B-DF-HJ-NP-TV-Z]{3}[A-Z\d]\d$/;
 export const curpLimpia = v => String(v ?? '').toUpperCase().replace(/\s+/g, '').slice(0, 30);
@@ -234,7 +235,7 @@ export function cleanNomCambios(cambios, emps) {
       if (d.contrato && !CONTRATOS.includes(d.contrato)) delete d.contrato;
       for (const k of ['ingreso', 'baja', 'nacimiento']) if (d[k] && !isDate(d[k])) delete d[k];
       if (d.curp !== undefined) { d.curp = curpLimpia(d.curp); if (!CURP_RE.test(d.curp)) delete d.curp; }
-      for (const k of ['sueldo', 'bono', 'te', 'diasBase', 'vacAjuste']) if (d[k] !== undefined && !(Number(d[k]) >= 0)) delete d[k];
+      for (const k of ['sueldo', 'domingo', 'bono', 'te', 'diasBase', 'vacAjuste']) if (d[k] !== undefined && !(Number(d[k]) >= 0)) delete d[k];
       if (!old && !d.nombre) return [];
       return [{ tipo: 'empleado', id: old?.id ?? null, nombre: String(d.nombre || old.nombre).slice(0, 80), ...d, planta: d.planta || old?.planta || 'Querétaro' }];
     }
@@ -993,7 +994,8 @@ export function createApp({ db, files, env = {} }) {
         // Documentos del expediente marcados (si el cambio no los trae, se conservan).
         docs: b.docs === undefined ? old?.docs || [] : [...new Set([].concat(b.docs).map(String))].filter(k => DOCS_EMP.some(([d]) => d === k)),
         menor: nacimiento ? edad(nacimiento, hoy) < 18 : !!b.menor }; // con fecha de nacimiento, "menor" sale sola
-      Object.assign(d, admin ? { sueldo: n('sueldo'), te: n('te'), teModo: b.teModo === 'manual' ? 'manual' : 'auto', bono: n('bono') }
+      Object.assign(d, admin ? { sueldo: n('sueldo'), te: n('te'), teModo: b.teModo === 'manual' ? 'manual' : 'auto', bono: n('bono'),
+          domingo: d.pago === 'dia' ? n('domingo') : 0 } // pago del domingo: solo para los que cobran por día
         : Object.fromEntries(NOM_MONEY.map(k => [k, old?.[k] ?? (k === 'teModo' ? 'auto' : 0)])));
       if (old) await db.run('UPDATE nom_emps SET area = ?, data = ? WHERE id = ?', area, JSON.stringify(d), old.id);
       else await db.run('INSERT INTO nom_emps(area, data) VALUES (?, ?)', area, JSON.stringify(d));
@@ -1098,10 +1100,11 @@ export function createApp({ db, files, env = {} }) {
         'Eres el asistente de nómina de POLAR (Retrabajos Industriales y Limpiezas Especializadas). Escribe en español de México. ' +
         'Ayudas al administrador a llenar la nómina: das de alta o cambias empleados y capturas incidencias a partir de lo que te dice o de un Excel/CSV. ' +
         'Responde SOLO un JSON con las claves "respuesta" (texto breve para el admin: qué entendiste, qué propones y qué dudas tienes) y "cambios" (lista). ' +
-        'Cada cambio es uno de: {"tipo":"empleado","id":<id si ya existe o null si es nuevo>,"nombre","curp","nacimiento","planta","contrato","pago","sueldo","bono","te","teModo","diasBase","ingreso","baja","vacAjuste","menor","notas"} ' +
+        'Cada cambio es uno de: {"tipo":"empleado","id":<id si ya existe o null si es nuevo>,"nombre","curp","nacimiento","planta","contrato","pago","sueldo","domingo","bono","te","teModo","diasBase","ingreso","baja","vacAjuste","menor","notas"} ' +
         '(en un cambio a un empleado existente pon id, nombre y SOLO los campos que cambian) o ' +
         '{"tipo":"incidencia","empleadoId":<id o null>,"empleado":"<nombre>","clase","fecha","cantidad","nota"}. ' +
-        'Plantas: Querétaro, Silao o Administración. contrato: "planta" (empleado normal), "provisional" (temporal: albañiles, apoyos por obra) o "confianza" (jefes). pago: "semana" (sueldo semanal) o "dia" (pago por día). teModo: "auto" (hora extra por fórmula) o "manual" (te = pago por hora extra). ' +
+        'Plantas: Querétaro, Silao o Administración. contrato: "planta" (empleado normal), "provisional" (temporal: albañiles, apoyos por obra) o "confianza" (jefes). pago: "semana" (sueldo semanal) o "dia" (pago por día; sueldo = pago de cada día y diasBase = cuántos días trabaja a la semana). ' +
+        'domingo: solo con pago "dia", lo que se le paga el domingo si es distinto a los demás días (p. ej. los que vienen sábado y domingo: sueldo = pago del sábado, domingo = pago del domingo, diasBase = 2). teModo: "auto" (hora extra por fórmula) o "manual" (te = pago por hora extra). ' +
         'Clases de incidencia y su cantidad: falta (días), retardo (veces), permiso_sg = permiso sin goce (días), permiso_cg = permiso con goce (días), incapacidad (días), ' +
         'vacacion (días), te = tiempo extra (horas), dia_extra = día extra o domingo (días), bono (pesos, la nota con el motivo es obligatoria), descuento (pesos). ' +
         'curp: la CURP de 18 caracteres; nacimiento: fecha de nacimiento. Para dar de alta a alguien hacen falta su CURP y su fecha de nacimiento: si no vienen, dilo en la respuesta. ' +

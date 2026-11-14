@@ -88,6 +88,9 @@ App web para **Retrabajos Industriales y Limpiezas Especializadas Polar**: los e
   **Asistente IA** (pestaña solo admin, `POST /api/nomina/ai`): chat que acepta Excel .xlsx o CSV (se leen en el navegador sin librerías,
   `leerArchivo`) y **solo propone** altas/cambios de empleados e incidencias (`cleanNomCambios`); el admin edita o quita cada propuesta y
   "Aplicar" las guarda con las rutas normales (`nomAplicar`). Las pestañas de captura manual siguen igual Botón "Limpiar historial" del chat.
+  **Pago del domingo** (`domingo`, pedido del 2026-11-14, para los que solo vienen sábado y domingo con un pago distinto cada día): solo con
+  pago "Por día"; lo pone y lo ve solo el admin (está en `NOM_MONEY`). Base = sueldo × (días − 1) + domingo; una falta, permiso sin goce,
+  incapacidad, día extra u hora extra con fecha de domingo usa el pago del domingo (`salDiario(e, fecha)` / `pagoDom` en `public/app.js`).
   **Tipo de empleado** (`contrato`, `CONTRATOS`): de planta, provisional (temporales: albañiles…) o de confianza (jefes). Los de confianza y sus
   incidencias solo los ve el admin: `nomEmp` / `GET /api/nomina` no se los dan a nadie más (tampoco salen en la plática PL-FOR-25).
   **Dar de baja / Reactivar** (todos los que capturan nómina): pone o quita la fecha de baja; los dados de baja van en su propia lista.
