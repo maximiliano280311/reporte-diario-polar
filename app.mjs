@@ -196,6 +196,7 @@ const NOM_PESOS = ['bono', 'bono_puntualidad', 'descuento']; // su cantidad es d
 // Trabajadores de fin de semana (pago por día): no les aplica la LFT en vacaciones ni permisos con goce, y su hora extra es sencilla
 // (esa va en public/app.js, teFormula). Pedido del 2026-11-14. También en NO_POR_DIA de public/app.js.
 const NO_POR_DIA = ['vacacion', 'permiso_cg'];
+const SN_COMP = ['Sí', 'No']; // incapacidad: ¿trae comprobante? (Sí = se paga al 50 %; el cálculo está en amountOf de public/app.js)
 // Incapacidad de varios días (pedido del 2026-11-14): se captura el primer día y los días que dio el IMSS y se guarda una por cada día
 // que le tocaba trabajar, cada una en su semana de pago. Sueldo semanal: todos menos el domingo (descanso: el sueldo diario ya es ÷6, así
 // una semana completa de incapacidad descuenta la semana y no más). Por día (fin de semana): solo sábado y domingo.
@@ -264,7 +265,7 @@ export function cleanNomCambios(cambios, emps) {
       if (!clase || !isDate(c.fecha) || !(cantidad > 0)) return [];
       const e = emps.find(x => x.id === Number(c.empleadoId)) || byName(c.empleado);
       return [{ tipo: 'incidencia', empleadoId: e?.id ?? null, empleado: String(e?.nombre || c.empleado || '').slice(0, 80), clase, fecha: c.fecha, cantidad,
-        nota: String(c.nota ?? '').slice(0, 240) }];
+        nota: String(c.nota ?? '').slice(0, 240), ...(clase === 'incapacidad' && { comprobante: SN_COMP.includes(c.comprobante) ? c.comprobante : '' }) }];
     }
     return [];
   });
@@ -975,7 +976,13 @@ export function createApp({ db, files, env = {} }) {
     if (tipo === 'bono' && !nota) throw httpError(400, 'Escribe por qué se le da el bono');
     // "Ya se le pagó en efectivo": solo el admin y solo en lo que suma (queda registrado como pagado).
     const efectivo = admin ? !!b.efectivo && ['te', 'dia_extra', 'bono'].includes(tipo) : !!old?.efectivo;
-    return { tipo, fecha: b.fecha, data: { ...(old || {}), cantidad, nota, efectivo, ...(efectivo && !old && { aplicadoEn: 'efectivo' }) } };
+    // Incapacidad: ¿trae comprobante? Sí → el día se paga al 50 %; No → no se paga (pedido del 2026-11-14). Obligatorio al capturar;
+    // al corregir se puede cambiar (p. ej. lo trajo después) y las de antes sin dato se quedan como "no se paga".
+    const comprobante = tipo !== 'incapacidad' ? undefined : SN_COMP.includes(b.comprobante) ? b.comprobante : old?.comprobante;
+    if (tipo === 'incapacidad' && !old && !comprobante) throw httpError(400, 'Indica si la incapacidad trae comprobante (Sí: se paga al 50 %; No: no se paga)');
+    const data = { ...(old || {}), cantidad, nota, efectivo, comprobante, ...(efectivo && !old && { aplicadoEn: 'efectivo' }) };
+    if (!comprobante) delete data.comprobante;
+    return { tipo, fecha: b.fecha, data };
   }
 
   const nomRoutes = {
@@ -1135,11 +1142,12 @@ export function createApp({ db, files, env = {} }) {
         'Responde SOLO un JSON con las claves "respuesta" (texto breve para el admin: qué entendiste, qué propones y qué dudas tienes) y "cambios" (lista). ' +
         'Cada cambio es uno de: {"tipo":"empleado","id":<id si ya existe o null si es nuevo>,"nombre","curp","nacimiento","planta","contrato","pago","sueldo","domingo","bono","te","teModo","diasBase","ingreso","baja","vacAjuste","menor","notas"} ' +
         '(en un cambio a un empleado existente pon id, nombre y SOLO los campos que cambian) o ' +
-        '{"tipo":"incidencia","empleadoId":<id o null>,"empleado":"<nombre>","clase","fecha","cantidad","nota"}. ' +
+        '{"tipo":"incidencia","empleadoId":<id o null>,"empleado":"<nombre>","clase","fecha","cantidad","nota","comprobante" (solo incapacidad)}. ' +
         'Plantas: Querétaro, Silao o Administración. contrato: "planta" (empleado normal), "provisional" (temporal: albañiles, apoyos por obra) o "confianza" (jefes). pago: "semana" (sueldo semanal) o "dia" (pago por día; sueldo = pago de cada día y diasBase = cuántos días trabaja a la semana). ' +
         'domingo: solo con pago "dia", lo que se le paga el domingo si es distinto a los demás días (p. ej. los que vienen sábado y domingo: sueldo = pago del sábado, domingo = pago del domingo, diasBase = 2). ' +
         'A los de pago "dia" (fin de semana) no les aplica la LFT: no se les capturan vacacion ni permiso_cg y su hora extra es sencilla. teModo: "auto" (hora extra por fórmula) o "manual" (te = pago por hora extra). ' +
-        'Clases de incidencia y su cantidad: falta (días), retardo (veces), permiso_sg = permiso sin goce (días), permiso_cg = permiso con goce (días), incapacidad (días: fecha = primer día y cantidad = días que dio el IMSS, en una sola incidencia; el sistema la reparte sola por día), ' +
+        'Clases de incidencia y su cantidad: falta (días), retardo (veces), permiso_sg = permiso sin goce (días), permiso_cg = permiso con goce (días), incapacidad (días: fecha = primer día y cantidad = días que dio el IMSS, en una sola incidencia; el sistema la reparte sola por día; ' +
+        'lleva "comprobante": "Sí" si trae comprobante (se paga al 50 %) o "No" (no se paga); si no lo sabes, déjalo vacío y pregúntalo en la respuesta), ' +
         'vacacion (días), te = tiempo extra (horas), dia_extra = día extra o domingo (días), bono (pesos, la nota con el motivo es obligatoria), descuento (pesos). ' +
         'curp: la CURP de 18 caracteres; nacimiento: fecha de nacimiento. Para dar de alta a alguien hacen falta su CURP y su fecha de nacimiento: si no vienen, dilo en la respuesta. ' +
         'Fechas en AAAA-MM-DD; si en el Excel vienen como número de serie, conviértelas (número de días desde 1899-12-30). ' +

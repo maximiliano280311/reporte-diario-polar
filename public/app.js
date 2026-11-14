@@ -1585,7 +1585,9 @@ const teRate = (e, f) => teManual(e) ? +e.te || 0 : teFormula(e, f);
 const amountOf = (i, e) => {
   const t = NT[i.tipo];
   if (!t?.s) return 0;
-  return r2(t.s * (+i.cantidad || 0) * (t.b === 'dia' ? salDiario(e, i.fecha) : t.b === 'hora' ? teRate(e, i.fecha) : 1));
+  // Incapacidad con comprobante: el día se paga al 50 % (se descuenta la mitad); sin comprobante (o las de antes sin dato) no se paga.
+  const pct = i.tipo === 'incapacidad' && i.comprobante === 'Sí' ? 0.5 : 1;
+  return r2(t.s * pct * (+i.cantidad || 0) * (t.b === 'dia' ? salDiario(e, i.fecha) : t.b === 'hora' ? teRate(e, i.fecha) : 1));
 };
 // Periodo pagado: la semana del área que termina antes del sábado de pago.
 // Periodo que se paga en ese día de pago: la semana de la planta (según su día de inicio), menos su desfase en semanas.
@@ -1668,7 +1670,8 @@ function vacInfo(e) {
 // Texto de una incidencia; las de pesos sin monto para el encargado (el servidor no lo manda).
 const incLabel = i => { const t = NT[i.tipo] || { l: i.tipo, u: '' };
   return `${t.l}${i.mes ? ' ' + mesL(i.mes) : ''}${i.cantidad == null ? '' : ' · ' + (t.u === '$' ? money(+i.cantidad) : `${+i.cantidad} ${+i.cantidad === 1 ? { días: 'día', veces: 'vez', horas: 'hora' }[t.u] || t.u : t.u}`)}`
-    + (i.incap ? ` (parte de ${i.incap.dias} día${i.incap.dias > 1 ? 's' : ''} desde ${fc(i.incap.desde)})` : ''); };
+    + (i.incap ? ` (parte de ${i.incap.dias} día${i.incap.dias > 1 ? 's' : ''} desde ${fc(i.incap.desde)})` : '')
+    + (i.tipo === 'incapacidad' && i.comprobante ? (i.comprobante === 'Sí' ? ' · con comprobante (50 %)' : ' · sin comprobante') : ''); };
 const nChip = (txt, cls = 'bg-surface-container text-on-surface-variant') => `<span class="chip ${cls}">${esc(txt)}</span>`;
 // CURP (mismo formato que el servidor): la fecha de nacimiento va en las posiciones 5-10 (AAMMDD) y el siglo en la 17.
 const CURP_RE = /^[A-Z][AEIOUX][A-Z]{2}\d{6}[HMX][A-Z]{2}[B-DF-HJ-NP-TV-Z]{3}[A-Z\d]\d$/;
@@ -1736,7 +1739,7 @@ async function nomAplicar() {
   for (const x of sel.filter(x => x.tipo === 'incidencia')) {
     const id = Number(x.empleadoId) || N.d.emps.find(e => norm(e.nombre) === norm(x.empleado))?.id;
     if (!id) { errs.push(`${x.empleado || '(sin nombre)'}: no existe ese empleado`); continue; }
-    try { await api('/api/nomina/inc', { emps: [id], tipo: x.clase, fecha: x.fecha, cantidad: +x.cantidad, nota: x.nota }); ok++; }
+    try { await api('/api/nomina/inc', { emps: [id], tipo: x.clase, fecha: x.fecha, cantidad: +x.cantidad, nota: x.nota, comprobante: x.comprobante }); ok++; }
     catch (err) { errs.push(`${x.empleado} · ${NT[x.clase]?.l || x.clase}: ${err.message}`); }
   }
   N.d = await api('/api/nomina');
@@ -1775,6 +1778,7 @@ const nomTabs = {
         ${L('Empleado', sel(`data-ci="${i}" data-k="empleadoId"`, [['', x.empleado ? `(se da de alta) ${x.empleado}` : 'Elige…'], ...emps.map(e => [e.id, e.nombre])], x.empleadoId ?? ''), true)}
         ${L('Tipo', sel(`data-ci="${i}" data-k="clase"`, CAP_TIPOS.map(k => [k, NT[k].l]), x.clase), true)}
         ${L('Fecha', inp(i, 'fecha', x.fecha, 'date'))}${L(`Cantidad (${NT[x.clase]?.u === '$' ? 'pesos' : NT[x.clase]?.u || ''})`, inp(i, 'cantidad', x.cantidad, 'number', 'min="0" step="0.5"'))}
+        ${x.clase === 'incapacidad' ? L('¿Trae comprobante?', sel(`data-ci="${i}" data-k="comprobante"`, [['', 'Elige…'], ['Sí', 'Sí · se paga al 50 %'], ['No', 'No · no se paga']], x.comprobante || '')) : ''}
         ${L('Nota', inp(i, 'nota', x.nota), true)}</div>`
       : `<div class="grid grid-cols-2 lg:grid-cols-4 gap-2">${L('Nombre', inp(i, 'nombre', x.nombre), true)}
         ${L('Planta', sel(`data-ci="${i}" data-k="planta"`, N.d.areas.map(a => [a, a]), x.planta))}
@@ -1870,6 +1874,9 @@ const nomTabs = {
           ? labeled({ label: 'Del (primer día)', required: true }, `<input class="input" type="date" name="fecha" value="${esc(c.fecha)}" required>`)
             + labeled({ label: 'Al (último día)', required: true }, `<input class="input" type="date" name="hasta" min="${esc(c.fecha)}" value="${esc(c.hasta)}" required>`)
             + `<div class="col-span-2">${incCal()}</div>`
+            + `<div class="col-span-2"><p class="text-label-md text-on-surface-variant mb-2">¿Trae comprobante? <span class="text-error">*</span></p>
+              <div class="flex flex-wrap gap-2" role="group" aria-label="¿Trae comprobante?">${[['Sí', 'Sí trae · se paga al 50 %'], ['No', 'No trae · no se paga']].map(([v, l]) =>
+                `<button type="button" data-act="ccomp" data-v="${v}" aria-pressed="${c.comp === v}" class="px-3 py-2 rounded-full text-label-md border-[1.5px] ${c.comp === v ? 'bg-primary text-white border-primary' : 'border-[#cbd5e1]'}">${l}</button>`).join('')}</div></div>`
           : labeled({ label: `Fecha${c.tipo === 'vacacion' ? ' (primer día)' : ''}`, required: true }, `<input class="input" type="date" name="fecha" value="${esc(c.fecha)}" required>`)
             + labeled({ label: `Cantidad (${t.u === '$' ? 'pesos' : t.u})`, required: true }, `<input class="input" type="number" name="cant" min="0" step="${t.u === '$' ? 1 : 0.5}" value="${esc(c.cant)}" required inputmode="decimal">`)}
         ${labeled({ label: c.tipo === 'bono' ? '¿Por qué se le da el bono?' : 'Nota', required: c.tipo === 'bono', wide: true }, `<input class="input" name="nota" maxlength="240" value="${esc(c.nota)}" ${c.tipo === 'bono' ? 'required' : ''} placeholder="${c.tipo === 'te' ? 'Ej. Procesando material de Summit Silao' : c.tipo === 'falta' ? 'Ej. Se reportó enfermo, no trajo receta' : c.tipo === 'incapacidad' ? 'Ej. Folio de la incapacidad del IMSS' : 'Detalle opcional'}">`)}
@@ -2005,10 +2012,11 @@ function capPreview() {
     const lista = grupos.map(e => { const fs = diasIncap(e, c.fecha, dias);
       return `${grupos.length > 1 ? (e.pago === 'dia' ? 'Por día: ' : 'Semanales: ') : ''}${fs.length ? fs.map(fc).join(', ') : 'ningún día (no le tocaba trabajar)'}`; }).join(' · ');
     const pays = [...new Set(ex.flatMap(e => diasIncap(e, c.fecha, dias).map(f => paydayOf(e.planta, f))))].sort();
-    const tot = ex.reduce((s, e) => s + diasIncap(e, c.fecha, dias).reduce((t2, f) => t2 + amountOf({ tipo: 'incapacidad', cantidad: 1, fecha: f }, e), 0), 0);
+    const tot = ex.reduce((s, e) => s + diasIncap(e, c.fecha, dias).reduce((t2, f) => t2 + amountOf({ tipo: 'incapacidad', cantidad: 1, fecha: f, comprobante: c.comp }, e), 0), 0);
     return `${n} · ${dias} día${dias > 1 ? 's' : ''}${dias > 1 ? `, del ${fc(c.fecha)} al ${fc(c.hasta)}` : ` (${fc(c.fecha)})`}. Se guarda un día por cada uno que le tocaba trabajar `
       + `(${grupos.some(e => e.pago === 'dia') ? 'a los de pago por día solo sábado y domingo' : 'el domingo es descanso y no se descuenta'}): ${lista}.`
-      + ` ${nomAdmin() ? `Descuenta ${money(Math.abs(tot))}` : 'Descuenta en la nómina'} y quita el bono de puntualidad del mes.`
+      + (!c.comp ? ' Falta indicar si trae comprobante.'
+        : ` ${c.comp === 'Sí' ? 'Con comprobante esos días se pagan al 50 %' : 'Sin comprobante esos días no se pagan'}: ${nomAdmin() ? `descuenta ${money(Math.abs(tot))}` : 'descuenta en la nómina'} y quita el bono de puntualidad del mes.`)
       + (pays.length ? ` Queda en ${pays.length > 1 ? 'las semanas' : 'la semana'} del pago ${pays.map(fc).join(', ')}.` : '');
   }
   if (!t.s) return `${n} · sin efecto en dinero${t.quita ? ' · quita el bono de puntualidad del mes' : ''}.${wk}`;
@@ -2026,6 +2034,7 @@ function nomEditForm() {
       ${admin ? labeled({ label: 'Tipo' }, sel('name="tipo"', Object.entries(NT).map(([k, v]) => [k, v.l]), x.tipo)) : labeled({ label: 'Tipo' }, `<input class="input" value="${esc(t.l)}" disabled>`)}
       ${labeled({ label: 'Fecha' }, `<input class="input" type="date" name="fecha" value="${esc(x.fecha)}" required>`)}
       ${x.cantidad != null ? labeled({ label: `Cantidad (${t.u === '$' ? 'pesos' : t.u})` }, `<input class="input" type="number" name="cantidad" step="0.5" min="0" value="${esc(x.cantidad)}" required>`) : ''}
+      ${x.tipo === 'incapacidad' ? labeled({ label: '¿Trae comprobante?' }, sel('name="comprobante"', [...(x.comprobante ? [] : [['', 'Sin dato (no se paga)']]), ['Sí', 'Sí · se paga al 50 %'], ['No', 'No · no se paga']], x.comprobante || '')) : ''}
       ${labeled({ label: 'Nota', wide: true }, `<input class="input" name="nota" maxlength="240" value="${esc(x.nota || '')}">`)}
       ${admin ? `<label class="col-span-2 flex items-center gap-2 text-body-md"><input type="checkbox" name="aplicado" ${x.aplicado ? 'checked' : ''} class="w-5 h-5 accent-[#2563eb]">Ya pagada / aplicada</label>` : ''}
       <div class="col-span-2 flex justify-end gap-2">${back}<button class="btn btn-primary">Guardar</button></div></form>`;
@@ -2116,7 +2125,8 @@ async function nomClick(e) {
   else if (a === 'confirm') N.confirm = b.dataset.c;
   else if (a === 'cancel') { N.confirm = ''; N.edit = null; }
   else if (a === 'ctipo') { N.cap.tipo = b.dataset.t; N.cap.cant = NT[b.dataset.t].u === '$' ? '' : '1'; N.cap.efectivo = false;
-    if (b.dataset.t === 'incapacidad') Object.assign(N.cap, { hasta: N.cap.fecha, calMes: N.cap.fecha.slice(0, 7), pick: false }); }
+    if (b.dataset.t === 'incapacidad') Object.assign(N.cap, { hasta: N.cap.fecha, calMes: N.cap.fecha.slice(0, 7), pick: false, comp: '' }); }
+  else if (a === 'ccomp') N.cap.comp = b.dataset.v; // incapacidad: ¿trae comprobante?
   // Calendario de la incapacidad: el primer toque pone el primer día; el segundo, el último (si es antes, vuelve a empezar desde ahí).
   else if (a === 'incdia') { const c = N.cap, d = b.dataset.d;
     if (c.pick && d >= c.fecha) Object.assign(c, { hasta: d, pick: false }); else Object.assign(c, { fecha: d, hasta: d, pick: true }); syncIncap(); }
@@ -2161,6 +2171,7 @@ async function nomClick(e) {
 const iaSet = t => { const x = N.chat.cambios[+t.dataset.ci], k = t.dataset.k;
   if (k === 'incluir') { x.incluir = t.checked; return nomDraw(); }
   x[k] = k === 'empleadoId' ? (t.value ? Number(t.value) : null) : t.value;
+  if (k === 'clase' && t.type !== 'text') nomDraw(); // incapacidad muestra "¿Trae comprobante?"
   if (k === 'empleadoId' && x.empleadoId) x.empleado = empById(x.empleadoId)?.nombre || x.empleado; };
 function nomChange(e) {
   const t = e.target;
@@ -2198,10 +2209,15 @@ function nomSubmit(e) {
   if (fid === 'capForm') {
     const c = N.cap;
     if (!c.emps.size) return showErr(new Error('Elige al menos un empleado'));
-    if (c.tipo === 'incapacidad') { syncIncap(); if (+c.cant > INCAP_MAX) return showErr(new Error(`La incapacidad puede ser de máximo ${INCAP_MAX} días`)); }
+    if (c.tipo === 'incapacidad') {
+      syncIncap();
+      if (+c.cant > INCAP_MAX) return showErr(new Error(`La incapacidad puede ser de máximo ${INCAP_MAX} días`));
+      if (!c.comp) return showErr(new Error('Indica si trae comprobante (Sí: se paga al 50 %; No: no se paga)'));
+    }
     f.querySelector('.btn-primary').disabled = true;
-    return nomSave('/api/nomina/inc', { emps: [...c.emps], tipo: c.tipo, fecha: c.fecha, cantidad: +c.cant, nota: c.nota.trim(), efectivo: c.efectivo },
-      () => { N.cap = { ...N.cap, emps: new Set(), nota: '', efectivo: false }; });
+    return nomSave('/api/nomina/inc', { emps: [...c.emps], tipo: c.tipo, fecha: c.fecha, cantidad: +c.cant, nota: c.nota.trim(), efectivo: c.efectivo,
+      ...(c.tipo === 'incapacidad' && { comprobante: c.comp }) },
+      () => { N.cap = { ...N.cap, emps: new Set(), nota: '', efectivo: false, comp: '' }; });
   }
   if (fid === 'bonoForm') return nomSave('/api/nomina/inc', { emps: [+v.emp], tipo: 'bono', fecha: v.fecha, cantidad: +v.monto, nota: v.motivo.trim() },
     () => { N.bf = { emp: '', monto: '', motivo: '', fecha: ymd() }; });

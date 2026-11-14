@@ -252,15 +252,25 @@ assert.equal((await call('POST', '/api/nomina/inc/edit', { id: fFalta.id, tipo: 
 // Incapacidad de 7 días desde el lunes 9 de nov.: se guarda una por cada día que le tocaba trabajar, cada una en su semana de pago.
 await ok('POST', '/api/nomina/emp', { nombre: 'Semanal Q', planta: 'Querétaro', sueldo: 2400, ...doc }, admin);
 const semQ = (await ok('GET', '/api/nomina', null, admin)).data.emps.find(e => e.nombre === 'Semanal Q');
-await ok('POST', '/api/nomina/inc', { emps: [semQ.id, finde.id], tipo: 'incapacidad', fecha: '2026-11-09', cantidad: 7, nota: 'IMSS 123' }, beto2);
+const incap7 = { emps: [semQ.id, finde.id], tipo: 'incapacidad', fecha: '2026-11-09', cantidad: 7, nota: 'IMSS 123' };
+assert.equal((await call('POST', '/api/nomina/inc', incap7, beto2)).status, 400); // falta decir si trae comprobante
+assert.equal((await call('POST', '/api/nomina/inc', { ...incap7, comprobante: 'Tal vez' }, beto2)).status, 400);
+await ok('POST', '/api/nomina/inc', { ...incap7, comprobante: 'Sí' }, beto2);
 const incapDe = async id => (await ok('GET', '/api/nomina', null, admin)).data.incs.filter(i => i.empleadoId === id && i.tipo === 'incapacidad').sort((a, b) => a.fecha.localeCompare(b.fecha));
 const iSem = await incapDe(semQ.id);
 assert.deepEqual(iSem.map(i => i.fecha), ['2026-11-09', '2026-11-10', '2026-11-11', '2026-11-12', '2026-11-13', '2026-11-14']); // el domingo es descanso
 assert.deepEqual((await incapDe(finde.id)).map(i => i.fecha), ['2026-11-14', '2026-11-15']); // por día (fin de semana): solo sábado y domingo
-assert.deepEqual([iSem[0].cantidad, iSem[0].incap, iSem[0].nota], [1, { desde: '2026-11-09', dias: 7 }, 'IMSS 123']);
+assert.deepEqual([iSem[0].cantidad, iSem[0].incap, iSem[0].nota, iSem[0].comprobante], [1, { desde: '2026-11-09', dias: 7 }, 'IMSS 123', 'Sí']);
+// Al corregir se puede cambiar el comprobante; si el cambio no lo trae, se conserva; al cambiar a otro tipo se quita.
+await ok('POST', '/api/nomina/inc/edit', { id: iSem[0].id, fecha: iSem[0].fecha, cantidad: 1, comprobante: 'No' }, beto2);
+await ok('POST', '/api/nomina/inc/edit', { id: iSem[1].id, tipo: 'incapacidad', fecha: iSem[1].fecha, cantidad: 1 }, admin);
+await ok('POST', '/api/nomina/inc/edit', { id: iSem[2].id, tipo: 'falta', fecha: iSem[2].fecha, cantidad: 1, comprobante: 'Sí' }, admin);
+const iSem2 = (await ok('GET', '/api/nomina', null, admin)).data.incs.filter(i => iSem.slice(0, 3).some(x => x.id === i.id)).sort((a, b) => a.fecha.localeCompare(b.fecha));
+assert.deepEqual(iSem2.map(i => [i.tipo, i.comprobante]), [['incapacidad', 'No'], ['incapacidad', 'Sí'], ['falta', undefined]]);
+await ok('POST', '/api/nomina/inc/edit', { id: iSem[2].id, tipo: 'incapacidad', fecha: iSem[2].fecha, cantidad: 1, comprobante: 'Sí' }, admin); // se regresa
 assert.ok(new Set(iSem.map(i => i.payday)).size === 2); // cada día en su semana de pago
-assert.equal((await call('POST', '/api/nomina/inc', { emps: [semQ.id], tipo: 'incapacidad', fecha: '2026-11-15', cantidad: 1 }, admin)).status, 400); // solo un domingo
-assert.equal((await call('POST', '/api/nomina/inc', { emps: [semQ.id], tipo: 'incapacidad', fecha: '2026-11-16', cantidad: 2.5 }, admin)).status, 400); // días completos
+assert.equal((await call('POST', '/api/nomina/inc', { emps: [semQ.id], tipo: 'incapacidad', fecha: '2026-11-15', cantidad: 1, comprobante: 'No' }, admin)).status, 400); // solo un domingo
+assert.equal((await call('POST', '/api/nomina/inc', { emps: [semQ.id], tipo: 'incapacidad', fecha: '2026-11-16', cantidad: 2.5, comprobante: 'No' }, admin)).status, 400); // días completos
 assert.equal((await incapDe(semQ.id)).length, 6);
 await ok('POST', '/api/nomina/emp/delete', { id: semQ.id }, admin);
 await ok('POST', '/api/nomina/emp', { id: finde.id, nombre: 'Finde Q', pago: 'dia', diasBase: 2, domingo: 1 }, beto2);

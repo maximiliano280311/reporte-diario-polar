@@ -102,6 +102,9 @@ App web para **Retrabajos Industriales y Limpiezas Especializadas Polar**: los e
   `data.incap = { desde, dias }` y su propio periodo de pago. Sueldo semanal: todos los días menos el domingo (descanso; con el ÷6 una semana
   completa descuenta la semana y no más). Por día (fin de semana): solo sábado y domingo. Si no queda ningún día, error. Editar una sigue
   siendo de una sola incidencia.
+  **¿Trae comprobante?** (pedido del 2026-11-14): toda incapacidad nueva lleva `data.comprobante` = "Sí" (el día se paga al 50 %: se
+  descuenta la mitad, `amountOf`) o "No" (no se paga, se descuenta completo). Obligatorio al capturar (`cleanInc`, también por el asistente IA);
+  al corregir se puede cambiar (si lo trae después). Las de antes sin dato se quedan como "no se paga".
   **Tipo de empleado** (`contrato`, `CONTRATOS`): de planta, provisional (temporales: albañiles…) o de confianza (jefes). Los de confianza y sus
   incidencias solo los ve el admin: `nomEmp` / `GET /api/nomina` no se los dan a nadie más (tampoco salen en la plática PL-FOR-25).
   **Dar de baja / Reactivar** (todos los que capturan nómina): pone o quita la fecha de baja; los dados de baja van en su propia lista.
