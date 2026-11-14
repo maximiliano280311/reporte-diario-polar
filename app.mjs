@@ -12,12 +12,14 @@ const PLANTS = ['Querétaro', 'Silao']; // únicas plantas (también en public/a
 const badPlant = () => Object.assign(new Error('Elige una planta: Querétaro o Silao'), { code: 400 });
 const FORM = [
   { n: 1, title: 'Datos generales', fields: [{ id: 'turno', label: 'Turno', type: 'select', options: ['Matutino', 'Vespertino', 'Nocturno'], required: true }] },
-  { n: 2, title: 'Personal', hint: 'Tipo: F = falta, P = permiso, V = vacaciones, R = reporte (llamada de atención o acta administrativa). Una persona por renglón.',
+  { n: 2, title: 'Personal', hint: 'Tipo "Reporte" = llamada de atención o acta administrativa. Una persona por renglón.',
     fields: [{ id: 'presentes', label: 'Presentes', type: 'number', required: true }, { id: 'faltas', label: 'Faltas', type: 'number' },
       { id: 'permisos', label: 'Permisos', type: 'number' }, { id: 'vacaciones', label: 'Vacaciones', type: 'number' },
       { id: 'hubo_reportes', label: '¿Hubo reportes de personal? (llamada de atención / acta)', type: 'select', options: SN, required: true, wide: true },
       { id: 'reportes_n', label: '¿Cuántos?', type: 'number' }],
-    table: { id: 'personal', item: 'persona', cols: [{ id: 'nombre', label: 'Nombre', wide: true }, { id: 'tipo', label: 'Tipo', type: 'select', options: ['F', 'P', 'V', 'R'] },
+    // Tipo con la palabra completa (pedido del 2026-11-14, se agregó Incapacidad). antes: letras de los reportes viejos → palabra (se muestran y se corrigen con ella).
+    table: { id: 'personal', item: 'persona', cols: [{ id: 'nombre', label: 'Nombre', wide: true },
+      { id: 'tipo', label: 'Tipo', type: 'select', options: ['Falta', 'Permiso', 'Vacaciones', 'Incapacidad', 'Reporte'], antes: { F: 'Falta', P: 'Permiso', V: 'Vacaciones', R: 'Reporte' } },
       { id: 'justif', label: '¿Justif.? (faltas)', type: 'select', options: SN }, { id: 'motivo', label: 'Motivo / detalle', wide: true }, { id: 'autorizo', label: '¿Quién autorizó?', wide: true }] } },
   { n: 3, title: 'Vehículos (cada unidad que se movió hoy)', hint: 'El km / horómetro inicial se llena solo con el final de la última vez que se usó la unidad. Montacargas: anotar horómetro. Check list con más de 7 días: hacerlo antes de mover la unidad.',
     // Vehículo: sus opciones son los camiones de la planta (los registra el admin); el cliente las llena.
@@ -470,12 +472,14 @@ function formFor(c) {
   });
 }
 
+// Valor de una lista cerrada: los valores viejos que cambiaron de nombre (antes, p. ej. "F" → "Falta" en la sección 2) salen con el nuevo.
+const valDe = (f, v) => f.antes?.[v] ?? v;
 // Normaliza las respuestas al formulario efectivo; las columnas auto se ignoran (las calcula el servidor).
 function clean(answers, form) {
   const str = v => String(v ?? '').trim().slice(0, 3000), out = {};
   const missing = (s, label) => Object.assign(new Error(`Falta responder: ${s.n}. ${s.title} — ${label}`), { code: 400 });
   // Una lista cerrada solo acepta sus opciones (las vacías, como los camiones, se validan aparte).
-  const pick = (s, f, v) => { if (v && f.type === 'select' && f.options.length && !f.options.includes(v)) throw missing(s, `${f.label} (opción no válida)`); return v; };
+  const pick = (s, f, v) => { v = valDe(f, v); if (v && f.type === 'select' && f.options.length && !f.options.includes(v)) throw missing(s, `${f.label} (opción no válida)`); return v; };
   for (const s of form) {
     for (const f of s.fields || []) {
       if (f.padre && (!out[f.padre] || (f.cuando && out[f.padre] !== f.cuando))) { out[f.id] = ''; continue; }
@@ -504,7 +508,7 @@ function clean(answers, form) {
 const formatAnswers = (a, form) => form.map(s => {
   const val = f => f.type === 'photos' ? (a[f.id]?.length ? `${a[f.id].length} foto(s)` : '') : [].concat(a[f.id] ?? '').join(', ');
   const lines = [...(s.fields || []).filter(val).map(f => `${f.label}: ${val(f)}`),
-    ...(s.table ? (a[s.table.id] || []).map(r => '- ' + s.table.cols.filter(c => r[c.id]).map(c => `${c.label}: ${r[c.id]}`).join(' | ')) : [])];
+    ...(s.table ? (a[s.table.id] || []).map(r => '- ' + s.table.cols.filter(c => r[c.id]).map(c => `${c.label}: ${valDe(c, r[c.id])}`).join(' | ')) : [])];
   return `${s.n}. ${s.title}\n${lines.join('\n') || '(vacío)'}`;
 }).join('\n');
 

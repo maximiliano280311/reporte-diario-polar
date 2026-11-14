@@ -118,7 +118,9 @@ const r1 = (await ok('POST', '/api/reports', { answers: { ...base, reportes_n: '
   gas: [{ tanque: 'Gas bodega / hornos', na: 'N/A', pct_ini: '40' }, { tanque: 'Gas montacargas', pct_ini: '50', pct_fin: '30', sin_carga: 'N/A', litros: '9' }],
   material: [{ cliente: 'KH México', pieza: 'P-1', cantidad: '999', entregado: '999', procesado: '4' }], // cantidad / entregado capturados se ignoran
   mantenimiento: [{ equipo: 'Horno 1', estatus: 'Abierto' }, { equipo: 'Bomba', estatus: 'Cerrado' }],
+  personal: [{ nombre: 'Luis', tipo: 'F' }, { nombre: 'Rosa', tipo: 'Incapacidad' }], // la letra vieja se guarda con la palabra
   fotos_gastos: [foto, 'malo.jpg'] } }, ana)).data;
+assert.deepEqual(r1.answers.personal.map(p => p.tipo), ['Falta', 'Incapacidad']);
 const a1 = r1.answers, m1 = a1.material.find(m => m.pieza === 'P-1'), m2 = a1.material.find(m => m.pieza === 'P-2');
 assert.equal(r1.score, null);
 assert.equal(a1.reportes_n, 'N/A'); // sin reportes de personal
@@ -129,6 +131,7 @@ assert.deepEqual([m1.cantidad, m1.entregado, m1.folio, m1.saldo_ant, m1.saldo, m
 assert.deepEqual([m2.cantidad, m2.entregado, m2.saldo, m2.pendientes], ['8', '0', '8', '8']); // renglón que se agregó solo
 assert.deepEqual(a1.fotos_gastos, [foto]); // claves inválidas se descartan
 assert.equal((await call('POST', '/api/reports', { answers: base }, ana)).status, 409); // uno por día
+assert.equal((await call('POST', '/api/reports', { answers: { ...base, personal: [{ nombre: 'X', tipo: 'Z' }] } }, sara)).status, 400); // tipo que no está en la lista
 
 // Lo que se arrastra al siguiente reporte de la planta.
 const d = (await ok('GET', '/api/defaults', null, beto)).data;

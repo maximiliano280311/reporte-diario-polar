@@ -38,7 +38,10 @@ App web para **Retrabajos Industriales y Limpiezas Especializadas Polar**: los e
   Los reportes viejos con visitas las siguen imprimiendo (`plDoc` / `VISITAS_ANT`) y al corregirlos se conservan.
   **Sección 14 "Domingo: actividades y novedades"** (`lunes: true`, pedido del 2026-11-08): solo existe en reportes de **lunes**
   (`formDelDia` / `esLunes` en el servidor, `seccionesDel` en la app; se ve, se valida, se califica con IA y se imprime solo ese día).
-  Lo que el personal le comunicó al encargado: ¿hubo algo? → actividades / novedades (al menos una) y quién lo comunicó. Campos `auto: true` los calcula el servidor:
+  Lo que el personal le comunicó al encargado: ¿hubo algo? → actividades / novedades (al menos una) y quién lo comunicó.
+  **Sección 2, tipo de cada persona** (pedido del 2026-11-14): palabra completa — Falta, Permiso, Vacaciones, **Incapacidad** (nueva), Reporte.
+  Los reportes viejos traen letras (F/P/V/R): la columna lleva `antes` (letra → palabra) y `valDe` (servidor y app) las muestra, imprime,
+  exporta y corrige con la palabra. Campos `auto: true` los calcula el servidor:
   - Vehículos: km inicial = km final anterior de la unidad; recorrido = final − inicial. Solo se aceptan **camiones registrados de la planta**.
   - Gas: casillas N/A (tanque que no aplica / "no hubo carga") vía `disables`.
   - Material (sección 7): **recibido y entregado del día salen de Calidad** (REC y entregas de LIB, `movimientos()`), no se capturan;

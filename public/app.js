@@ -123,8 +123,11 @@ const VISITAS_ANT = [['nombre', 'Nombre y teléfono'], ['empresa', 'Empresa / de
   ['atendio', 'Atendió y hora'], ['seguimiento', '¿Requiere seguimiento?']];
 
 // ---------- Cuestionario PL-FOR-26 (el esquema viene de /api/questions) ----------
+// Valor de una lista cerrada: los viejos que cambiaron de nombre (f.antes, p. ej. "F" → "Falta" en la sección 2) salen con el nuevo.
+const valDe = (f, v) => f.antes?.[v] ?? v;
 function input(f, name, v = '') {
   const req = f.required ? 'required' : '';
+  v = valDe(f, v);
   if (f.type === 'textarea') return `<textarea class="input" rows="2" name="${name}" ${req}>${esc(v)}</textarea>`;
   if (f.type === 'select') return `<select class="input" name="${name}" ${req}><option value="">Selecciona…</option>${f.options.map(o => `<option ${o === v ? 'selected' : ''}>${esc(o)}</option>`).join('')}</select>`;
   if (f.type === 'check') return `<input type="checkbox" name="${name}" value="N/A" ${v ? 'checked' : ''} class="w-6 h-6 shrink-0 accent-[#2563eb]">`;
@@ -337,7 +340,7 @@ function plDoc(r) {
       ${pairs.length ? kv(pairs) : ''}
       ${fs.filter(f => f.type === 'checks').map(f => `<div class="checks">${f.options.map(o => `<span>${(a[f.id] || []).includes(o) ? '☒' : '☐'} ${esc(o.toUpperCase())}</span>`).join('')}</div>`).join('')}
       ${t ? `<table><thead><tr>${t.cols.map(c => `<th>${esc(c.label)}</th>`).join('')}</tr></thead><tbody>${rows.length
-        ? rows.map(x => `<tr>${t.cols.map(c => `<td>${esc(c.type === 'date' ? dmy(x[c.id]) : x[c.id])}</td>`).join('')}</tr>`).join('')
+        ? rows.map(x => `<tr>${t.cols.map(c => `<td>${esc(c.type === 'date' ? dmy(x[c.id]) : valDe(c, x[c.id]))}</td>`).join('')}</tr>`).join('')
         : `<tr><td colspan="${t.cols.length}" class="c">${t.empty || '—'}</td></tr>`}</tbody></table>` : ''}
       ${after.length || extra[s.n] ? kv([...after, ...(extra[s.n] || [])]) : ''}
       ${s.hint ? `<p class="hint">${esc(s.hint)}</p>` : ''}`;
@@ -821,7 +824,7 @@ const views = {
           ...list.map(r => [r.date, r.plant, r.name, r.answers.turno, r.answers.presentes, r.score ?? 'Sin evaluar', sum(r.answers.gastos, 'importe'),
             sum(r.answers.gas, 'importe'), nInc(r), r.summary])]
         : [['Fecha', 'Planta', 'Elaboró', ...t.cols.map(c => c.label)],
-          ...list.flatMap(r => (r.answers[t.id] || []).map(x => [r.date, r.plant, r.name, ...t.cols.map(c => x[c.id])]))]);
+          ...list.flatMap(r => (r.answers[t.id] || []).map(x => [r.date, r.plant, r.name, ...t.cols.map(c => valDe(c, x[c.id]))]))]);
     };
     await load();
   },
