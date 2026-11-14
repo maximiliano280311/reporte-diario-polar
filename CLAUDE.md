@@ -109,7 +109,10 @@ App web para **Retrabajos Industriales y Limpiezas Especializadas Polar**: los e
   primera incidencia registrada) en que le toca (sin falta, retardo, permiso sin goce ni incapacidad) y aún no se aplica. Salen arriba en
   Bonos con "Aplicar bono" / "Aplicar los N", en el aviso de la pestaña Nómina y en el contador de la pestaña; **siguen avisando hasta
   aplicarlos** (a veces no se paga el día que toca por flujo). "No le toca" dice por qué ("Tuvo retardo el …, falta el …"). Aplicar = la ruta
-  de siempre (`POST /api/nomina/bono` con su mes); entra al periodo de pago que contiene el día en que se aplica.
+  de siempre (`POST /api/nomina/bono` con su mes). **Entra de inmediato a la nómina de esta semana** (pedido del 2026-11-14): el servidor
+  le pone `payday` = sábado de pago de hoy (si ya se cerró, el siguiente abierto), no el periodo de la fecha de su planta (en Silao caía a la
+  semana siguiente). Si ya estaba aplicado sin pagar en otra semana o "para pagar después", volver a aplicarlo lo pasa a esta
+  (botón "Pasar a esta nómina"). La app avisa en qué nómina entró y el admin queda viendo esa semana.
   **Tipo de empleado** (`contrato`, `CONTRATOS`): de planta, provisional (temporales: albañiles…) o de confianza (jefes). Los de confianza y sus
   incidencias solo los ve el admin: `nomEmp` / `GET /api/nomina` no se los dan a nadie más (tampoco salen en la plática PL-FOR-25).
   **Dar de baja / Reactivar** (todos los que capturan nómina): pone o quita la fecha de baja; los dados de baja van en su propia lista.

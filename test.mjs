@@ -302,6 +302,21 @@ assert.equal(nomA.incs.find(i => i.id === bono.id).cantidad, 300);
 // Bono de puntualidad: monto del empleado, uno por mes.
 await ok('POST', '/api/nomina/bono', { emps: [luis.id], mes: '2026-09' }, beto2);
 assert.equal((await ok('POST', '/api/nomina/bono', { emps: [luis.id], mes: '2026-09' }, beto2)).data.n, 0);
+// Aplicar bono: entra a la nómina de esta semana (el sábado de pago de hoy), no al periodo de su planta; si esa ya se cerró, a la siguiente.
+const masDias = (d, n) => new Date(Date.parse(d + 'T00:00:00Z') + n * 864e5).toISOString().slice(0, 10);
+let sabado = hoy; while (new Date(sabado + 'T00:00:00Z').getUTCDay() !== 6) sabado = masDias(sabado, 1);
+const bonoDe = async mes => (await ok('GET', '/api/nomina', null, admin)).data.incs.find(i => i.tipo === 'bono_puntualidad' && i.mes === mes && i.empleadoId === luis.id);
+const b9 = await bonoDe('2026-09');
+assert.equal(b9.payday, sabado);
+// Uno que quedó en otra semana sin pagar (o para pagar después) se pasa a la de esta semana al volver a aplicarlo.
+sqlite.prepare('UPDATE nom_incs SET data = ? WHERE id = ?').run(JSON.stringify({ ...JSON.parse(sqlite.prepare('SELECT data FROM nom_incs WHERE id = ?').get(b9.id).data), payday: masDias(sabado, 7), diferido: true }), b9.id);
+const rb = (await ok('POST', '/api/nomina/bono', { emps: [luis.id], mes: '2026-09' }, beto2)).data;
+const b9b = await bonoDe('2026-09');
+assert.deepEqual([rb.n, rb.payday, b9b.payday, b9b.diferido, b9b.id], [1, sabado, sabado, false, b9.id]);
+sqlite.prepare('INSERT INTO nom_cierres(payday, data) VALUES (?, ?)').run(sabado, '{}'); // esta semana ya cerrada
+assert.equal((await ok('POST', '/api/nomina/bono', { emps: [luis.id], mes: '2026-08' }, beto2)).data.payday, masDias(sabado, 7));
+sqlite.prepare('DELETE FROM nom_cierres WHERE payday = ?').run(sabado);
+await ok('POST', '/api/nomina/inc/delete', { id: (await bonoDe('2026-08')).id }, admin);
 // Cierre: marca pagadas; el encargado ya no puede borrarlas; reabrir las regresa.
 nomA = (await ok('GET', '/api/nomina', null, admin)).data;
 const ids = nomA.incs.map(i => i.id);

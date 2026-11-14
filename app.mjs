@@ -1086,17 +1086,27 @@ export function createApp({ db, files, env = {} }) {
     'POST /api/nomina/bono': nomOnly(async (req, user) => {
       const b = await body(req), mes = String(b.mes ?? '');
       if (!/^\d{4}-\d{2}$/.test(mes)) throw httpError(400, 'Mes no válido');
+      // Entra a la nómina de esta semana: el sábado de pago de hoy (o el siguiente si ya se cerró), no al periodo de la fecha de su
+      // planta, para que se vea de inmediato en la pestaña Nómina (pedido del 2026-11-14; antes en Silao caía a la semana siguiente).
+      const add7 = d => new Date(Date.parse(d + 'T00:00:00Z') + 7 * DAY).toISOString().slice(0, 10);
+      let payday = ymd(); while (new Date(payday + 'T00:00:00Z').getUTCDay() !== 6) payday = new Date(Date.parse(payday + 'T00:00:00Z') + DAY).toISOString().slice(0, 10);
+      while (await db.get('SELECT 1 AS x FROM nom_cierres WHERE payday = ?', payday)) payday = add7(payday);
       let n = 0;
       for (const id of [...new Set([].concat(b.emps ?? []).map(Number))].slice(0, 200)) {
         const e = await nomEmp(id, user);
         if (!(Number(e.bono) > 0)) continue;
-        const ya = (await db.all("SELECT data FROM nom_incs WHERE emp_id = ? AND tipo = 'bono_puntualidad'", e.id)).some(r => JSON.parse(r.data).mes === mes);
-        if (ya) continue;
+        const ya = (await db.all("SELECT id, aplicado, data FROM nom_incs WHERE emp_id = ? AND tipo = 'bono_puntualidad'", e.id)).find(r => JSON.parse(r.data).mes === mes);
+        if (ya) {
+          // Ya aplicado pero sin pagar en otra semana (o "para pagar después"): se pasa a la nómina de esta semana.
+          const d = JSON.parse(ya.data);
+          if (!ya.aplicado && (d.payday !== payday || d.diferido)) { await db.run('UPDATE nom_incs SET data = ? WHERE id = ?', JSON.stringify({ ...d, payday, diferido: false }), ya.id); n++; }
+          continue;
+        }
         await db.run("INSERT INTO nom_incs(emp_id, tipo, fecha, data, user_id) VALUES (?, 'bono_puntualidad', ?, ?, ?)", e.id, ymd(),
-          JSON.stringify({ cantidad: Number(e.bono), mes, nota: `Bono de puntualidad ${mes}`, payday: paydayDe(await nomConfig(), e.planta, ymd()) }), user.id);
+          JSON.stringify({ cantidad: Number(e.bono), mes, nota: `Bono de puntualidad ${mes}`, payday }), user.id);
         n++;
       }
-      return json(200, { ok: true, n });
+      return json(200, { ok: true, n, payday });
     }),
 
     // Pagar después / incluir esta semana (solo admin).

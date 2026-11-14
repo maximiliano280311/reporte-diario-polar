@@ -1659,6 +1659,22 @@ function bonoStatus(e, mes) {
 // Bonos de puntualidad por aplicar (pedido del 2026-11-14): meses ya terminados (los últimos 3) en que le toca y todavía no se aplica.
 // Se quedan avisando hasta aplicarlos (a veces no se paga el día que toca por flujo). Solo meses desde que hay incidencias en el
 // sistema: antes no hay faltas registradas y saldría que a todos les toca.
+// Nómina de esta semana: el sábado de pago de hoy; si ya se cerró, la siguiente (el servidor mete ahí los bonos que se aplican).
+function nominaActual() {
+  let p = nextSat(ymd());
+  while ((N.d.cierres || []).some(c => c.payday === p)) p = addD(p, 7);
+  return p;
+}
+// Aplica bonos de puntualidad ({ mes: [ids] }) y avisa en qué nómina entraron; el admin queda viendo esa semana en Nómina.
+async function aplicarBonos(porMes) {
+  let payday = '', n = 0;
+  try { for (const [mes, emps] of Object.entries(porMes)) { const r = await api('/api/nomina/bono', { emps, mes }); payday = r.payday; n += r.n; } }
+  catch (err) { showErr(err); }
+  N.d = await api('/api/nomina');
+  if (!payday) return;
+  N.bonoMsg = `${n > 1 ? `Listo: ${n} bonos entraron` : n ? 'Listo: el bono entró' : 'Ya estaba'} a la nómina del ${fc(payday)} (semana ${weekNo(payday)}).`;
+  if (nomAdmin()) N.payday = payday;
+}
 function bonosPendientes() {
   const hoy = ymd(), desde = N.d.incs.reduce((m, i) => i.fecha < m ? i.fecha : m, hoy);
   const meses = [1, 2, 3].map(k => { const d = pdate(hoy); d.setDate(1); d.setMonth(d.getMonth() - k); return ymd(d).slice(0, 7); }).filter(m => m + '-01' >= desde);
@@ -1925,25 +1941,31 @@ const nomTabs = {
     const quitar = i => `<button type="button" data-act="delinc" data-id="${i.id}" class="text-label-sm text-error font-semibold"><span>Quitar</span></button>`;
     const aplicar = (e, m) => `<button type="button" data-act="bono" data-id="${e.id}" data-mes="${m}" class="btn btn-primary !py-1.5 !px-3 text-label-md">Aplicar bono</button>`;
     // Por aplicar: les toca (mes terminado, sin faltas ni retardos) y aún no se aplica; siguen aquí hasta aplicarlos.
-    const pend = bonosPendientes();
-    return (pend.length ? `<section class="card p-4 mb-5 ring-2 ring-tertiary-fixed-dim">
+    // enOtra: ya aplicado pero no está en la nómina de esta semana (quedó en otra o para pagar después) → "Pasar a esta nómina".
+    const pend = bonosPendientes(), actual = nominaActual(), enOtra = inc => !inc.aplicado && (incPay(inc) !== actual || !!inc.diferido);
+    return (N.bonoMsg ? `<p class="rounded-xl p-3 mb-4 ${OKC} text-body-md flex flex-wrap items-center gap-2" role="status"><span class="material-symbols-outlined">check_circle</span>
+      <span class="flex-1">${esc(N.bonoMsg)}</span>${nomAdmin() ? '<a href="#/nomina/nomina" class="font-semibold text-primary">Ver la nómina</a>' : ''}</p>` : '')
+    + (pend.length ? `<section class="card p-4 mb-5 ring-2 ring-tertiary-fixed-dim">
       <div class="flex flex-wrap items-center gap-2"><span class="material-symbols-outlined text-tertiary">notifications_active</span>
         <h2 class="text-headline-sm">Bonos por aplicar (${pend.length})</h2><span class="flex-1"></span>
         ${pend.length > 1 ? `<button type="button" data-act="bonoaptodos" class="btn border-[1.5px] border-[#cbd5e1] text-primary !py-1.5">Aplicar los ${pend.length}</button>` : ''}</div>
       <p class="text-body-sm text-on-surface-variant mt-1 mb-3">Les toca porque en ese mes no tuvieron faltas, retardos, permisos sin goce ni incapacidades registrados.
-        Si por flujo no se puede pagar hoy, déjalo aquí: sigue avisando hasta que lo apliques y entra a la nómina de la semana en que lo apliques.</p>
+        Al darle "Aplicar bono" entra de inmediato a la nómina de esta semana (pago del ${esc(fc(actual))}). Si por flujo no se puede pagar hoy, déjalo aquí: sigue avisando hasta que lo apliques.</p>
       <div class="flex flex-col divide-y divide-[#f1f5f9]">${pend.map(({ e, mes: m }) => `<div class="flex flex-wrap items-center gap-3 py-2">
         <div class="flex-1 min-w-[160px]"><p class="font-semibold">${esc(e.nombre)}</p><p class="text-body-sm text-on-surface-variant">${esc(e.planta)} · bono de <span class="capitalize">${esc(mesL(m))}</span></p></div>
         ${admin ? `<span class="tabular-nums font-semibold text-secondary">${money(+e.bono || 0)}</span>` : ''}${aplicar(e, m)}</div>`).join('')}</div></section>` : '')
     + weekNav('bmes', 'Bono de puntualidad', `${mesL(mes)} · se pierde con falta, retardo, permiso sin goce o incapacidad en el mes`,
       si.length && !pend.some(p => p.mes === mes) ? `<button type="button" data-act="bonoall" class="btn btn-primary ml-auto">Aplicar los ${si.length}</button>` : '')
     + tbl(['Empleado', 'Planta', ...(admin ? ['#Monto'] : []), 'Estado', ''], rows.map(({ e, b }) => `<tr>${td(`<b>${esc(e.nombre)}</b>`)}${td(esc(e.planta))}${admin ? td(money(+e.bono || 0), 1) : ''}
-      ${td(b.st === 'ya' ? nChip(b.inc.aplicado ? 'Pagado' : 'Aplicado · por pagar', OKC) + (b.inc.diferido ? ' ' + nChip('se paga después') : '')
+      ${td(b.st === 'ya' ? (b.inc.aplicado ? nChip('Pagado', OKC) : enOtra(b.inc)
+          ? `${nChip('Aplicado · no está en esta nómina', WARN)} <span class="text-[11px] text-on-surface-variant">${b.inc.diferido ? 'se dejó para pagar después' : `quedó en la nómina del ${esc(fc(incPay(b.inc)))}`}</span>`
+          : nChip('En la nómina de esta semana', OKC))
         : b.st === 'si' ? (b.terminado ? nChip('Le toca · falta aplicarlo', WARN) : `${nChip('Va bien', OKC)} <span class="text-[11px] text-on-surface-variant">sin faltas ni retardos hasta hoy; el mes no ha terminado</span>`)
         : `${nChip('No le toca', BAD)} <span class="text-[11px] text-on-surface-variant">${esc(b.why)}</span>`)}
-      ${td(b.st === 'si' ? aplicar(e, mes) : b.st === 'ya' && !b.inc.aplicado ? quitar(b.inc) : '')}</tr>`).join(''),
+      ${td(b.st === 'si' ? aplicar(e, mes) : b.st === 'ya' && !b.inc.aplicado ? `<span class="flex flex-wrap gap-x-3">${enOtra(b.inc)
+        ? `<button type="button" data-act="bono" data-id="${e.id}" data-mes="${mes}" class="text-label-sm text-primary font-semibold py-1">Pasar a esta nómina</button>` : ''}${quitar(b.inc)}</span>` : '')}</tr>`).join(''),
       admin ? 'Nadie tiene bono asignado. Ponle monto de bono en Empleados.' : 'Nadie de tu planta tiene bono de puntualidad asignado.')
-    + '<p class="text-body-sm text-on-surface-variant mt-2">Se revisan las incidencias capturadas en el mes; los meses antes de usar el sistema no tienen faltas registradas. Al aplicarlo, el bono entra a la nómina de la semana en que lo aplicas (en la pestaña Nómina también se puede dejar para pagar después).</p>'
+    + '<p class="text-body-sm text-on-surface-variant mt-2">Se revisan las incidencias capturadas en el mes; los meses antes de usar el sistema no tienen faltas registradas. Al aplicarlo, el bono entra de inmediato a la nómina de esta semana (si ya se cerró, a la siguiente). En la pestaña Nómina también se puede dejar para pagar después.</p>'
     + `<h2 class="text-headline-sm mt-6">Otros bonos</h2><p class="text-body-sm text-on-surface-variant mb-3">Bonos especiales con su motivo. Mientras no se paguen se pueden quitar.</p>
     <form id="bonoForm" class="card p-4 grid grid-cols-2 lg:grid-cols-4 gap-3 items-end mb-3">
       ${labeled({ label: 'Empleado', required: true, wide: true }, sel('name="emp" required', [['', 'Elige…'], ...nomEmps().map(e => [e.id, e.nombre])], f.emp))}
@@ -2169,15 +2191,15 @@ async function nomClick(e) {
   else if (a === 'iaaplicar') return nomAplicar().catch(err => { N.chat.busy = false; showErr(err); });
   else if (a === 'delinc') { if (confirmed(b)) nomSave('/api/nomina/inc/delete', { id }); return; }
   else if (a === 'diferir') return nomSave('/api/nomina/inc/diferir', { id });
-  else if (a === 'bono') { b.disabled = true; return nomSave('/api/nomina/bono', { emps: [id], mes: b.dataset.mes || N.bonoMes }); }
+  // Aplicar bono (o pasarlo a esta nómina si quedó en otra semana): entra de inmediato a la nómina de esta semana.
+  else if (a === 'bono') { b.disabled = true; await aplicarBonos({ [b.dataset.mes || N.bonoMes]: [id] }); }
   // Aplicar todos los bonos por aplicar (pueden ser de distintos meses).
   else if (a === 'bonoaptodos') {
     b.disabled = true; const por = {};
     for (const p of bonosPendientes()) (por[p.mes] ??= []).push(p.e.id);
-    try { for (const [mes, emps] of Object.entries(por)) await api('/api/nomina/bono', { emps, mes }); } catch (err) { showErr(err); }
-    N.d = await api('/api/nomina');
+    await aplicarBonos(por);
   }
-  else if (a === 'bonoall') { b.disabled = true; return nomSave('/api/nomina/bono', { emps: nomEmps().filter(x => bonoStatus(x, N.bonoMes).st === 'si').map(x => x.id), mes: N.bonoMes }); }
+  else if (a === 'bonoall') { b.disabled = true; await aplicarBonos({ [N.bonoMes]: nomEmps().filter(x => bonoStatus(x, N.bonoMes).st === 'si').map(x => x.id) }); }
   else if (a === 'cerrar') {
     b.disabled = true;
     const L = calcSemana(N.payday), incIds = [], lineas = L.map(l => { const inc = l.items.filter(i => !i.diferido); incIds.push(...inc.map(i => i.id));
@@ -2268,7 +2290,7 @@ views.nomina = async tab => {
       cap: { tipo: 'falta', emps: new Set(), fecha: ymd(), cant: '1', nota: '', efectivo: false }, fil: { emp: '', tipo: '', estado: 'todas' }, bf: { emp: '', monto: '', motivo: '', fecha: ymd() } }; }
   N.d = await api('/api/nomina');
   N.payday ||= N.d.admin ? nextSat(ymd()) : paydayOf(navArea(), ymd());
-  N.tab = tab || N.tab || (N.d.admin ? 'nomina' : 'capturar'); N.edit = null; N.confirm = '';
+  N.tab = tab || N.tab || (N.d.admin ? 'nomina' : 'capturar'); N.edit = null; N.confirm = ''; N.bonoMsg = '';
   nomDraw();
 };
 
