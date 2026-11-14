@@ -91,6 +91,10 @@ App web para **Retrabajos Industriales y Limpiezas Especializadas Polar**: los e
   **Pago del domingo** (`domingo`, pedido del 2026-11-14, para los que solo vienen sábado y domingo con un pago distinto cada día): solo con
   pago "Por día"; lo pone y lo ve solo el admin (está en `NOM_MONEY`). Base = sueldo × (días − 1) + domingo; una falta, permiso sin goce,
   incapacidad, día extra u hora extra con fecha de domingo usa el pago del domingo (`salDiario(e, fecha)` / `pagoDom` en `public/app.js`).
+  **A los de pago "Por día" (fin de semana) no les aplica la LFT** (pedido del 2026-11-14; se eligió solo esto): hora extra **sencilla**
+  (`facTE`, el factor de Parámetros no les aplica; la tarifa propia sí) y **no se les capturan vacaciones ni permiso con goce** (`NO_POR_DIA`
+  en `app.mjs` y `public/app.js`; `sinLft` en el servidor al capturar o al cambiar tipo/empleado; Capturar los deja en gris). Ya no salían en
+  Vacaciones ni en bono de puntualidad. Se decidió conservar el expediente y los avisos de menores.
   **Tipo de empleado** (`contrato`, `CONTRATOS`): de planta, provisional (temporales: albañiles…) o de confianza (jefes). Los de confianza y sus
   incidencias solo los ve el admin: `nomEmp` / `GET /api/nomina` no se los dan a nadie más (tampoco salen en la plática PL-FOR-25).
   **Dar de baja / Reactivar** (todos los que capturan nómina): pone o quita la fecha de baja; los dados de baja van en su propia lista.

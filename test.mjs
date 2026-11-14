@@ -240,6 +240,15 @@ await ok('POST', '/api/nomina/emp', { nombre: 'Finde Q', planta: 'Querétaro', p
 const finde = (await ok('GET', '/api/nomina', null, admin)).data.emps.find(e => e.nombre === 'Finde Q');
 assert.deepEqual([finde.sueldo, finde.domingo, finde.diasBase], [400, 500, 2]);
 assert.equal((await ok('GET', '/api/nomina', null, beto2)).data.emps.find(e => e.id === finde.id).domingo, undefined);
+// Fin de semana: no les aplica la LFT → sin vacaciones ni permisos con goce (ni junto con otros: no se guarda nada).
+const incsDe = async id => (await ok('GET', '/api/nomina', null, admin)).data.incs.filter(i => i.empleadoId === id).length;
+const nLuis = await incsDe(luis.id);
+assert.equal((await call('POST', '/api/nomina/inc', { emps: [finde.id], tipo: 'vacacion', fecha: hoy, cantidad: 1 }, beto2)).status, 400);
+assert.equal((await call('POST', '/api/nomina/inc', { emps: [luis.id, finde.id], tipo: 'permiso_cg', fecha: hoy, cantidad: 1 }, admin)).status, 400);
+assert.equal(await incsDe(luis.id), nLuis);
+await ok('POST', '/api/nomina/inc', { emps: [finde.id], tipo: 'falta', fecha: hoy, cantidad: 1 }, admin);
+const fFalta = (await ok('GET', '/api/nomina', null, admin)).data.incs.find(i => i.empleadoId === finde.id);
+assert.equal((await call('POST', '/api/nomina/inc/edit', { id: fFalta.id, tipo: 'vacacion', fecha: hoy, cantidad: 1 }, admin)).status, 400);
 await ok('POST', '/api/nomina/emp', { id: finde.id, nombre: 'Finde Q', pago: 'dia', diasBase: 2, domingo: 1 }, beto2);
 assert.equal((await ok('GET', '/api/nomina', null, admin)).data.emps.find(e => e.id === finde.id).domingo, 500);
 await ok('POST', '/api/nomina/emp', { ...finde, pago: 'semana' }, admin); // con sueldo semanal no hay pago del domingo

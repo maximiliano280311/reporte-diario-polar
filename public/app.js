@@ -1542,7 +1542,11 @@ const esDomingo = f => !!f && pdate(f).getDay() === 0;
 // Sueldo de un día; con fecha, un domingo usa el pago del domingo (faltas, días extra y horas extra de ese día).
 const salDiario = (e, f) => e.pago === 'dia' ? (pagoDom(e) && esDomingo(f) ? pagoDom(e) : +e.sueldo || 0) : (+e.sueldo || 0) / P().div;
 const teManual = e => e.teModo === 'manual';
-const teFormula = (e, f) => r2(salDiario(e, f) / P().hrs * P().fac);
+// Trabajadores de fin de semana (pago por día): no les aplica la LFT → hora extra sencilla (×1) y sin vacaciones ni permisos con goce
+// (NO_POR_DIA, también lo valida el servidor). Pedido del 2026-11-14.
+const NO_POR_DIA = ['vacacion', 'permiso_cg'];
+const facTE = e => e.pago === 'dia' ? 1 : P().fac;
+const teFormula = (e, f) => r2(salDiario(e, f) / P().hrs * facTE(e));
 const teRate = (e, f) => teManual(e) ? +e.te || 0 : teFormula(e, f);
 const amountOf = (i, e) => {
   const t = NT[i.tipo];
@@ -1813,9 +1817,12 @@ const nomTabs = {
   capturar() {
     if (N.cap.pay !== N.payday) { const q = periodo(navArea(), N.payday); N.cap.pay = N.payday; N.cap.fecha = ymd() >= q.ini && ymd() <= q.fin ? ymd() : q.ini; } // fecha dentro de la semana elegida
     const c = N.cap, t = NT[c.tipo], menorSel = [...c.emps].some(id => esMenor(empById(id))) && ['te', 'dia_extra'].includes(c.tipo);
+    // Vacaciones y permiso con goce: los de pago por día (fin de semana) no se pueden elegir (no les aplica la LFT).
+    const noAplica = e => NO_POR_DIA.includes(c.tipo) && e.pago === 'dia';
+    for (const id of c.emps) if (noAplica(empById(id) || {})) c.emps.delete(id);
     let last = null;
     const picker = nomEmps().map(e => (e.planta !== last ? `<p class="col-span-full text-[11px] uppercase tracking-wide text-on-surface-variant font-semibold mt-2">${esc(last = e.planta)}</p>` : '')
-      + `<label class="flex items-center gap-2 text-body-md py-1"><input type="checkbox" name="cemp" value="${e.id}" ${c.emps.has(e.id) ? 'checked' : ''} class="w-5 h-5 shrink-0 accent-[#2563eb]">${esc(e.nombre)}${esMenor(e) ? ' ' + nChip('menor') : ''}${e.contrato && e.contrato !== 'planta' ? ' ' + nChip(e.contrato) : ''}</label>`).join('');
+      + `<label class="flex items-center gap-2 text-body-md py-1 ${noAplica(e) ? 'opacity-50' : ''}"><input type="checkbox" name="cemp" value="${e.id}" ${c.emps.has(e.id) ? 'checked' : ''} ${noAplica(e) ? 'disabled' : ''} class="w-5 h-5 shrink-0 accent-[#2563eb]">${esc(e.nombre)}${esMenor(e) ? ' ' + nChip('menor') : ''}${e.contrato && e.contrato !== 'planta' ? ' ' + nChip(e.contrato) : ''}${e.pago === 'dia' ? ' ' + nChip(noAplica(e) ? 'por día: no aplica' : 'por día') : ''}</label>`).join('');
     const nSem = N.d.incs.filter(enSemana).length;
     return perNav() + `<p class="text-body-md text-on-surface-variant mb-3">Cada incidencia se queda en la semana de su fecha (no se acumula). ${nSem ? `Esta semana: <a href="#/nomina/incidencias" class="text-primary font-semibold">${nSem} capturada${nSem > 1 ? 's' : ''}</a>.` : ''}</p>
     <form id="capForm" class="card p-4 flex flex-col gap-4">
@@ -1929,7 +1936,7 @@ const nomTabs = {
       <p class="text-body-sm text-on-surface-variant">Aplican a quien tiene la hora extra "por fórmula"; quien tiene tarifa propia conserva la suya.</p>
       <div class="grid grid-cols-2 lg:grid-cols-4 gap-3">
         ${num('diasDivisor', 'Días para sacar el sueldo diario')}${num('horasJornada', 'Horas por jornada')}
-        ${labeled({ label: 'Factor de hora extra' }, sel('data-cfg="factorTE"', [[1, 'Sencilla (×1)'], [1.5, '×1.5'], [2, 'Doble (×2, LFT primeras 9 h)'], [3, 'Triple (×3, después de 9 h)']], cfg.factorTE))}
+        ${labeled({ label: 'Factor de hora extra (los de pago por día: sencilla)' }, sel('data-cfg="factorTE"', [[1, 'Sencilla (×1)'], [1.5, '×1.5'], [2, 'Doble (×2, LFT primeras 9 h)'], [3, 'Triple (×3, después de 9 h)']], cfg.factorTE))}
         ${num('bonoDefault', 'Bono de puntualidad por defecto', 1)}${num('porcentaje', 'Comisión del depósito al contador (%)', 0.1)}
         ${N.d.areas.map(a => `<div class="col-span-2 lg:col-span-4 grid grid-cols-2 lg:grid-cols-3 gap-3 p-3 rounded-xl bg-surface-container-low items-end">
           <p class="col-span-2 lg:col-span-3 font-semibold">${esc(a)} · periodo de pago</p>`
@@ -2021,7 +2028,8 @@ function empDeriv(f) {
   if (f.elements.domingo) f.elements.domingo.disabled = e.pago !== 'dia';
   const dom = pagoDom(e), semana = dom ? e.sueldo * (e.diasBase - 1) + dom : e.sueldo * e.diasBase;
   out.textContent = `${e.pago === 'dia' ? `Pago por día ${money(e.sueldo)}${dom ? ` · domingo ${money(dom)}` : ''} · a la semana ${money(semana)} (${e.diasBase} día${e.diasBase > 1 ? 's' : ''})` : `Sueldo diario (÷${P().div}) ${money(salDiario(e))}`}`
-    + ` · hora extra por fórmula (×${P().fac}) ${money(teFormula(e))} · se pagará ${money(teRate(e))} por hora extra`;
+    + ` · hora extra por fórmula (×${facTE(e)}${e.pago === 'dia' ? ', sencilla: no le aplica la LFT' : ''}) ${money(teFormula(e))} · se pagará ${money(teRate(e))} por hora extra`
+    + (e.pago === 'dia' ? ' · sin vacaciones ni permisos con goce' : '');
 }
 
 function nomDraw() {

@@ -193,6 +193,13 @@ const QFORMS = {
 const NOM_AREAS = [...PLANTS, 'Administración'];
 const NOM_TIPOS = ['falta', 'retardo', 'permiso_sg', 'permiso_cg', 'incapacidad', 'vacacion', 'te', 'dia_extra', 'bono', 'bono_puntualidad', 'descuento'];
 const NOM_PESOS = ['bono', 'bono_puntualidad', 'descuento']; // su cantidad es dinero
+// Trabajadores de fin de semana (pago por día): no les aplica la LFT en vacaciones ni permisos con goce, y su hora extra es sencilla
+// (esa va en public/app.js, teFormula). Pedido del 2026-11-14. También en NO_POR_DIA de public/app.js.
+const NO_POR_DIA = ['vacacion', 'permiso_cg'];
+function sinLft(tipo, emps) {
+  const x = NO_POR_DIA.includes(tipo) ? emps.filter(e => e.pago === 'dia') : [];
+  if (x.length) throw Object.assign(new Error(`A los trabajadores por día (fin de semana) no se les capturan vacaciones ni permisos con goce: ${x.map(e => e.nombre).join(', ')}`), { code: 400 });
+}
 // Campos del empleado que solo ve el admin. domingo: pago del domingo de los que cobran por día (0 = igual que los demás días; pedido del 2026-11-14).
 const NOM_MONEY = ['sueldo', 'te', 'teModo', 'bono', 'domingo'];
 // Tipo de empleado: de planta (el de siempre), provisional (temporal: albañiles, apoyos) o de confianza (jefes: solo el admin los ve).
@@ -1008,6 +1015,7 @@ export function createApp({ db, files, env = {} }) {
       if (!ids.length) throw httpError(400, 'Elige al menos un empleado');
       const x = cleanInc(b, user);
       const emps = []; for (const id of ids) emps.push(await nomEmp(id, user)); // todos visibles antes de guardar nada
+      sinLft(x.tipo, emps);
       const cfg = await nomConfig();
       for (const e of emps) await db.run('INSERT INTO nom_incs(emp_id, tipo, fecha, aplicado, data, user_id) VALUES (?, ?, ?, ?, ?, ?)',
         e.id, x.tipo, x.fecha, x.data.efectivo ? 1 : 0, JSON.stringify({ ...x.data, payday: paydayDe(cfg, e.planta, x.fecha) }), user.id);
@@ -1021,6 +1029,7 @@ export function createApp({ db, files, env = {} }) {
       if (!admin) await nomEmp(r.emp_id, user);
       const emp = await nomEmp(b.empleadoId ?? r.emp_id, user), x = cleanInc(b, user, { tipo: r.tipo, ...JSON.parse(r.data) });
       delete x.data.tipo;
+      if (x.tipo !== r.tipo || emp.id !== r.emp_id) sinLft(x.tipo, [emp]); // las que ya estaban así se pueden seguir corrigiendo
       const aplicado = admin ? !!b.aplicado : !!r.aplicado;
       if (admin) x.data.aplicadoEn = aplicado ? x.data.aplicadoEn || 'manual' : null;
       if (!x.data.payday || x.fecha !== r.fecha || emp.id !== r.emp_id) x.data.payday = paydayDe(await nomConfig(), emp.planta, x.fecha); // otra fecha: otro periodo
@@ -1104,7 +1113,8 @@ export function createApp({ db, files, env = {} }) {
         '(en un cambio a un empleado existente pon id, nombre y SOLO los campos que cambian) o ' +
         '{"tipo":"incidencia","empleadoId":<id o null>,"empleado":"<nombre>","clase","fecha","cantidad","nota"}. ' +
         'Plantas: Querétaro, Silao o Administración. contrato: "planta" (empleado normal), "provisional" (temporal: albañiles, apoyos por obra) o "confianza" (jefes). pago: "semana" (sueldo semanal) o "dia" (pago por día; sueldo = pago de cada día y diasBase = cuántos días trabaja a la semana). ' +
-        'domingo: solo con pago "dia", lo que se le paga el domingo si es distinto a los demás días (p. ej. los que vienen sábado y domingo: sueldo = pago del sábado, domingo = pago del domingo, diasBase = 2). teModo: "auto" (hora extra por fórmula) o "manual" (te = pago por hora extra). ' +
+        'domingo: solo con pago "dia", lo que se le paga el domingo si es distinto a los demás días (p. ej. los que vienen sábado y domingo: sueldo = pago del sábado, domingo = pago del domingo, diasBase = 2). ' +
+        'A los de pago "dia" (fin de semana) no les aplica la LFT: no se les capturan vacacion ni permiso_cg y su hora extra es sencilla. teModo: "auto" (hora extra por fórmula) o "manual" (te = pago por hora extra). ' +
         'Clases de incidencia y su cantidad: falta (días), retardo (veces), permiso_sg = permiso sin goce (días), permiso_cg = permiso con goce (días), incapacidad (días), ' +
         'vacacion (días), te = tiempo extra (horas), dia_extra = día extra o domingo (días), bono (pesos, la nota con el motivo es obligatoria), descuento (pesos). ' +
         'curp: la CURP de 18 caracteres; nacimiento: fecha de nacimiento. Para dar de alta a alguien hacen falta su CURP y su fecha de nacimiento: si no vienen, dilo en la respuesta. ' +
