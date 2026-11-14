@@ -1546,6 +1546,11 @@ const teManual = e => e.teModo === 'manual';
 // (NO_POR_DIA, también lo valida el servidor). Pedido del 2026-11-14.
 const NO_POR_DIA = ['vacacion', 'permiso_cg'];
 const facTE = e => e.pago === 'dia' ? 1 : P().fac;
+// Incapacidad de varios días: el servidor guarda una por cada día que le tocaba trabajar (mismo cálculo que diasIncap de app.mjs):
+// sueldo semanal → todos menos el domingo; por día (fin de semana) → solo sábado y domingo. Pedido del 2026-11-14.
+const INCAP_MAX = 90;
+const diasIncap = (e, desde, n) => Array.from({ length: Math.max(0, n) }, (_, k) => addD(desde, k))
+  .filter(f => { const d = pdate(f).getDay(); return e.pago === 'dia' ? d === 0 || d === 6 : d !== 0; });
 const teFormula = (e, f) => r2(salDiario(e, f) / P().hrs * facTE(e));
 const teRate = (e, f) => teManual(e) ? +e.te || 0 : teFormula(e, f);
 const amountOf = (i, e) => {
@@ -1633,7 +1638,8 @@ function vacInfo(e) {
 }
 // Texto de una incidencia; las de pesos sin monto para el encargado (el servidor no lo manda).
 const incLabel = i => { const t = NT[i.tipo] || { l: i.tipo, u: '' };
-  return `${t.l}${i.mes ? ' ' + mesL(i.mes) : ''}${i.cantidad == null ? '' : ' · ' + (t.u === '$' ? money(+i.cantidad) : `${+i.cantidad} ${t.u}`)}`; };
+  return `${t.l}${i.mes ? ' ' + mesL(i.mes) : ''}${i.cantidad == null ? '' : ' · ' + (t.u === '$' ? money(+i.cantidad) : `${+i.cantidad} ${+i.cantidad === 1 ? { días: 'día', veces: 'vez', horas: 'hora' }[t.u] || t.u : t.u}`)}`
+    + (i.incap ? ` (parte de ${i.incap.dias} día${i.incap.dias > 1 ? 's' : ''} desde ${fc(i.incap.desde)})` : ''); };
 const nChip = (txt, cls = 'bg-surface-container text-on-surface-variant') => `<span class="chip ${cls}">${esc(txt)}</span>`;
 // CURP (mismo formato que el servidor): la fecha de nacimiento va en las posiciones 5-10 (AAMMDD) y el siglo en la 17.
 const CURP_RE = /^[A-Z][AEIOUX][A-Z]{2}\d{6}[HMX][A-Z]{2}[B-DF-HJ-NP-TV-Z]{3}[A-Z\d]\d$/;
@@ -1830,9 +1836,11 @@ const nomTabs = {
       <div><p class="text-label-md text-on-surface-variant mb-1">Empleado(s) <span class="font-normal">— marca varios si aplica a más de uno</span></p>
         <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-x-4 max-h-72 overflow-auto p-3 rounded-xl border-[1.5px] border-[#cbd5e1]">${picker || '<p class="text-on-surface-variant">Agrega empleados primero.</p>'}</div></div>
       <div class="grid grid-cols-2 gap-3">
-        ${labeled({ label: `Fecha${c.tipo === 'vacacion' ? ' (primer día)' : ''}`, required: true }, `<input class="input" type="date" name="fecha" value="${esc(c.fecha)}" required>`)}
-        ${labeled({ label: `Cantidad (${t.u === '$' ? 'pesos' : t.u})`, required: true }, `<input class="input" type="number" name="cant" min="0" step="${t.u === '$' ? 1 : 0.5}" value="${esc(c.cant)}" required inputmode="decimal">`)}
-        ${labeled({ label: c.tipo === 'bono' ? '¿Por qué se le da el bono?' : 'Nota', required: c.tipo === 'bono', wide: true }, `<input class="input" name="nota" maxlength="240" value="${esc(c.nota)}" ${c.tipo === 'bono' ? 'required' : ''} placeholder="${c.tipo === 'te' ? 'Ej. Procesando material de Summit Silao' : c.tipo === 'falta' ? 'Ej. Se reportó enfermo, no trajo receta' : 'Detalle opcional'}">`)}
+        ${labeled({ label: `Fecha${['vacacion', 'incapacidad'].includes(c.tipo) ? ' (primer día)' : ''}`, required: true }, `<input class="input" type="date" name="fecha" value="${esc(c.fecha)}" required>`)}
+        ${c.tipo === 'incapacidad'
+          ? labeled({ label: 'Días de incapacidad', required: true }, `<input class="input" type="number" name="cant" min="1" max="${INCAP_MAX}" step="1" value="${esc(c.cant)}" required inputmode="numeric">`)
+          : labeled({ label: `Cantidad (${t.u === '$' ? 'pesos' : t.u})`, required: true }, `<input class="input" type="number" name="cant" min="0" step="${t.u === '$' ? 1 : 0.5}" value="${esc(c.cant)}" required inputmode="decimal">`)}
+        ${labeled({ label: c.tipo === 'bono' ? '¿Por qué se le da el bono?' : 'Nota', required: c.tipo === 'bono', wide: true }, `<input class="input" name="nota" maxlength="240" value="${esc(c.nota)}" ${c.tipo === 'bono' ? 'required' : ''} placeholder="${c.tipo === 'te' ? 'Ej. Procesando material de Summit Silao' : c.tipo === 'falta' ? 'Ej. Se reportó enfermo, no trajo receta' : c.tipo === 'incapacidad' ? 'Ej. Folio de la incapacidad del IMSS' : 'Detalle opcional'}">`)}
       </div>
       ${nomAdmin() && t.s > 0 ? `<label class="flex items-center gap-2 text-body-md"><input type="checkbox" name="efectivo" ${c.efectivo ? 'checked' : ''} class="w-5 h-5 accent-[#2563eb]">Ya se le pagó en efectivo (queda registrado, no suma a la nómina)</label>` : ''}
       ${!nomAdmin() && t.u === '$' ? '<p class="text-body-sm text-on-surface-variant">El monto queda guardado para el administrador; después ya no se muestra.</p>' : ''}
@@ -1957,6 +1965,20 @@ function capPreview() {
   if (!c.emps.size) return 'Elige al menos un empleado.';
   const n = `${c.emps.size} empleado${c.emps.size > 1 ? 's' : ''}`;
   const pe = empById([...c.emps][0]), wk = pe && c.fecha ? ` Queda en la semana del pago ${fc(paydayOf(pe.planta, c.fecha))}.` : '';
+  // Incapacidad: qué días se guardan (uno por cada día que le tocaba trabajar) y en qué semanas de pago caen.
+  if (c.tipo === 'incapacidad' && c.fecha) {
+    const dias = +c.cant || 0;
+    if (!Number.isInteger(dias) || dias < 1 || dias > INCAP_MAX) return `Escribe los días de incapacidad (de 1 a ${INCAP_MAX}, días completos).`;
+    const ex = [...c.emps].map(empById).filter(Boolean), grupos = [...new Map(ex.map(e => [e.pago === 'dia' ? 'dia' : 'semana', e])).values()];
+    const lista = grupos.map(e => { const fs = diasIncap(e, c.fecha, dias);
+      return `${grupos.length > 1 ? (e.pago === 'dia' ? 'Por día: ' : 'Semanales: ') : ''}${fs.length ? fs.map(fc).join(', ') : 'ningún día (no le tocaba trabajar)'}`; }).join(' · ');
+    const pays = [...new Set(ex.flatMap(e => diasIncap(e, c.fecha, dias).map(f => paydayOf(e.planta, f))))].sort();
+    const tot = ex.reduce((s, e) => s + diasIncap(e, c.fecha, dias).reduce((t2, f) => t2 + amountOf({ tipo: 'incapacidad', cantidad: 1, fecha: f }, e), 0), 0);
+    return `${n} · ${dias} día${dias > 1 ? 's' : ''} desde ${fc(c.fecha)}. Se guarda un día por cada uno que le tocaba trabajar `
+      + `(${grupos.some(e => e.pago === 'dia') ? 'a los de pago por día solo sábado y domingo' : 'el domingo es descanso y no se descuenta'}): ${lista}.`
+      + ` ${nomAdmin() ? `Descuenta ${money(Math.abs(tot))}` : 'Descuenta en la nómina'} y quita el bono de puntualidad del mes.`
+      + (pays.length ? ` Queda en ${pays.length > 1 ? 'las semanas' : 'la semana'} del pago ${pays.map(fc).join(', ')}.` : '');
+  }
   if (!t.s) return `${n} · sin efecto en dinero${t.quita ? ' · quita el bono de puntualidad del mes' : ''}.${wk}`;
   if (!nomAdmin()) return `${n} · ${t.s < 0 ? 'descuenta' : 'suma'} en la nómina.${wk}`;
   const tot = [...c.emps].reduce((s, id) => { const e = empById(id); return e ? s + amountOf({ tipo: c.tipo, cantidad: +c.cant || 0 }, e) : s; }, 0);

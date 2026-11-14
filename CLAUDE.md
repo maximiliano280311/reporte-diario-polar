@@ -95,6 +95,11 @@ App web para **Retrabajos Industriales y Limpiezas Especializadas Polar**: los e
   (`facTE`, el factor de Parámetros no les aplica; la tarifa propia sí) y **no se les capturan vacaciones ni permiso con goce** (`NO_POR_DIA`
   en `app.mjs` y `public/app.js`; `sinLft` en el servidor al capturar o al cambiar tipo/empleado; Capturar los deja en gris). Ya no salían en
   Vacaciones ni en bono de puntualidad. Se decidió conservar el expediente y los avisos de menores.
+  **Incapacidad de varios días** (pedido del 2026-11-14): en Capturar se pone el primer día y los días que dio el IMSS (enteros, 1-90) y el
+  servidor guarda **una incidencia por cada día que le tocaba trabajar** (`diasIncap` en `app.mjs` y `public/app.js`), con cantidad 1,
+  `data.incap = { desde, dias }` y su propio periodo de pago. Sueldo semanal: todos los días menos el domingo (descanso; con el ÷6 una semana
+  completa descuenta la semana y no más). Por día (fin de semana): solo sábado y domingo. Si no queda ningún día, error. Editar una sigue
+  siendo de una sola incidencia.
   **Tipo de empleado** (`contrato`, `CONTRATOS`): de planta, provisional (temporales: albañiles…) o de confianza (jefes). Los de confianza y sus
   incidencias solo los ve el admin: `nomEmp` / `GET /api/nomina` no se los dan a nadie más (tampoco salen en la plática PL-FOR-25).
   **Dar de baja / Reactivar** (todos los que capturan nómina): pone o quita la fecha de baja; los dados de baja van en su propia lista.

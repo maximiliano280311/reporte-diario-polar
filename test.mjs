@@ -249,6 +249,20 @@ assert.equal(await incsDe(luis.id), nLuis);
 await ok('POST', '/api/nomina/inc', { emps: [finde.id], tipo: 'falta', fecha: hoy, cantidad: 1 }, admin);
 const fFalta = (await ok('GET', '/api/nomina', null, admin)).data.incs.find(i => i.empleadoId === finde.id);
 assert.equal((await call('POST', '/api/nomina/inc/edit', { id: fFalta.id, tipo: 'vacacion', fecha: hoy, cantidad: 1 }, admin)).status, 400);
+// Incapacidad de 7 días desde el lunes 9 de nov.: se guarda una por cada día que le tocaba trabajar, cada una en su semana de pago.
+await ok('POST', '/api/nomina/emp', { nombre: 'Semanal Q', planta: 'Querétaro', sueldo: 2400, ...doc }, admin);
+const semQ = (await ok('GET', '/api/nomina', null, admin)).data.emps.find(e => e.nombre === 'Semanal Q');
+await ok('POST', '/api/nomina/inc', { emps: [semQ.id, finde.id], tipo: 'incapacidad', fecha: '2026-11-09', cantidad: 7, nota: 'IMSS 123' }, beto2);
+const incapDe = async id => (await ok('GET', '/api/nomina', null, admin)).data.incs.filter(i => i.empleadoId === id && i.tipo === 'incapacidad').sort((a, b) => a.fecha.localeCompare(b.fecha));
+const iSem = await incapDe(semQ.id);
+assert.deepEqual(iSem.map(i => i.fecha), ['2026-11-09', '2026-11-10', '2026-11-11', '2026-11-12', '2026-11-13', '2026-11-14']); // el domingo es descanso
+assert.deepEqual((await incapDe(finde.id)).map(i => i.fecha), ['2026-11-14', '2026-11-15']); // por día (fin de semana): solo sábado y domingo
+assert.deepEqual([iSem[0].cantidad, iSem[0].incap, iSem[0].nota], [1, { desde: '2026-11-09', dias: 7 }, 'IMSS 123']);
+assert.ok(new Set(iSem.map(i => i.payday)).size === 2); // cada día en su semana de pago
+assert.equal((await call('POST', '/api/nomina/inc', { emps: [semQ.id], tipo: 'incapacidad', fecha: '2026-11-15', cantidad: 1 }, admin)).status, 400); // solo un domingo
+assert.equal((await call('POST', '/api/nomina/inc', { emps: [semQ.id], tipo: 'incapacidad', fecha: '2026-11-16', cantidad: 2.5 }, admin)).status, 400); // días completos
+assert.equal((await incapDe(semQ.id)).length, 6);
+await ok('POST', '/api/nomina/emp/delete', { id: semQ.id }, admin);
 await ok('POST', '/api/nomina/emp', { id: finde.id, nombre: 'Finde Q', pago: 'dia', diasBase: 2, domingo: 1 }, beto2);
 assert.equal((await ok('GET', '/api/nomina', null, admin)).data.emps.find(e => e.id === finde.id).domingo, 500);
 await ok('POST', '/api/nomina/emp', { ...finde, pago: 'semana' }, admin); // con sueldo semanal no hay pago del domingo

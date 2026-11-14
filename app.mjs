@@ -196,6 +196,19 @@ const NOM_PESOS = ['bono', 'bono_puntualidad', 'descuento']; // su cantidad es d
 // Trabajadores de fin de semana (pago por día): no les aplica la LFT en vacaciones ni permisos con goce, y su hora extra es sencilla
 // (esa va en public/app.js, teFormula). Pedido del 2026-11-14. También en NO_POR_DIA de public/app.js.
 const NO_POR_DIA = ['vacacion', 'permiso_cg'];
+// Incapacidad de varios días (pedido del 2026-11-14): se captura el primer día y los días que dio el IMSS y se guarda una por cada día
+// que le tocaba trabajar, cada una en su semana de pago. Sueldo semanal: todos menos el domingo (descanso: el sueldo diario ya es ÷6, así
+// una semana completa de incapacidad descuenta la semana y no más). Por día (fin de semana): solo sábado y domingo.
+// Mismo cálculo que diasIncap() de public/app.js.
+export const INCAP_MAX = 90;
+export function diasIncap(e, desde, n) {
+  const out = [], d = new Date(desde + 'T00:00:00Z');
+  for (let k = 0; k < n; k++, d.setUTCDate(d.getUTCDate() + 1)) {
+    const dow = d.getUTCDay();
+    if (e.pago === 'dia' ? dow === 0 || dow === 6 : dow !== 0) out.push(d.toISOString().slice(0, 10));
+  }
+  return out;
+}
 function sinLft(tipo, emps) {
   const x = NO_POR_DIA.includes(tipo) ? emps.filter(e => e.pago === 'dia') : [];
   if (x.length) throw Object.assign(new Error(`A los trabajadores por día (fin de semana) no se les capturan vacaciones ni permisos con goce: ${x.map(e => e.nombre).join(', ')}`), { code: 400 });
@@ -1016,10 +1029,21 @@ export function createApp({ db, files, env = {} }) {
       const x = cleanInc(b, user);
       const emps = []; for (const id of ids) emps.push(await nomEmp(id, user)); // todos visibles antes de guardar nada
       sinLft(x.tipo, emps);
+      // Incapacidad: una por cada día que le tocaba trabajar (diasIncap), con cantidad 1 y de qué incapacidad viene (incap).
+      const incap = x.tipo === 'incapacidad';
+      if (incap && (!Number.isInteger(x.data.cantidad) || x.data.cantidad > INCAP_MAX)) throw httpError(400, `La incapacidad va en días completos (de 1 a ${INCAP_MAX})`);
+      const plan = emps.map(e => ({ e, fechas: incap ? diasIncap(e, x.fecha, x.data.cantidad) : [x.fecha] }));
+      const sinDias = plan.filter(p => !p.fechas.length).map(p => p.e.nombre);
+      if (sinDias.length) throw httpError(400, `En esos días no le tocaba trabajar a: ${sinDias.join(', ')} (el domingo es descanso; a los de pago por día solo se les cuentan sábado y domingo)`);
       const cfg = await nomConfig();
-      for (const e of emps) await db.run('INSERT INTO nom_incs(emp_id, tipo, fecha, aplicado, data, user_id) VALUES (?, ?, ?, ?, ?, ?)',
-        e.id, x.tipo, x.fecha, x.data.efectivo ? 1 : 0, JSON.stringify({ ...x.data, payday: paydayDe(cfg, e.planta, x.fecha) }), user.id);
-      return json(200, { ok: true, n: ids.length });
+      let n = 0;
+      for (const { e, fechas } of plan) for (const f of fechas) {
+        const data = incap ? { ...x.data, cantidad: 1, incap: { desde: x.fecha, dias: x.data.cantidad } } : x.data;
+        await db.run('INSERT INTO nom_incs(emp_id, tipo, fecha, aplicado, data, user_id) VALUES (?, ?, ?, ?, ?, ?)',
+          e.id, x.tipo, f, data.efectivo ? 1 : 0, JSON.stringify({ ...data, payday: paydayDe(cfg, e.planta, f) }), user.id);
+        n++;
+      }
+      return json(200, { ok: true, n: ids.length, registros: n });
     }),
 
     // Editar / borrar: el encargado solo lo que aún no se paga y de su planta.
@@ -1115,7 +1139,7 @@ export function createApp({ db, files, env = {} }) {
         'Plantas: Querétaro, Silao o Administración. contrato: "planta" (empleado normal), "provisional" (temporal: albañiles, apoyos por obra) o "confianza" (jefes). pago: "semana" (sueldo semanal) o "dia" (pago por día; sueldo = pago de cada día y diasBase = cuántos días trabaja a la semana). ' +
         'domingo: solo con pago "dia", lo que se le paga el domingo si es distinto a los demás días (p. ej. los que vienen sábado y domingo: sueldo = pago del sábado, domingo = pago del domingo, diasBase = 2). ' +
         'A los de pago "dia" (fin de semana) no les aplica la LFT: no se les capturan vacacion ni permiso_cg y su hora extra es sencilla. teModo: "auto" (hora extra por fórmula) o "manual" (te = pago por hora extra). ' +
-        'Clases de incidencia y su cantidad: falta (días), retardo (veces), permiso_sg = permiso sin goce (días), permiso_cg = permiso con goce (días), incapacidad (días), ' +
+        'Clases de incidencia y su cantidad: falta (días), retardo (veces), permiso_sg = permiso sin goce (días), permiso_cg = permiso con goce (días), incapacidad (días: fecha = primer día y cantidad = días que dio el IMSS, en una sola incidencia; el sistema la reparte sola por día), ' +
         'vacacion (días), te = tiempo extra (horas), dia_extra = día extra o domingo (días), bono (pesos, la nota con el motivo es obligatoria), descuento (pesos). ' +
         'curp: la CURP de 18 caracteres; nacimiento: fecha de nacimiento. Para dar de alta a alguien hacen falta su CURP y su fecha de nacimiento: si no vienen, dilo en la respuesta. ' +
         'Fechas en AAAA-MM-DD; si en el Excel vienen como número de serie, conviértelas (número de días desde 1899-12-30). ' +
