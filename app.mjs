@@ -15,6 +15,7 @@ const FORM = [
   { n: 2, title: 'Personal', hint: 'Tipo "Reporte" = llamada de atención o acta administrativa. Una persona por renglón.',
     fields: [{ id: 'presentes', label: 'Presentes', type: 'number', required: true }, { id: 'faltas', label: 'Faltas', type: 'number' },
       { id: 'permisos', label: 'Permisos', type: 'number' }, { id: 'vacaciones', label: 'Vacaciones', type: 'number' },
+      { id: 'incapacidades', label: 'Incapacidades', type: 'number' }, // pedido del 2026-11-14
       { id: 'hubo_reportes', label: '¿Hubo reportes de personal? (llamada de atención / acta)', type: 'select', options: SN, required: true, wide: true },
       { id: 'reportes_n', label: '¿Cuántos?', type: 'number' }],
     // Tipo con la palabra completa (pedido del 2026-11-14, se agregó Incapacidad). antes: letras de los reportes viejos → palabra (se muestran y se corrigen con ella).

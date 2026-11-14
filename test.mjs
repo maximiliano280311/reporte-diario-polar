@@ -113,7 +113,7 @@ assert.equal((await call('GET', '/api/calidad/registro?folio=REC-0001', null, sa
 assert.equal((await call('POST', '/api/calidad/config', { clientes: [] }, ana)).status, 403); // catálogo: solo admin
 
 // Reporte 1 (Ana): la sección 7 toma lo recibido (REC) y entregado (LIB) de hoy; solo se captura lo procesado.
-const r1 = (await ok('POST', '/api/reports', { answers: { ...base, reportes_n: '3',
+const r1 = (await ok('POST', '/api/reports', { answers: { ...base, reportes_n: '3', incapacidades: '1',
   vehiculos: [{ vehiculo: 'NP300', km_ini: '100', km_fin: '150' }],
   gas: [{ tanque: 'Gas bodega / hornos', na: 'N/A', pct_ini: '40' }, { tanque: 'Gas montacargas', pct_ini: '50', pct_fin: '30', sin_carga: 'N/A', litros: '9' }],
   material: [{ cliente: 'KH México', pieza: 'P-1', cantidad: '999', entregado: '999', procesado: '4' }], // cantidad / entregado capturados se ignoran
@@ -121,6 +121,7 @@ const r1 = (await ok('POST', '/api/reports', { answers: { ...base, reportes_n: '
   personal: [{ nombre: 'Luis', tipo: 'F' }, { nombre: 'Rosa', tipo: 'Incapacidad' }], // la letra vieja se guarda con la palabra
   fotos_gastos: [foto, 'malo.jpg'] } }, ana)).data;
 assert.deepEqual(r1.answers.personal.map(p => p.tipo), ['Falta', 'Incapacidad']);
+assert.equal(r1.answers.incapacidades, '1'); // contador de incapacidades
 const a1 = r1.answers, m1 = a1.material.find(m => m.pieza === 'P-1'), m2 = a1.material.find(m => m.pieza === 'P-2');
 assert.equal(r1.score, null);
 assert.equal(a1.reportes_n, 'N/A'); // sin reportes de personal
